@@ -436,9 +436,12 @@ async function callAdmin(action, payload = {}) {
       return;
     }
     const body = await res.json();
+    const prevRound = state.roundNumber;
     if (body.state) state = normalizeState(body.state);
     if (body.submissions) submissions = body.submissions;
-    if (body.poolReset) setFlash("info", "Pool reset — everyone's back in the stacks.");
+    if (body.roundAdvanced) {
+      setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back in the stacks.`);
+    }
     render();
   } catch (err) {
     setFlash("err", `Network error: ${err.message}`);
@@ -944,7 +947,7 @@ function render() {
   html += `Shared with everyone who has this link.<br/>`;
   if (admin) {
     html += `<button class="btn-ghost" id="lock-btn">Lock librarian mode</button>`;
-    html += `<button class="btn-ghost" id="reset-pool-btn">Reset the pool</button>`;
+    html += `<button class="btn-ghost" id="new-round-btn">Start new round</button>`;
     html += `<button class="btn-ghost" id="reset-btn">Reset the shelf</button>`;
   } else {
     html += `<button class="btn-ghost" id="unlock-btn">Librarian mode</button>`;
@@ -994,10 +997,10 @@ function wireUp() {
   if (unlock) unlock.addEventListener("click", () => promptLibrarianPassword());
   const lock = document.getElementById("lock-btn");
   if (lock) lock.addEventListener("click", () => { clearAdminPw(); render(); });
-  const resetPool = document.getElementById("reset-pool-btn");
-  if (resetPool) resetPool.addEventListener("click", () => {
-    if (!confirm("Reset the pool? Everyone who's been picked recently goes back into the running and can be picked again.")) return;
-    callAdmin("reset_pool", {});
+  const newRound = document.getElementById("new-round-btn");
+  if (newRound) newRound.addEventListener("click", () => {
+    if (!confirm("Close the current round and start the next one? Everyone who's been picked goes back into the running.")) return;
+    callAdmin("new_round", {});
   });
   const reset = document.getElementById("reset-btn");
   if (reset) reset.addEventListener("click", () => {
