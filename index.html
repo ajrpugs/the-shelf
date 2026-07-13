@@ -809,7 +809,7 @@ function render() {
 
   let html = `
     <header>
-      <div class="eyebrow">Circulation · Round ${state.roundNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
+      <div class="eyebrow">The Guild · Round ${state.roundNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
       <h1>The Shelf</h1>
       <div class="sub">Add your book. Spin the wheel. Once your name lands, you sit out the round.</div>
       <div class="rule"></div>
@@ -864,8 +864,8 @@ function render() {
         <div class="card">
           <div class="card-row" style="align-items: flex-start;">
             <div style="flex:1; min-width:0;">
-              <div class="name">${esc(name)}</div>
-              <div class="submitted-book">${esc(book)}</div>
+              <div class="name">${esc(book)}</div>
+              <div class="submitted-book">submitted by ${esc(name)}</div>
             </div>
             ${canWithdraw ? `<button class="btn-mini remove" data-withdraw="${attr(name)}">Withdraw</button>` : ''}
           </div>
