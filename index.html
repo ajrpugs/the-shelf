@@ -146,6 +146,14 @@
   .btn-ghost{ background: transparent; color: var(--card); border: 1px solid rgba(255,255,255,0.25); }
   .btn-mini{ background: var(--green); color: var(--card); padding: 6px 10px; font-size: 11px; }
   .btn-mini.remove{ background: transparent; color: var(--stamp); border: 1px solid var(--stamp); }
+  .btn-danger{
+    background: var(--stamp); color: var(--card);
+    border: 1px solid var(--stamp);
+  }
+  .btn-danger:hover:not(:disabled){ background: transparent; color: var(--stamp); }
+  .modal-actions button.btn-danger{
+    background: var(--stamp); color: var(--card); border: 1px solid var(--stamp);
+  }
 
   /* Submit form */
   .submit-form{ display: grid; gap: 8px; }
@@ -956,7 +964,7 @@ function render() {
   if (admin) {
     html += `<button class="btn-ghost" id="lock-btn">Lock librarian mode</button>`;
     html += `<button class="btn-ghost" id="new-round-btn">Start new round</button>`;
-    html += `<button class="btn-ghost" id="reset-btn">Reset the shelf</button>`;
+    html += `<button class="btn-danger" id="reset-btn">Reset the shelf</button>`;
   } else {
     html += `<button class="btn-ghost" id="unlock-btn">Librarian mode</button>`;
   }
@@ -1012,9 +1020,39 @@ function wireUp() {
   });
   const reset = document.getElementById("reset-btn");
   if (reset) reset.addEventListener("click", () => {
-    if (!confirm("Wipe the entire ledger — history, submissions, everything. This cannot be undone. Sure?")) return;
-    callAdmin("reset", {});
+    if (!confirm("Wipe the entire ledger — history, submissions, everything. This cannot be undone. Continue?")) return;
+    promptResetConfirmation();
   });
+}
+
+function promptResetConfirmation() {
+  const back = document.createElement("div");
+  back.className = "modal-back";
+  back.innerHTML = `
+    <div class="modal">
+      <h3>Really wipe everything?</h3>
+      <p>This erases <b>every past read</b>, <b>every winner</b>, and drops the round counter back to <b>Round 1</b>. There is no undo.</p>
+      <p>Type <b>RESET</b> below to confirm.</p>
+      <input type="text" id="reset-confirm-input" autocomplete="off" placeholder="Type RESET" />
+      <div class="modal-actions">
+        <button class="btn-ghost" id="reset-confirm-cancel">Cancel</button>
+        <button class="btn-danger" id="reset-confirm-go" disabled>Wipe everything</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(back);
+  const input = back.querySelector("#reset-confirm-input");
+  const goBtn = back.querySelector("#reset-confirm-go");
+  input.focus();
+  const close = () => { if (back.parentNode) document.body.removeChild(back); };
+  const isValid = () => input.value.trim() === "RESET";
+  input.addEventListener("input", () => { goBtn.disabled = !isValid(); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && isValid()) { close(); callAdmin("reset", {}); }
+    if (e.key === "Escape") close();
+  });
+  back.querySelector("#reset-confirm-cancel").addEventListener("click", close);
+  goBtn.addEventListener("click", () => { close(); callAdmin("reset", {}); });
 }
 
 window.addEventListener("resize", () => {
