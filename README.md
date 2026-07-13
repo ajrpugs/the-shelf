@@ -7,14 +7,16 @@ Single-page HTML frontend + Supabase backend (Postgres + Realtime + one Edge Fun
 ## How it works
 
 - **Anyone with the link** can:
-  - See the roster, current submissions, checked-out members, ledger, and stats.
-  - Type a book title into any member's row to submit a recommendation. (Honor system — no login.)
+  - Type their name and a book title into the form to drop a recommendation in the draw box. (Honor system — no login.)
+  - See current submissions, who's already been picked this cycle, the ledger, and stats.
+  - Update their own pick by re-submitting under the same name.
+  - Withdraw a submission.
 - **Only the librarian** (whoever has the password) can:
-  - Add and remove members.
-  - Draw a card (the server-side edge function does the random pick and updates history/eliminated).
+  - Draw a card (the server picks randomly from the box, minus anyone already picked this cycle).
+  - Start a new cycle (empties the box, puts everyone back in the pool).
   - Reset the whole shelf.
 
-Once every member has been picked once, the cycle rolls over automatically.
+There is no explicit roster — the roster is implicit in who submits. Once you're picked, you sit out until the librarian starts a new cycle.
 
 ## Setup
 

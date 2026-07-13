@@ -90,8 +90,11 @@
   .name{
     font-family:'Fraunces', serif; font-weight:600; font-size:16px;
   }
-  .status{
-    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft);
+  .submitted-book{
+    margin-top: 14px;
+    font-style: italic;
+    color: var(--ink-soft);
+    font-size: 14px;
   }
   .card.eliminated{
     opacity: 0.55;
@@ -112,18 +115,16 @@
 
   input[type=text], input[type=password]{
     font-family: 'Courier Prime', monospace;
-    background: transparent;
-    border: none;
-    border-bottom: 1px dashed var(--ink-soft);
-    padding: 6px 2px;
+    background: white;
+    border: 1px solid rgba(38,35,28,0.2);
+    padding: 10px 12px;
     font-size: 14px;
     color: var(--ink);
     outline: none;
-    flex: 1;
-    min-width: 120px;
+    border-radius: 2px;
   }
-  input[type=text]::placeholder{ color: #9a8f77; }
-  input[type=text]:focus, input[type=password]:focus{ border-bottom: 1px solid var(--stamp); }
+  input[type=text]::placeholder{ color: var(--ink-soft); opacity: 0.7; }
+  input[type=text]:focus, input[type=password]:focus{ border-color: var(--stamp); }
 
   button{
     font-family: 'Courier Prime', monospace;
@@ -144,20 +145,22 @@
   .btn-mini{ background: var(--green); color: var(--card); padding: 6px 10px; font-size: 11px; }
   .btn-mini.remove{ background: transparent; color: var(--stamp); border: 1px solid var(--stamp); }
 
-  .addrow{ display:flex; gap:8px; margin-top: 4px; align-items: center; }
-  .addrow input{
-    background: white;
-    border: 1px solid rgba(38,35,28,0.2);
-    border-radius: 2px;
-    color: var(--ink);
-    padding: 10px 12px;
-    font-size: 13px;
+  /* Submit form */
+  .submit-form{ display: grid; gap: 8px; }
+  .submit-form label{
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--stamp);
+    margin-top: 4px;
   }
-  .addrow input:focus{
-    border-color: var(--stamp);
-    outline: none;
+  .submit-form input{ width: 100%; }
+  .submit-form button{ margin-top: 10px; padding: 12px 14px; font-size: 12.5px; }
+  .submit-hint{
+    font-size: 12px; color: var(--ink-soft); margin-top: 12px; font-style: italic;
   }
-  .addrow input::placeholder{ color: var(--ink-soft); opacity: 0.7; }
+  .submit-warning{
+    background: rgba(162,62,47,0.12); color: var(--stamp);
+    border-radius: 2px; padding: 8px 10px;
+    font-size: 12.5px; margin-top: 10px;
+  }
 
   .drawer{
     text-align: center;
@@ -184,6 +187,7 @@
     text-align:center;
     box-shadow: 0 6px 0 var(--card-shadow), 0 10px 18px rgba(0,0,0,0.35);
     margin-top: 16px;
+    margin-bottom: 20px;
   }
   .winner-banner .stampbig{
     display:inline-block;
@@ -263,13 +267,6 @@
   .leader-row .lbar > span{ display:block; height: 100%; background: var(--stamp); }
   .leader-row .lcount{ min-width: 24px; text-align: right; color: var(--ink-soft); font-size: 12px; }
 
-  .genre-row{
-    display:flex; justify-content:space-between; padding: 5px 0;
-    font-size: 12.5px; color: var(--ink);
-    border-bottom: 1px dotted rgba(38,35,28,0.12);
-  }
-  .genre-row:last-child{ border-bottom: none; }
-
   footer{
     text-align:center; margin-top: 40px; font-size: 11px; color: #7f8f84;
   }
@@ -328,7 +325,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ---------- Configuration ----------
-// Fill these in after creating a Supabase project (see README).
 const SUPABASE_URL = "https://yoobgxxyvcmsianfczam.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_Ovyd_-OHfFzfUlT2mtirfw_73i3sYWv";
 
@@ -336,14 +332,18 @@ const CONFIGURED = !SUPABASE_URL.startsWith("REPLACE_") && !SUPABASE_ANON_KEY.st
 const supabase = CONFIGURED ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 // ---------- State ----------
-const emptyState = () => ({ roster: [], eliminated: [], history: [], cycleNumber: 1 });
+const emptyState = () => ({ eliminated: [], history: [], cycleNumber: 1 });
 let state = emptyState();
 let submissions = {};        // { memberName: bookTitle }
 let spinning = false;
-let flashMsg = null;         // { kind, text }
-let lastWinner = null;       // { name, book }
-let cycleNotice = null;      // number of just-completed cycle
+let flashMsg = null;
+let lastWinner = null;
+let cycleNotice = null;
 let pendingRender = false;
+
+const SAVED_NAME_KEY = "shelf-my-name";
+const savedName = () => localStorage.getItem(SAVED_NAME_KEY) || "";
+const saveName = (name) => localStorage.setItem(SAVED_NAME_KEY, name);
 
 const setFlash = (kind, text) => {
   flashMsg = { kind, text };
@@ -398,7 +398,7 @@ function promptLibrarianPassword(retryAction, retryPayload) {
   back.innerHTML = `
     <div class="modal">
       <h3>Librarian Mode</h3>
-      <p>Enter the admin password to unlock adding members, drawing cards, and resetting the ledger.</p>
+      <p>Enter the admin password to unlock drawing cards and starting a new cycle.</p>
       <input type="password" id="pw-input" autocomplete="current-password" placeholder="Password" />
       <div class="modal-actions">
         <button class="btn-ghost" id="pw-cancel">Cancel</button>
@@ -456,27 +456,53 @@ function queueRefresh() {
 }
 
 // ---------- Book submission (open to anyone) ----------
-async function submitBook(name, book) {
+function normName(n) { return (n || "").trim().toLowerCase(); }
+function isEliminated(name) {
+  return state.eliminated.some(e => normName(e) === normName(name));
+}
+
+async function submitMyBook(name, book) {
   if (!CONFIGURED) return;
+  name = name.trim();
   book = book.trim();
+  if (!name || !book) return;
+
+  if (isEliminated(name)) {
+    setFlash("err", `${name} was already picked this cycle. Wait for the shelf to turn over.`);
+    render();
+    return;
+  }
+
+  const existingKey = Object.keys(submissions).find(k => normName(k) === normName(name));
+  const canonical = existingKey || name;
+
   try {
-    if (!book) {
-      await supabase.from("shelf_submissions").delete().eq("member_name", name);
-      delete submissions[name];
-    } else {
-      await supabase.from("shelf_submissions").upsert({ member_name: name, book });
-      submissions[name] = book;
-    }
+    await supabase.from("shelf_submissions").upsert({ member_name: canonical, book });
+    submissions[canonical] = book;
+    saveName(canonical);
+    setFlash("info", existingKey ? `Updated ${canonical}'s pick to "${book}".` : `Added ${canonical} to the draw box.`);
     render();
   } catch (err) {
     setFlash("err", `Couldn't save: ${err.message}`);
   }
 }
 
+async function withdrawSubmission(name) {
+  if (!confirm(`Withdraw ${name}'s submission?`)) return;
+  try {
+    await supabase.from("shelf_submissions").delete().eq("member_name", name);
+    delete submissions[name];
+    setFlash("info", `${name} withdrew.`);
+    render();
+  } catch (err) {
+    setFlash("err", `Couldn't withdraw: ${err.message}`);
+  }
+}
+
 // ---------- Draw animation ----------
 async function runDraw() {
   if (spinning) return;
-  const eligible = Object.keys(submissions).filter(n => !state.eliminated.includes(n) && state.roster.includes(n));
+  const eligible = Object.keys(submissions).filter(n => !isEliminated(n));
   if (eligible.length === 0) { setFlash("err", "No eligible submissions to draw from."); return; }
   spinning = true;
   render();
@@ -514,18 +540,18 @@ function fmtDate(iso) {
 function computeStats() {
   const total = state.history.length;
   const perMember = {};
-  state.roster.forEach(n => { perMember[n] = 0; });
-  state.history.forEach(h => { if (perMember[h.winner] != null) perMember[h.winner]++; else perMember[h.winner] = 1; });
+  state.history.forEach(h => {
+    perMember[h.winner] = (perMember[h.winner] || 0) + 1;
+  });
   const leaderboard = Object.entries(perMember).sort((a, b) => b[1] - a[1]);
   const maxPicks = leaderboard.reduce((m, [, c]) => Math.max(m, c), 0);
   const picksThisCycle = state.eliminated.length;
-  const rosterSize = state.roster.length;
-  const cycleProgress = rosterSize > 0 ? Math.round((picksThisCycle / rosterSize) * 100) : 0;
-  const submittedCount = Object.keys(submissions).filter(n => state.roster.includes(n) && !state.eliminated.includes(n)).length;
-  return { total, leaderboard, maxPicks, picksThisCycle, rosterSize, cycleProgress, submittedCount };
+  const submittedCount = Object.keys(submissions).filter(n => !isEliminated(n)).length;
+  const regulars = new Set(state.history.map(h => h.winner)).size;
+  return { total, leaderboard, maxPicks, picksThisCycle, submittedCount, regulars };
 }
 
-function render(...args) {
+function render() {
   if (document.activeElement && (document.activeElement.tagName === "INPUT")) {
     pendingRender = true;
     return;
@@ -541,14 +567,16 @@ function render(...args) {
 
   const stats = computeStats();
   const admin = isAdmin();
-  const active = state.roster.filter(n => !state.eliminated.includes(n));
-  const eligibleCount = Object.keys(submissions).filter(n => !state.eliminated.includes(n) && state.roster.includes(n)).length;
+  const myName = savedName();
+  const eligibleSubs = Object.entries(submissions)
+    .filter(([n]) => !isEliminated(n))
+    .sort((a, b) => a[0].localeCompare(b[0]));
 
   let html = `
     <header>
       <div class="eyebrow">Circulation Ledger · Cycle ${state.cycleNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
       <h1>The Shelf</h1>
-      <div class="sub">Submit a book. Draw a card. Once you're picked, you wait for the shelf to turn over.</div>
+      <div class="sub">Drop your name and a book in the box. When it's your card the librarian pulls, you win the round.</div>
       <div class="rule"></div>
     </header>
   `;
@@ -558,7 +586,7 @@ function render(...args) {
   }
 
   if (cycleNotice) {
-    html += `<div class="cycle-banner">Cycle ${cycleNotice} complete — every member's back in the stacks. Cycle ${state.cycleNumber} begins now.</div>`;
+    html += `<div class="cycle-banner">Cycle ${cycleNotice} closed. Cycle ${state.cycleNumber} is open — everyone's back in the stacks.</div>`;
     cycleNotice = null;
   }
 
@@ -572,6 +600,27 @@ function render(...args) {
     `;
   }
 
+  // ---- Recommend a Book ----
+  const meAlreadyPicked = myName && isEliminated(myName);
+  html += `
+    <section>
+      <div class="section-title">Recommend a Book</div>
+      <div class="card no-rule">
+        <div class="submit-form">
+          <label for="my-name">Your name</label>
+          <input type="text" id="my-name" placeholder="How you'd like to be listed" value="${attr(myName)}" autocomplete="off" />
+          <label for="my-book">Book title</label>
+          <input type="text" id="my-book" placeholder="What you'd like the club to read" autocomplete="off" />
+          <button class="btn-primary" id="my-submit">Drop it in the box</button>
+        </div>
+        ${meAlreadyPicked
+          ? `<div class="submit-warning">You (<b>${esc(myName)}</b>) were already picked this cycle. Wait for the shelf to turn over before submitting again.</div>`
+          : `<div class="submit-hint">Already submitted? Use the same name and it'll update your pick.</div>`
+        }
+      </div>
+    </section>
+  `;
+
   // ---- Reading Room (stats) ----
   html += `<section><div class="section-title">Reading Room</div>`;
   html += `
@@ -583,18 +632,18 @@ function render(...args) {
       </div>
       <div class="stat-card">
         <div class="stat-label">This Cycle</div>
-        <div class="stat-number">${stats.picksThisCycle}<span style="font-size:16px; color:var(--ink-soft)">/${stats.rosterSize}</span></div>
-        <div class="stat-suffix">${stats.cycleProgress}% through</div>
+        <div class="stat-number">${stats.picksThisCycle}</div>
+        <div class="stat-suffix">picked so far</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Members</div>
-        <div class="stat-number">${stats.rosterSize}</div>
-        <div class="stat-suffix">on the shelf</div>
+        <div class="stat-label">Regulars</div>
+        <div class="stat-number">${stats.regulars}</div>
+        <div class="stat-suffix">unique winners</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">In the Box</div>
         <div class="stat-number">${stats.submittedCount}</div>
-        <div class="stat-suffix">books submitted</div>
+        <div class="stat-suffix">awaiting the draw</div>
       </div>
     </div>
   `;
@@ -615,40 +664,20 @@ function render(...args) {
   }
   html += `</section>`;
 
-  // ---- Card Catalog (admin only) ----
-  if (admin) {
-    html += `
-      <section>
-        <div class="section-title">Card Catalog</div>
-        <div class="card no-rule">
-          <div class="addrow">
-            <input type="text" id="new-member" placeholder="Add a member's name" />
-            <button class="btn-mini" id="add-member-btn">File card</button>
-          </div>
-        </div>
-      </section>
-    `;
-  }
-
-  // ---- This Round ----
-  html += `<section><div class="section-title">This Round</div>`;
-  if (active.length === 0) {
-    html += `<div class="empty-note">No one's on the shelf yet — a librarian needs to add members.</div>`;
+  // ---- In the Draw Box ----
+  html += `<section><div class="section-title">In the Draw Box</div>`;
+  if (eligibleSubs.length === 0) {
+    html += `<div class="empty-note">The box is empty. Be the first to drop a recommendation in.</div>`;
   } else {
-    active.forEach(name => {
-      const submitted = submissions[name];
+    eligibleSubs.forEach(([name, book]) => {
       html += `
         <div class="card">
-          <div class="card-row">
-            <div class="name">${esc(name)}</div>
-            ${submitted ? `<span class="status">Submitted</span>` : `<span class="status">Awaiting</span>`}
-          </div>
-          <div class="addrow" style="margin-top:8px;">
-            <input type="text" placeholder="Book title" value="${attr(submitted || '')}"
-              data-submit-for="${attr(name)}"
-              onkeydown="if(event.key==='Enter'){ this.blur(); }" />
-            ${submitted ? `<button class="btn-mini remove" data-clear="${attr(name)}">Clear</button>` : ''}
-            ${admin ? `<button class="btn-mini remove" data-remove="${attr(name)}">Remove</button>` : ''}
+          <div class="card-row" style="align-items: flex-start;">
+            <div style="flex:1; min-width:0;">
+              <div class="name">${esc(name)}</div>
+              <div class="submitted-book">${esc(book)}</div>
+            </div>
+            <button class="btn-mini remove" data-withdraw="${attr(name)}">Withdraw</button>
           </div>
         </div>
       `;
@@ -657,10 +686,9 @@ function render(...args) {
   html += `</section>`;
 
   // ---- Checked out this cycle ----
-  const eliminatedThisCycle = state.roster.filter(n => state.eliminated.includes(n));
-  if (eliminatedThisCycle.length) {
+  if (state.eliminated.length) {
     html += `<section><div class="section-title">Checked Out — Cycle ${state.cycleNumber}</div>`;
-    eliminatedThisCycle.forEach(name => {
+    state.eliminated.forEach(name => {
       html += `
         <div class="card eliminated">
           <div class="card-row">
@@ -674,6 +702,7 @@ function render(...args) {
   }
 
   // ---- Draw ----
+  const eligibleCount = eligibleSubs.length;
   html += `
     <section>
       <div class="section-title">Draw</div>
@@ -681,7 +710,7 @@ function render(...args) {
         <div class="drawcard" id="drawcard">${spinning ? '…' : (eligibleCount > 0 ? eligibleCount + ' card' + (eligibleCount === 1 ? '' : 's') + ' in the box' : 'The box is empty')}</div>
         ${admin
           ? `<button class="btn-primary" id="draw-btn" ${(eligibleCount === 0 || spinning) ? 'disabled' : ''}>${spinning ? 'Drawing…' : 'Draw a Card'}</button>`
-          : `<div style="font-size: 12px; color: #a9b8ae; font-style: italic;">Only the librarian can pull a card. Submit a book above.</div>`
+          : `<div style="font-size: 12px; color: #a9b8ae; font-style: italic;">Only the librarian can pull a card.</div>`
         }
       </div>
     </section>
@@ -710,6 +739,7 @@ function render(...args) {
   html += `Shared with everyone who has this link.<br/>`;
   if (admin) {
     html += `<button class="btn-ghost" id="lock-btn">Lock librarian mode</button>`;
+    html += `<button class="btn-ghost" id="new-cycle-btn">Start new cycle</button>`;
     html += `<button class="btn-ghost" id="reset-btn">Reset the shelf</button>`;
   } else {
     html += `<button class="btn-ghost" id="unlock-btn">Librarian mode</button>`;
@@ -729,47 +759,26 @@ function renderSetupNotice() {
     </header>
     <div class="setup">
       <h2>Connect Supabase to get started</h2>
-      <p>This app needs a Supabase project so everyone in the book club can share the same state.</p>
-      <ol style="font-size:13px; line-height:1.6;">
-        <li>Create a free Supabase project at <b>supabase.com</b>.</li>
-        <li>Run the SQL in <code>supabase/schema.sql</code> in the SQL editor.</li>
-        <li>Deploy the edge function in <code>supabase/functions/admin-update</code> and set its <b>ADMIN_PASSWORD</b> secret.</li>
-        <li>Edit <code>index.html</code> and replace <b>SUPABASE_URL</b> and <b>SUPABASE_ANON_KEY</b> with your project values.</li>
-      </ol>
-      <p>Full instructions are in the README.</p>
+      <p>See the README for setup steps.</p>
     </div>
   `;
 }
 
 function wireUp() {
-  const add = document.getElementById("add-member-btn");
-  if (add) add.addEventListener("click", () => {
-    const input = document.getElementById("new-member");
-    const name = input.value.trim();
-    if (!name) return;
-    input.value = "";
-    callAdmin("add_member", { name });
+  const submitBtn = document.getElementById("my-submit");
+  if (submitBtn) submitBtn.addEventListener("click", () => {
+    const name = document.getElementById("my-name").value;
+    const book = document.getElementById("my-book").value;
+    submitMyBook(name, book);
+    document.getElementById("my-book").value = "";
   });
-  const newMember = document.getElementById("new-member");
-  if (newMember) newMember.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") add && add.click();
+  const bookInput = document.getElementById("my-book");
+  if (bookInput) bookInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitBtn && submitBtn.click();
   });
 
-  document.querySelectorAll("[data-submit-for]").forEach(el => {
-    el.addEventListener("blur", () => {
-      const name = el.dataset.submitFor;
-      submitBook(name, el.value);
-      if (pendingRender) render();
-    });
-  });
-  document.querySelectorAll("[data-clear]").forEach(el => {
-    el.addEventListener("click", () => submitBook(el.dataset.clear, ""));
-  });
-  document.querySelectorAll("[data-remove]").forEach(el => {
-    el.addEventListener("click", () => {
-      if (!confirm(`Remove ${el.dataset.remove} from the shelf?`)) return;
-      callAdmin("remove_member", { name: el.dataset.remove });
-    });
+  document.querySelectorAll("[data-withdraw]").forEach(el => {
+    el.addEventListener("click", () => withdrawSubmission(el.dataset.withdraw));
   });
 
   const drawBtn = document.getElementById("draw-btn");
@@ -779,9 +788,14 @@ function wireUp() {
   if (unlock) unlock.addEventListener("click", () => promptLibrarianPassword());
   const lock = document.getElementById("lock-btn");
   if (lock) lock.addEventListener("click", () => { clearAdminPw(); render(); });
+  const newCycle = document.getElementById("new-cycle-btn");
+  if (newCycle) newCycle.addEventListener("click", () => {
+    if (!confirm("Close the current cycle? Everyone goes back into the pool and the draw box is emptied.")) return;
+    callAdmin("new_cycle", {});
+  });
   const reset = document.getElementById("reset-btn");
   if (reset) reset.addEventListener("click", () => {
-    if (!confirm("This clears the whole roster, history, and ledger for everyone. Are you sure?")) return;
+    if (!confirm("Wipe the entire ledger — history, submissions, everything. This cannot be undone. Sure?")) return;
     callAdmin("reset", {});
   });
 }

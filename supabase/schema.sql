@@ -4,12 +4,12 @@
 
 create table if not exists public.shelf_state (
   id int primary key,
-  data jsonb not null default '{"roster":[],"eliminated":[],"history":[],"cycleNumber":1}'::jsonb,
+  data jsonb not null default '{"eliminated":[],"history":[],"cycleNumber":1}'::jsonb,
   updated_at timestamptz default now()
 );
 
 insert into public.shelf_state (id, data)
-values (1, '{"roster":[],"eliminated":[],"history":[],"cycleNumber":1}'::jsonb)
+values (1, '{"eliminated":[],"history":[],"cycleNumber":1}'::jsonb)
 on conflict (id) do nothing;
 
 create table if not exists public.shelf_submissions (

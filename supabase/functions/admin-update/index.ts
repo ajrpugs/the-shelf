@@ -1,15 +1,12 @@
 // Supabase Edge Function: admin-update
 //
-// Password-gated writes for shelf_state. Anyone can submit their own book
-// recommendation via the client, but all admin actions (add/remove members,
-// draw a card, reset) go through here so the ADMIN_PASSWORD secret can guard
-// them.
+// Password-gated writes for shelf_state. Anyone can drop a book into
+// shelf_submissions from the browser via RLS; only the librarian can pull a
+// card, start a new cycle, or reset.
 //
 // Deploy:
 //   supabase functions deploy admin-update --no-verify-jwt
 //   supabase secrets set ADMIN_PASSWORD='your-password-here'
-//
-// The function trusts the service role to bypass RLS on shelf_state.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -20,13 +17,13 @@ const cors = {
 };
 
 type State = {
-  roster: string[];
   eliminated: string[];
   history: Array<{ cycle: number; winner: string; book: string; ts: string }>;
   cycleNumber: number;
 };
 
-const emptyState = (): State => ({ roster: [], eliminated: [], history: [], cycleNumber: 1 });
+const emptyState = (): State => ({ eliminated: [], history: [], cycleNumber: 1 });
+const norm = (s: string) => (s || "").trim().toLowerCase();
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -51,31 +48,19 @@ Deno.serve(async (req) => {
   const { data: row, error: readErr } = await client
     .from("shelf_state").select("data").eq("id", 1).single();
   if (readErr && readErr.code !== "PGRST116") return json({ error: readErr.message }, 500);
-  const state: State = { ...emptyState(), ...((row?.data as State | undefined) ?? {}) };
+  const raw = (row?.data ?? {}) as Partial<State>;
+  const state: State = {
+    eliminated: raw.eliminated ?? [],
+    history: raw.history ?? [],
+    cycleNumber: raw.cycleNumber ?? 1,
+  };
 
   const action = body.action;
-  const payload = body.payload ?? {};
   let winner: { name: string; book: string } | null = null;
   let cycleCompleted: number | null = null;
 
   try {
     switch (action) {
-      case "add_member": {
-        const name = String(payload.name ?? "").trim();
-        if (!name) throw new Error("name required");
-        if (state.roster.some(n => n.toLowerCase() === name.toLowerCase())) {
-          throw new Error(`${name} is already on the shelf`);
-        }
-        state.roster.push(name);
-        break;
-      }
-      case "remove_member": {
-        const name = String(payload.name ?? "").trim();
-        state.roster = state.roster.filter(n => n !== name);
-        state.eliminated = state.eliminated.filter(n => n !== name);
-        await client.from("shelf_submissions").delete().eq("member_name", name);
-        break;
-      }
       case "draw": {
         const { data: subs, error: subErr } = await client
           .from("shelf_submissions").select("member_name, book");
@@ -84,8 +69,8 @@ Deno.serve(async (req) => {
         (subs ?? []).forEach((r: { member_name: string; book: string }) => {
           submissions[r.member_name] = r.book;
         });
-        const eligible = Object.keys(submissions)
-          .filter(n => state.roster.includes(n) && !state.eliminated.includes(n));
+        const eliminatedNorm = new Set(state.eliminated.map(norm));
+        const eligible = Object.keys(submissions).filter(n => !eliminatedNorm.has(norm(n)));
         if (eligible.length === 0) throw new Error("no eligible submissions");
         const chosen = eligible[Math.floor(Math.random() * eligible.length)];
         const book = submissions[chosen];
@@ -97,11 +82,13 @@ Deno.serve(async (req) => {
         });
         state.eliminated.push(chosen);
         winner = { name: chosen, book };
-        if (state.eliminated.length >= state.roster.length && state.roster.length > 0) {
-          cycleCompleted = state.cycleNumber;
-          state.eliminated = [];
-          state.cycleNumber += 1;
-        }
+        await client.from("shelf_submissions").delete().eq("member_name", chosen);
+        break;
+      }
+      case "new_cycle": {
+        cycleCompleted = state.cycleNumber;
+        state.eliminated = [];
+        state.cycleNumber += 1;
         await client.from("shelf_submissions").delete().neq("member_name", "");
         break;
       }
