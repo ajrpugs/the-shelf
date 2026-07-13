@@ -379,7 +379,6 @@ let submissions = {};
 let spinning = false;
 let flashMsg = null;
 let lastWinner = null;
-let roundNotice = null;
 let pendingRender = false;
 
 const SAVED_NAME_KEY = "shelf-my-name";
@@ -441,7 +440,7 @@ async function callAdmin(action, payload = {}) {
     if (body.state) state = normalizeState(body.state);
     if (body.submissions) submissions = body.submissions;
     if (body.winner) lastWinner = body.winner;
-    if (body.roundCompleted) roundNotice = body.roundCompleted;
+    if (body.poolReset) setFlash("info", "Pool reset — everyone's back in the stacks.");
     render();
   } catch (err) {
     setFlash("err", `Network error: ${err.message}`);
@@ -524,7 +523,7 @@ async function submitMyBook(name, book) {
   if (!name || !book) return;
 
   if (isEliminated(name)) {
-    setFlash("err", `${name} was already picked this round. Wait for the shelf to turn over.`);
+    setFlash("err", `${name} has already been picked. Wait for the shelf to turn over.`);
     render();
     return;
   }
@@ -733,7 +732,6 @@ async function runDraw() {
     if (body.state) state = normalizeState(body.state);
     if (body.submissions) submissions = body.submissions;
     lastWinner = winner;
-    if (body.roundCompleted) roundNotice = body.roundCompleted;
     render();
   } catch (err) {
     spinning = false;
@@ -806,11 +804,6 @@ function render() {
     html += `<div class="flash ${flashMsg.kind === 'info' ? 'info' : ''}">${esc(flashMsg.text)}</div>`;
   }
 
-  if (roundNotice) {
-    html += `<div class="cycle-banner">Round ${roundNotice} closed. Round ${state.roundNumber} is open — everyone's back in the stacks.</div>`;
-    roundNotice = null;
-  }
-
   if (lastWinner) {
     html += `
       <div class="winner-banner">
@@ -835,7 +828,7 @@ function render() {
           <button class="btn-primary" id="my-submit">Add to the wheel</button>
         </div>
         ${meAlreadyPicked
-          ? `<div class="submit-warning">You (<b>${esc(myName)}</b>) were already picked this round. Wait for the shelf to turn over before submitting again.</div>`
+          ? `<div class="submit-warning">You (<b>${esc(myName)}</b>) have already been picked. Wait for the shelf to turn over before submitting again.</div>`
           : `<div class="submit-hint">Already submitted? Use the same name and it'll update your pick.</div>`
         }
       </div>
@@ -908,26 +901,37 @@ function render() {
   }
   html += `</section>`;
 
-  // ---- Winners this round ----
+  // ---- Winners (people currently sitting out until pool reset) ----
   if (state.eliminated.length) {
-    html += `<section><div class="section-title">Winners — Round ${state.roundNumber}</div>`;
-    // Show most recent winner first
-    const winsThisRound = state.history
-      .filter(h => h.round === state.roundNumber)
-      .slice();
-    // Fallback for any name in eliminated that isn't in history (shouldn't happen, but be safe)
-    state.eliminated.forEach(name => {
-      if (!winsThisRound.some(h => h.winner === name)) {
-        winsThisRound.push({ winner: name, book: "" });
-      }
-    });
-    winsThisRound.forEach(h => {
+    html += `<section><div class="section-title">Winners</div>`;
+    // Show most recent first. Look up each winner's book + round from history.
+    const eliminatedSet = new Set(state.eliminated);
+    const wins = state.history.filter(h => eliminatedSet.has(h.winner));
+    const seen = new Set();
+    wins.forEach(h => {
+      if (seen.has(h.winner)) return;
+      seen.add(h.winner);
       html += `
         <div class="card eliminated">
           <div class="card-row" style="align-items: flex-start;">
             <div style="flex:1; min-width:0;">
               <div class="name">${esc(h.book || "—")}</div>
-              <div class="submitted-book">picked by ${esc(h.winner)}</div>
+              <div class="submitted-book">picked by ${esc(h.winner)} · Round ${h.round}</div>
+            </div>
+            <span class="stamp-mark">Winner</span>
+          </div>
+        </div>
+      `;
+    });
+    // Fallback: any eliminated name without a matching history entry (legacy data).
+    state.eliminated.forEach(name => {
+      if (seen.has(name)) return;
+      html += `
+        <div class="card eliminated">
+          <div class="card-row" style="align-items: flex-start;">
+            <div style="flex:1; min-width:0;">
+              <div class="name">—</div>
+              <div class="submitted-book">picked by ${esc(name)}</div>
             </div>
             <span class="stamp-mark">Winner</span>
           </div>
@@ -981,7 +985,7 @@ function render() {
   html += `Shared with everyone who has this link.<br/>`;
   if (admin) {
     html += `<button class="btn-ghost" id="lock-btn">Lock librarian mode</button>`;
-    html += `<button class="btn-ghost" id="new-round-btn">Start new round</button>`;
+    html += `<button class="btn-ghost" id="reset-pool-btn">Reset the pool</button>`;
     html += `<button class="btn-ghost" id="reset-btn">Reset the shelf</button>`;
   } else {
     html += `<button class="btn-ghost" id="unlock-btn">Librarian mode</button>`;
@@ -1031,10 +1035,10 @@ function wireUp() {
   if (unlock) unlock.addEventListener("click", () => promptLibrarianPassword());
   const lock = document.getElementById("lock-btn");
   if (lock) lock.addEventListener("click", () => { clearAdminPw(); render(); });
-  const newRound = document.getElementById("new-round-btn");
-  if (newRound) newRound.addEventListener("click", () => {
-    if (!confirm("Close the current round? Everyone goes back into the pool and the wheel is emptied.")) return;
-    callAdmin("new_round", {});
+  const resetPool = document.getElementById("reset-pool-btn");
+  if (resetPool) resetPool.addEventListener("click", () => {
+    if (!confirm("Reset the pool? Everyone currently in the Winners list goes back into the running and can be picked again.")) return;
+    callAdmin("reset_pool", {});
   });
   const reset = document.getElementById("reset-btn");
   if (reset) reset.addEventListener("click", () => {

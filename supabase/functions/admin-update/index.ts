@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
 
   const action = body.action;
   let winner: { name: string; book: string } | null = null;
-  let roundCompleted: number | null = null;
+  let poolReset = false;
 
   try {
     switch (action) {
@@ -92,13 +92,16 @@ Deno.serve(async (req) => {
         winner = { name: chosen, book };
         // Clear the wheel — everyone submits again for the next round.
         await client.from("shelf_submissions").delete().neq("member_name", "");
+        // Round auto-advances on each spin.
+        state.roundNumber += 1;
         break;
       }
-      case "new_round": {
-        roundCompleted = state.roundNumber;
+      case "reset_pool": {
+        // Clear who's already been picked so anyone can win again.
+        // Round number keeps ticking upward across pool resets.
         state.eliminated = [];
-        state.roundNumber += 1;
         await client.from("shelf_submissions").delete().neq("member_name", "");
+        poolReset = true;
         break;
       }
       case "reset": {
@@ -125,7 +128,7 @@ Deno.serve(async (req) => {
     submissions[r.member_name] = r.book;
   });
 
-  return json({ state, submissions, winner, roundCompleted });
+  return json({ state, submissions, winner, poolReset });
 });
 
 function json(body: unknown, status = 200) {
