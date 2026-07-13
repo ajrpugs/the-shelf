@@ -1,0 +1,874 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Shelf — Book Club Picker</title>
+<style>
+  :root {
+    --bg: #f5efe4;
+    --paper: #fbf7ee;
+    --ink: #2b1f16;
+    --muted: #7a6b5c;
+    --accent: #8a3324;
+    --accent-soft: #b95c48;
+    --line: #d9cebb;
+    --ok: #3d6b3d;
+    --warn: #a56c1a;
+    --err: #a02828;
+    --shadow: 0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.06);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  header {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 32px 24px 8px;
+    text-align: center;
+  }
+  header h1 {
+    margin: 0;
+    font-size: clamp(28px, 5vw, 44px);
+    letter-spacing: 0.02em;
+  }
+  header .sub {
+    color: var(--muted);
+    font-style: italic;
+    margin-top: 4px;
+    font-size: 15px;
+  }
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 16px 24px 64px;
+  }
+  .tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--line);
+    margin: 24px 0 20px;
+    flex-wrap: wrap;
+  }
+  .tab {
+    padding: 10px 16px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font: inherit;
+    font-size: 15px;
+    color: var(--muted);
+    cursor: pointer;
+    margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--ink); }
+  .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow);
+  }
+  h2 {
+    margin: 0 0 12px;
+    font-size: 20px;
+    letter-spacing: 0.01em;
+  }
+  h3 {
+    margin: 20px 0 8px;
+    font-size: 16px;
+    color: var(--muted);
+    font-weight: normal;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  input, select, textarea {
+    font: inherit;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: white;
+    color: var(--ink);
+    width: 100%;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent-soft);
+    box-shadow: 0 0 0 2px rgba(185, 92, 72, 0.15);
+  }
+  .row {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: 1fr;
+  }
+  .row.two { grid-template-columns: 1fr 1fr; }
+  .row.three { grid-template-columns: 1fr 1fr 1fr; }
+  @media (max-width: 560px) {
+    .row.two, .row.three { grid-template-columns: 1fr; }
+  }
+  button.primary, button.secondary, button.ghost, button.danger {
+    font: inherit;
+    padding: 8px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    font-size: 14px;
+  }
+  button.primary {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+  button.primary:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
+  button.secondary {
+    background: white;
+    border-color: var(--line);
+    color: var(--ink);
+  }
+  button.secondary:hover { border-color: var(--accent-soft); color: var(--accent); }
+  button.ghost {
+    background: transparent;
+    color: var(--muted);
+    border-color: transparent;
+    padding: 4px 8px;
+    font-size: 13px;
+  }
+  button.ghost:hover { color: var(--err); }
+  button.danger {
+    background: transparent;
+    color: var(--err);
+    border-color: var(--err);
+  }
+  button.danger:hover { background: var(--err); color: white; }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .btn-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  ul.list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  ul.list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    gap: 12px;
+  }
+  ul.list li:last-child { border-bottom: none; }
+  .member-name { font-size: 16px; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    background: var(--line);
+    color: var(--ink);
+  }
+  .badge.pool { background: #e5dcc6; color: var(--accent); }
+  .badge.picked { background: #e6ded1; color: var(--muted); }
+  .badge.attending { background: #d8e4d0; color: var(--ok); }
+  .badge.away { background: #e6ded1; color: var(--muted); }
+  .flag {
+    font-size: 13px;
+    padding: 10px 12px;
+    border-radius: 4px;
+    margin: 8px 0;
+  }
+  .flag.info { background: #efe7d3; color: var(--ink); }
+  .flag.warn { background: #f4e6c8; color: var(--warn); }
+  .flag.err { background: #f4d4d0; color: var(--err); }
+  .flag.ok { background: #d8e4d0; color: var(--ok); }
+  .pick-hero {
+    text-align: center;
+    padding: 32px 16px;
+  }
+  .pick-hero .name {
+    font-size: clamp(32px, 6vw, 52px);
+    color: var(--accent);
+    margin: 12px 0;
+  }
+  .pick-hero .label { color: var(--muted); font-style: italic; }
+  .history-item {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .history-item:last-child { border-bottom: none; }
+  .history-item .title { font-size: 17px; }
+  .history-item .meta { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .empty {
+    color: var(--muted);
+    font-style: italic;
+    text-align: center;
+    padding: 24px 0;
+  }
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .toggle input { width: auto; }
+  .stats {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    padding: 12px 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .stats strong { color: var(--ink); font-weight: normal; font-size: 22px; display: block; }
+  .footer-note {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    margin-top: 32px;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>The Shelf</h1>
+  <div class="sub">A fair-and-balanced book club picker</div>
+</header>
+
+<main>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="round">This Round</button>
+    <button class="tab" data-tab="members">Members</button>
+    <button class="tab" data-tab="history">History</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+
+  <!-- ROUND -->
+  <section class="panel active" id="panel-round">
+    <div class="card">
+      <h2>Draw a Picker</h2>
+      <div id="round-status"></div>
+      <div id="pick-area"></div>
+      <div class="btn-row" id="round-actions"></div>
+    </div>
+
+    <div class="card" id="submission-card" style="display:none">
+      <h2>Submit This Round's Book</h2>
+      <div id="submission-flags"></div>
+      <div class="row two">
+        <div>
+          <label for="book-title">Title</label>
+          <input id="book-title" placeholder="e.g. Piranesi" />
+        </div>
+        <div>
+          <label for="book-author">Author</label>
+          <input id="book-author" placeholder="e.g. Susanna Clarke" />
+        </div>
+      </div>
+      <div class="row two" style="margin-top:12px">
+        <div>
+          <label for="book-genre">Genre</label>
+          <select id="book-genre"></select>
+        </div>
+        <div>
+          <label for="book-submitter">Submitted by (confirm your name)</label>
+          <input id="book-submitter" placeholder="Type your name to confirm" />
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="primary" id="submit-book">Log Book &amp; End Round</button>
+        <button class="secondary" id="cancel-round">Cancel Round</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- MEMBERS -->
+  <section class="panel" id="panel-members">
+    <div class="card">
+      <h2>Add a Member</h2>
+      <div class="row two">
+        <input id="new-member" placeholder="Name" />
+        <button class="primary" id="add-member">Add Member</button>
+      </div>
+      <div id="member-flags"></div>
+    </div>
+
+    <div class="card">
+      <h2>Members</h2>
+      <div class="stats" id="member-stats"></div>
+      <h3>In the current pool</h3>
+      <ul class="list" id="pool-list"></ul>
+      <h3>Already picked this cycle</h3>
+      <ul class="list" id="picked-list"></ul>
+    </div>
+
+    <div class="card">
+      <h2>Attendance for the Next Draw</h2>
+      <p style="color:var(--muted); font-size:14px; margin-top:0">
+        Only members marked attending will be eligible for the next draw. Uncheck anyone who isn't showing up.
+      </p>
+      <ul class="list" id="attendance-list"></ul>
+      <div class="btn-row">
+        <button class="secondary" id="mark-all-attending">Mark all attending</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- HISTORY -->
+  <section class="panel" id="panel-history">
+    <div class="card">
+      <h2>Past Picks</h2>
+      <div class="stats" id="history-stats"></div>
+      <div id="history-list"></div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="panel" id="panel-settings">
+    <div class="card">
+      <h2>Rules</h2>
+      <div class="row">
+        <div>
+          <label for="genre-cooldown">Genre cooldown (number of recent books whose genre can't be repeated)</label>
+          <input id="genre-cooldown" type="number" min="0" max="10" step="1" />
+        </div>
+      </div>
+      <p style="color:var(--muted); font-size:13px; margin-top:8px">
+        Set to 0 to allow any genre. Set to 2 to disallow the last two books' genres.
+      </p>
+    </div>
+    <div class="card">
+      <h2>Genres</h2>
+      <p style="color:var(--muted); font-size:14px; margin-top:0">
+        The list of genres members can pick from when submitting a book.
+      </p>
+      <div class="row two">
+        <input id="new-genre" placeholder="Add a genre (e.g. Sci-Fi)" />
+        <button class="primary" id="add-genre">Add Genre</button>
+      </div>
+      <ul class="list" id="genre-list"></ul>
+    </div>
+    <div class="card">
+      <h2>Data</h2>
+      <p style="color:var(--muted); font-size:14px; margin-top:0">
+        Everything is stored in this browser's local storage. Export a backup or share the JSON with someone else.
+      </p>
+      <div class="btn-row">
+        <button class="secondary" id="export-data">Export JSON</button>
+        <button class="secondary" id="import-data">Import JSON</button>
+        <button class="danger" id="reset-data">Reset Everything</button>
+      </div>
+      <input id="import-file" type="file" accept="application/json" style="display:none" />
+    </div>
+    <div class="footer-note">The Shelf — a small tool for fair random book picks.</div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+const STORAGE_KEY = "the-shelf:v1";
+
+const DEFAULT_GENRES = [
+  "Fiction", "Non-Fiction", "Mystery", "Thriller", "Sci-Fi",
+  "Fantasy", "Romance", "Historical", "Memoir", "Horror",
+  "Literary", "Poetry", "Graphic Novel", "Classic"
+];
+
+const defaultState = () => ({
+  members: [],            // { id, name, attending }
+  pickedThisCycle: [],    // memberIds already picked in the current cycle
+  currentRound: null,     // { pickedMemberId } or null
+  history: [],            // { id, memberId, memberName, title, author, genre, submittedBy, date }
+  genres: [...DEFAULT_GENRES],
+  genreCooldown: 2,
+});
+
+let state = load();
+
+// ---------- persistence ----------
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultState();
+    const parsed = JSON.parse(raw);
+    const base = defaultState();
+    return { ...base, ...parsed };
+  } catch (e) {
+    console.warn("Failed to load state", e);
+    return defaultState();
+  }
+}
+function save() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+// ---------- utils ----------
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const norm = (s) => (s || "").trim().toLowerCase();
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[c]));
+
+function flash(container, kind, msg) {
+  const el = document.createElement("div");
+  el.className = `flag ${kind}`;
+  el.textContent = msg;
+  container.innerHTML = "";
+  container.appendChild(el);
+  setTimeout(() => { if (el.parentNode === container) container.innerHTML = ""; }, 4500);
+}
+
+// ---------- tabs ----------
+document.querySelectorAll(".tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("panel-" + btn.dataset.tab).classList.add("active");
+  });
+});
+
+// ---------- members ----------
+function currentPool() {
+  return state.members.filter(m => !state.pickedThisCycle.includes(m.id));
+}
+function attendingPool() {
+  return currentPool().filter(m => m.attending);
+}
+
+function addMember() {
+  const input = document.getElementById("new-member");
+  const flags = document.getElementById("member-flags");
+  const name = input.value.trim();
+  if (!name) return;
+  if (state.members.some(m => norm(m.name) === norm(name))) {
+    flash(flags, "err", `"${name}" is already in the group.`);
+    return;
+  }
+  state.members.push({ id: uid(), name, attending: true });
+  input.value = "";
+  save();
+  render();
+  flash(flags, "ok", `Added ${name}.`);
+}
+
+function removeMember(id) {
+  const m = state.members.find(x => x.id === id);
+  if (!m) return;
+  if (!confirm(`Remove ${m.name} from the group? Their past picks stay in the history.`)) return;
+  state.members = state.members.filter(x => x.id !== id);
+  state.pickedThisCycle = state.pickedThisCycle.filter(x => x !== id);
+  save();
+  render();
+}
+
+function toggleAttendance(id) {
+  const m = state.members.find(x => x.id === id);
+  if (!m) return;
+  m.attending = !m.attending;
+  save();
+  render();
+}
+
+// ---------- round / draw ----------
+function drawPicker() {
+  const flags = document.getElementById("round-status");
+  const pool = attendingPool();
+  if (pool.length === 0) {
+    if (currentPool().length === 0 && state.members.length > 0) {
+      flash(flags, "info", "Everyone's had a turn — resetting the cycle.");
+      state.pickedThisCycle = [];
+      save();
+      render();
+      return;
+    }
+    flash(flags, "err", "No eligible members. Add members or mark someone attending.");
+    return;
+  }
+  const chosen = pool[Math.floor(Math.random() * pool.length)];
+  state.currentRound = { pickedMemberId: chosen.id, startedAt: Date.now() };
+  save();
+  render();
+}
+
+function cancelRound() {
+  if (!confirm("Cancel this round? The picker will go back into the pool.")) return;
+  state.currentRound = null;
+  save();
+  render();
+}
+
+function recentGenres(n) {
+  return state.history.slice(-n).map(h => h.genre).filter(Boolean);
+}
+
+function submitBook() {
+  const flags = document.getElementById("submission-flags");
+  const round = state.currentRound;
+  if (!round) return;
+  const picker = state.members.find(m => m.id === round.pickedMemberId);
+  if (!picker) return;
+
+  const title = document.getElementById("book-title").value.trim();
+  const author = document.getElementById("book-author").value.trim();
+  const genre = document.getElementById("book-genre").value;
+  const submittedBy = document.getElementById("book-submitter").value.trim();
+
+  if (!title) { flash(flags, "err", "Title is required."); return; }
+  if (!genre) { flash(flags, "err", "Pick a genre."); return; }
+  if (!submittedBy) { flash(flags, "err", "Type your name to confirm submission."); return; }
+  if (norm(submittedBy) !== norm(picker.name)) {
+    flash(flags, "err", `Name doesn't match — expected "${picker.name}".`);
+    return;
+  }
+
+  const cooldown = state.genreCooldown | 0;
+  if (cooldown > 0 && recentGenres(cooldown).some(g => norm(g) === norm(genre))) {
+    flash(flags, "err", `Genre cooldown: "${genre}" was picked in the last ${cooldown} book(s).`);
+    return;
+  }
+  const dup = state.history.find(h => norm(h.title) === norm(title));
+  if (dup) {
+    if (!confirm(`"${title}" already appears in the history (picked by ${dup.memberName}). Submit anyway?`)) return;
+  }
+
+  state.history.push({
+    id: uid(),
+    memberId: picker.id,
+    memberName: picker.name,
+    title, author, genre, submittedBy,
+    date: new Date().toISOString(),
+  });
+  state.pickedThisCycle.push(picker.id);
+  state.currentRound = null;
+
+  // Auto-reset cycle when everyone in the group has been picked.
+  if (state.pickedThisCycle.length >= state.members.length && state.members.length > 0) {
+    state.pickedThisCycle = [];
+  }
+
+  // Clear the form.
+  ["book-title", "book-author", "book-submitter"].forEach(id => document.getElementById(id).value = "");
+  save();
+  render();
+  flash(document.getElementById("round-status"), "ok", `Logged "${title}" for ${picker.name}.`);
+}
+
+// ---------- genres ----------
+function addGenre() {
+  const input = document.getElementById("new-genre");
+  const g = input.value.trim();
+  if (!g) return;
+  if (state.genres.some(x => norm(x) === norm(g))) return;
+  state.genres.push(g);
+  input.value = "";
+  save();
+  render();
+}
+function removeGenre(g) {
+  state.genres = state.genres.filter(x => x !== g);
+  save();
+  render();
+}
+
+// ---------- import/export ----------
+function exportData() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `the-shelf-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+function importData() {
+  document.getElementById("import-file").click();
+}
+document.getElementById("import-file").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (!data.members || !Array.isArray(data.members)) throw new Error("Not a Shelf backup");
+      if (!confirm("Replace all current data with the imported backup?")) return;
+      state = { ...defaultState(), ...data };
+      save();
+      render();
+    } catch (err) {
+      alert("Import failed: " + err.message);
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = "";
+});
+function resetAll() {
+  if (!confirm("Wipe all members, picks, and history? This cannot be undone.")) return;
+  state = defaultState();
+  save();
+  render();
+}
+
+// ---------- render ----------
+function render() {
+  renderRound();
+  renderMembers();
+  renderHistory();
+  renderSettings();
+}
+
+function renderRound() {
+  const statusEl = document.getElementById("round-status");
+  const pickEl = document.getElementById("pick-area");
+  const actionsEl = document.getElementById("round-actions");
+  const subCard = document.getElementById("submission-card");
+
+  statusEl.innerHTML = "";
+  pickEl.innerHTML = "";
+  actionsEl.innerHTML = "";
+
+  if (state.members.length === 0) {
+    pickEl.innerHTML = `<div class="empty">No members yet. Add some on the Members tab.</div>`;
+    subCard.style.display = "none";
+    return;
+  }
+
+  const attending = attendingPool();
+  const cycleTotal = state.members.length;
+  const pickedCount = state.pickedThisCycle.length;
+
+  if (state.currentRound) {
+    const picker = state.members.find(m => m.id === state.currentRound.pickedMemberId);
+    if (picker) {
+      pickEl.innerHTML = `
+        <div class="pick-hero">
+          <div class="label">This round's picker is</div>
+          <div class="name">${esc(picker.name)}</div>
+          <div class="label">Submit their book below.</div>
+        </div>
+      `;
+      subCard.style.display = "block";
+      populateGenreSelect();
+      renderCooldownHint();
+      return;
+    }
+  }
+
+  subCard.style.display = "none";
+
+  const info = document.createElement("div");
+  info.className = "flag info";
+  info.innerHTML = `
+    Cycle: <strong>${pickedCount}</strong> of <strong>${cycleTotal}</strong> picked.
+    <strong>${attending.length}</strong> attending and eligible for the next draw.
+  `;
+  statusEl.appendChild(info);
+
+  const drawBtn = document.createElement("button");
+  drawBtn.className = "primary";
+  drawBtn.textContent = "Draw This Round's Picker";
+  drawBtn.disabled = attending.length === 0;
+  drawBtn.addEventListener("click", drawPicker);
+  actionsEl.appendChild(drawBtn);
+
+  if (state.pickedThisCycle.length > 0) {
+    const resetBtn = document.createElement("button");
+    resetBtn.className = "secondary";
+    resetBtn.textContent = "Reset Cycle";
+    resetBtn.addEventListener("click", () => {
+      if (confirm("Reset the cycle? Everyone goes back into the pool.")) {
+        state.pickedThisCycle = [];
+        save();
+        render();
+      }
+    });
+    actionsEl.appendChild(resetBtn);
+  }
+}
+
+function renderCooldownHint() {
+  const flags = document.getElementById("submission-flags");
+  flags.innerHTML = "";
+  const cd = state.genreCooldown | 0;
+  if (cd > 0) {
+    const recent = recentGenres(cd);
+    if (recent.length > 0) {
+      const el = document.createElement("div");
+      el.className = "flag warn";
+      el.textContent = `Off-limits this round (recent ${cd}): ${recent.join(", ")}`;
+      flags.appendChild(el);
+    }
+  }
+}
+
+function populateGenreSelect() {
+  const sel = document.getElementById("book-genre");
+  const current = sel.value;
+  sel.innerHTML = `<option value="">— pick a genre —</option>` +
+    state.genres.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join("");
+  if (current) sel.value = current;
+}
+
+function renderMembers() {
+  const stats = document.getElementById("member-stats");
+  const poolList = document.getElementById("pool-list");
+  const pickedList = document.getElementById("picked-list");
+  const attendanceList = document.getElementById("attendance-list");
+
+  stats.innerHTML = `
+    <div><strong>${state.members.length}</strong> total members</div>
+    <div><strong>${currentPool().length}</strong> in current pool</div>
+    <div><strong>${state.members.filter(m => m.attending).length}</strong> marked attending</div>
+  `;
+
+  const inPool = currentPool();
+  poolList.innerHTML = inPool.length === 0
+    ? `<div class="empty">Pool is empty — everyone's had a turn.</div>`
+    : inPool.map(m => `
+        <li>
+          <span class="member-name">${esc(m.name)}</span>
+          <span>
+            <span class="badge pool">In pool</span>
+            <button class="ghost" data-remove="${m.id}">Remove</button>
+          </span>
+        </li>
+      `).join("");
+
+  const picked = state.members.filter(m => state.pickedThisCycle.includes(m.id));
+  pickedList.innerHTML = picked.length === 0
+    ? `<div class="empty">No one has been picked yet in this cycle.</div>`
+    : picked.map(m => `
+        <li>
+          <span class="member-name">${esc(m.name)}</span>
+          <span>
+            <span class="badge picked">Picked</span>
+            <button class="ghost" data-remove="${m.id}">Remove</button>
+          </span>
+        </li>
+      `).join("");
+
+  attendanceList.innerHTML = state.members.length === 0
+    ? `<div class="empty">Add members first.</div>`
+    : state.members.map(m => `
+        <li>
+          <span class="member-name">${esc(m.name)}</span>
+          <span>
+            <label class="toggle">
+              <input type="checkbox" data-attend="${m.id}" ${m.attending ? "checked" : ""} />
+              ${m.attending ? '<span class="badge attending">Attending</span>' : '<span class="badge away">Away</span>'}
+            </label>
+          </span>
+        </li>
+      `).join("");
+
+  document.querySelectorAll("[data-remove]").forEach(btn => {
+    btn.addEventListener("click", () => removeMember(btn.dataset.remove));
+  });
+  document.querySelectorAll("[data-attend]").forEach(cb => {
+    cb.addEventListener("change", () => toggleAttendance(cb.dataset.attend));
+  });
+}
+
+function renderHistory() {
+  const list = document.getElementById("history-list");
+  const stats = document.getElementById("history-stats");
+
+  stats.innerHTML = `
+    <div><strong>${state.history.length}</strong> books logged</div>
+    <div><strong>${new Set(state.history.map(h => h.memberId)).size}</strong> unique pickers</div>
+    <div><strong>${new Set(state.history.map(h => h.genre)).size}</strong> genres covered</div>
+  `;
+
+  if (state.history.length === 0) {
+    list.innerHTML = `<div class="empty">No picks yet. When a round ends, it shows up here.</div>`;
+    return;
+  }
+  const items = [...state.history].reverse().map(h => `
+    <div class="history-item">
+      <div class="title">${esc(h.title)}${h.author ? ` <span style="color:var(--muted); font-style:italic">by ${esc(h.author)}</span>` : ""}</div>
+      <div class="meta">
+        Picked by ${esc(h.memberName)}
+        · <span class="badge">${esc(h.genre || "—")}</span>
+        · ${new Date(h.date).toLocaleDateString()}
+      </div>
+    </div>
+  `).join("");
+  list.innerHTML = items;
+}
+
+function renderSettings() {
+  const cd = document.getElementById("genre-cooldown");
+  cd.value = state.genreCooldown;
+
+  const list = document.getElementById("genre-list");
+  list.innerHTML = state.genres.map(g => `
+    <li>
+      <span>${esc(g)}</span>
+      <button class="ghost" data-genre="${esc(g)}">Remove</button>
+    </li>
+  `).join("");
+  document.querySelectorAll("[data-genre]").forEach(btn => {
+    btn.addEventListener("click", () => removeGenre(btn.dataset.genre));
+  });
+}
+
+// ---------- wire up ----------
+document.getElementById("add-member").addEventListener("click", addMember);
+document.getElementById("new-member").addEventListener("keydown", (e) => { if (e.key === "Enter") addMember(); });
+document.getElementById("submit-book").addEventListener("click", submitBook);
+document.getElementById("cancel-round").addEventListener("click", cancelRound);
+document.getElementById("mark-all-attending").addEventListener("click", () => {
+  state.members.forEach(m => m.attending = true);
+  save();
+  render();
+});
+document.getElementById("add-genre").addEventListener("click", addGenre);
+document.getElementById("new-genre").addEventListener("keydown", (e) => { if (e.key === "Enter") addGenre(); });
+document.getElementById("genre-cooldown").addEventListener("change", (e) => {
+  const v = Math.max(0, Math.min(10, parseInt(e.target.value, 10) || 0));
+  state.genreCooldown = v;
+  e.target.value = v;
+  save();
+});
+document.getElementById("export-data").addEventListener("click", exportData);
+document.getElementById("import-data").addEventListener("click", importData);
+document.getElementById("reset-data").addEventListener("click", resetAll);
+
+render();
+</script>
+</body>
+</html>
