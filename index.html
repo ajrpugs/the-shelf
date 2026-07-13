@@ -144,16 +144,20 @@
   .btn-mini{ background: var(--green); color: var(--card); padding: 6px 10px; font-size: 11px; }
   .btn-mini.remove{ background: transparent; color: var(--stamp); border: 1px solid var(--stamp); }
 
-  .addrow{ display:flex; gap:8px; margin-top: 4px; }
+  .addrow{ display:flex; gap:8px; margin-top: 4px; align-items: center; }
   .addrow input{
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.2);
+    background: white;
+    border: 1px solid rgba(38,35,28,0.2);
     border-radius: 2px;
-    color: var(--card);
+    color: var(--ink);
     padding: 10px 12px;
     font-size: 13px;
   }
-  .addrow input::placeholder{ color: #7f8f84; }
+  .addrow input:focus{
+    border-color: var(--stamp);
+    outline: none;
+  }
+  .addrow input::placeholder{ color: var(--ink-soft); opacity: 0.7; }
 
   .drawer{
     text-align: center;
@@ -616,7 +620,7 @@ function render(...args) {
     html += `
       <section>
         <div class="section-title">Card Catalog</div>
-        <div class="card">
+        <div class="card no-rule">
           <div class="addrow">
             <input type="text" id="new-member" placeholder="Add a member's name" />
             <button class="btn-mini" id="add-member-btn">File card</button>
