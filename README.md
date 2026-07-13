@@ -1,50 +1,72 @@
 # The Shelf
 
-A tiny, standalone book club picker. Weighted lottery (no-repeat) draws pick who chooses the next book, with a genre cooldown so the group doesn't end up reading three thrillers in a row.
+A tiny book-club picker with a library-ledger vibe. Everyone can submit their book recommendation; a designated librarian draws the card. Once you're picked, you sit out until the cycle turns over.
 
-Single HTML file. No build step. No backend. Data lives in your browser's `localStorage`.
+Single-page HTML frontend + Supabase backend (Postgres + Realtime + one Edge Function). Free tier is more than enough for a book club.
 
-## The rules
+## How it works
 
-- **No-repeat draws.** Once a member is picked, they're out of the pool until everyone else has had a turn. Cycle resets automatically when the pool empties.
-- **Attendance-aware.** Toggle who's showing up before you draw — only attending members are eligible.
-- **Genre cooldown.** The last N genres are off-limits for the next pick (configurable; defaults to 2).
-- **Sanity checks.** Case-insensitive duplicate-name blocking; duplicate book-title warning against past history; "submitted by" name has to match the picker before a round can close.
-- **Full history.** Every past pick is logged with picker, title, author, genre, and date.
+- **Anyone with the link** can:
+  - See the roster, current submissions, checked-out members, ledger, and stats.
+  - Type a book title into any member's row to submit a recommendation. (Honor system — no login.)
+- **Only the librarian** (whoever has the password) can:
+  - Add and remove members.
+  - Draw a card (the server-side edge function does the random pick and updates history/eliminated).
+  - Reset the whole shelf.
 
-## Running it
+Once every member has been picked once, the cycle rolls over automatically.
 
-Just open `index.html` in a browser. That's it.
+## Setup
 
-## Hosting it for free
+### 1. Supabase project
 
-The easiest option is **GitHub Pages**:
+1. Create a free project at [supabase.com](https://supabase.com).
+2. Open the **SQL editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates the two tables, RLS policies, and hooks them into realtime.
 
-1. Push this repo to GitHub (already done if you're reading this on the repo page).
-2. Go to **Settings → Pages**.
-3. Under **Source**, pick the `main` branch, `/root` folder.
-4. Save. In a minute you'll have a URL like `https://<your-user>.github.io/the-shelf/`.
+### 2. Edge function (the admin gate)
 
-Alternatives that all work with zero config:
-- **Netlify Drop** — drag the folder onto [app.netlify.com/drop](https://app.netlify.com/drop).
-- **Vercel** — import the GitHub repo, no configuration needed.
-- **Cloudflare Pages** — same idea, generous free tier.
+You need the [Supabase CLI](https://supabase.com/docs/guides/cli) installed and logged in (`supabase login`), then link this repo to your project:
+
+```bash
+supabase link --project-ref <your-project-ref>
+supabase secrets set ADMIN_PASSWORD='pick-a-good-one'
+supabase functions deploy admin-update --no-verify-jwt
+```
+
+`--no-verify-jwt` is important: the function is called with the anon key from the browser, so it does its own password check instead of relying on Supabase Auth.
+
+### 3. Frontend
+
+Edit `index.html` and replace the two placeholders near the top of the `<script>`:
+
+```js
+const SUPABASE_URL = "https://<your-project-ref>.supabase.co";
+const SUPABASE_ANON_KEY = "<your-anon-public-key>";
+```
+
+Both values are safe to expose in the browser — that's what the anon key is for. The admin password is only used server-side and never appears in the HTML.
+
+Then commit and push. GitHub Pages will redeploy automatically:
+
+```bash
+git add index.html
+git commit -m "Configure Supabase"
+git push
+```
+
+## Local dev
+
+Just open `index.html` in a browser (or serve it with any static server — `python3 -m http.server`, `npx serve`, etc.). Because Supabase is doing all the persistence, there's nothing to run locally.
+
+## Security notes
+
+- The anon key + RLS mean anyone with the URL can read state and submit book recommendations. That's intentional.
+- Admin actions all funnel through the edge function, which checks the password server-side against the `ADMIN_PASSWORD` secret. The password never touches the browser JS at rest, and it's stored in `sessionStorage` while the librarian is active (cleared when they lock).
+- If the password leaks, rotate it with `supabase secrets set ADMIN_PASSWORD='new-value'` and redeploy.
 
 ## Data & backups
 
-- Everything is stored locally in the browser under the key `the-shelf:v1`.
-- Use **Settings → Export JSON** to save a backup, and **Import JSON** to restore or share state.
-- No account, no cloud. If two people load the site on different browsers, they each get their own copy — one person should be the source of truth (or you upgrade to a real database, see below).
-
-## If you want shared multi-user state
-
-The localStorage design keeps things simple but means each browser has its own copy. To make it collaborative, swap the `load()` / `save()` functions for a hosted store. Good free options:
-
-- **Supabase** — Postgres + JS client. Create a `shelf_state` table with a single JSON blob row, then replace `load`/`save` with `supabase.from('shelf_state').select()` / `.upsert()`.
-- **Firebase** — same idea with Firestore.
-- **JSONBin.io** — dead simple hosted JSON if you don't want a DB.
-
-Roll your own auth if impersonation matters, otherwise the honor system is fine for small trusted book clubs.
+The Supabase dashboard has a full backup + SQL export. You can also just `select data from shelf_state where id = 1;` to grab the whole state as JSON.
 
 ## License
 

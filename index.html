@@ -1,874 +1,791 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>The Shelf — Book Club Picker</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Shelf</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,500&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg: #f5efe4;
-    --paper: #fbf7ee;
-    --ink: #2b1f16;
-    --muted: #7a6b5c;
-    --accent: #8a3324;
-    --accent-soft: #b95c48;
-    --line: #d9cebb;
-    --ok: #3d6b3d;
-    --warn: #a56c1a;
-    --err: #a02828;
-    --shadow: 0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.06);
+  :root{
+    --felt: #16241F;
+    --felt-dark: #101B17;
+    --card: #F2E8D5;
+    --card-shadow: #d8c9a8;
+    --ink: #26231C;
+    --ink-soft: #6b6455;
+    --stamp: #A23E2F;
+    --green: #3D5A4C;
+    --brass: #B99657;
   }
-  * { box-sizing: border-box; }
-  html, body {
-    margin: 0; padding: 0;
-    font-family: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
-    background: var(--bg);
-    color: var(--ink);
-    line-height: 1.5;
+  *{ box-sizing: border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background:
+      radial-gradient(ellipse at top, rgba(255,255,255,0.03), transparent 60%),
+      repeating-linear-gradient(0deg, rgba(0,0,0,0.06) 0px, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 3px),
+      var(--felt);
+    min-height: 100vh;
+    font-family: 'Courier Prime', monospace;
+    color: var(--card);
+    padding: 32px 16px 80px;
   }
-  header {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 32px 24px 8px;
-    text-align: center;
+  .wrap{ max-width: 720px; margin: 0 auto; }
+
+  header{ text-align:center; margin-bottom: 36px; }
+  .eyebrow{
+    font-size: 11px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--brass);
+    margin-bottom: 10px;
   }
-  header h1 {
+  h1{
+    font-family: 'Fraunces', serif;
+    font-weight: 700;
+    font-size: clamp(40px, 9vw, 64px);
     margin: 0;
-    font-size: clamp(28px, 5vw, 44px);
-    letter-spacing: 0.02em;
+    letter-spacing: -0.01em;
   }
-  header .sub {
-    color: var(--muted);
+  .sub{
+    font-size: 13px;
+    color: #a9b8ae;
+    margin-top: 10px;
+    letter-spacing: 0.03em;
+  }
+  .rule{
+    width: 64px; height: 2px; background: var(--stamp);
+    margin: 18px auto 0;
+  }
+
+  section{ margin-bottom: 30px; }
+  .section-title{
+    font-family: 'Fraunces', serif;
     font-style: italic;
-    margin-top: 4px;
-    font-size: 15px;
+    font-weight: 500;
+    font-size: 19px;
+    color: var(--brass);
+    margin: 0 0 12px 2px;
   }
-  main {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 16px 24px 64px;
+
+  .card{
+    background: var(--card);
+    color: var(--ink);
+    border-radius: 2px;
+    box-shadow: 0 6px 0 var(--card-shadow), 0 10px 18px rgba(0,0,0,0.35);
+    padding: 16px 18px;
+    position: relative;
+    margin-bottom: 10px;
   }
-  .tabs {
-    display: flex;
-    gap: 4px;
-    border-bottom: 1px solid var(--line);
-    margin: 24px 0 20px;
+  .card.no-rule::before { display:none; }
+  .card:not(.no-rule)::before{
+    content:"";
+    position:absolute; left:0; right:0; top:38px;
+    height:1px; background: rgba(162,62,47,0.25);
+  }
+  .card-row{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
     flex-wrap: wrap;
   }
-  .tab {
-    padding: 10px 16px;
+  .name{
+    font-family:'Fraunces', serif; font-weight:600; font-size:16px;
+  }
+  .status{
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft);
+  }
+  .card.eliminated{
+    opacity: 0.55;
+  }
+  .stamp-mark{
+    display:inline-block;
+    border: 2px solid var(--stamp);
+    color: var(--stamp);
+    font-family: 'Fraunces', serif;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    transform: rotate(-4deg);
+    border-radius: 3px;
+  }
+
+  input[type=text], input[type=password]{
+    font-family: 'Courier Prime', monospace;
     background: transparent;
     border: none;
-    border-bottom: 2px solid transparent;
-    font: inherit;
-    font-size: 15px;
-    color: var(--muted);
-    cursor: pointer;
-    margin-bottom: -1px;
-  }
-  .tab:hover { color: var(--ink); }
-  .tab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-  }
-  .panel { display: none; }
-  .panel.active { display: block; }
-  .card {
-    background: var(--paper);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 20px;
-    margin-bottom: 16px;
-    box-shadow: var(--shadow);
-  }
-  h2 {
-    margin: 0 0 12px;
-    font-size: 20px;
-    letter-spacing: 0.01em;
-  }
-  h3 {
-    margin: 20px 0 8px;
-    font-size: 16px;
-    color: var(--muted);
-    font-weight: normal;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-  label {
-    display: block;
-    font-size: 13px;
-    color: var(--muted);
-    margin-bottom: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  input, select, textarea {
-    font: inherit;
-    padding: 8px 10px;
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    background: white;
+    border-bottom: 1px dashed var(--ink-soft);
+    padding: 6px 2px;
+    font-size: 14px;
     color: var(--ink);
-    width: 100%;
-  }
-  input:focus, select:focus, textarea:focus {
     outline: none;
-    border-color: var(--accent-soft);
-    box-shadow: 0 0 0 2px rgba(185, 92, 72, 0.15);
+    flex: 1;
+    min-width: 120px;
   }
-  .row {
-    display: grid;
-    gap: 12px;
-    grid-template-columns: 1fr;
-  }
-  .row.two { grid-template-columns: 1fr 1fr; }
-  .row.three { grid-template-columns: 1fr 1fr 1fr; }
-  @media (max-width: 560px) {
-    .row.two, .row.three { grid-template-columns: 1fr; }
-  }
-  button.primary, button.secondary, button.ghost, button.danger {
-    font: inherit;
+  input[type=text]::placeholder{ color: #9a8f77; }
+  input[type=text]:focus, input[type=password]:focus{ border-bottom: 1px solid var(--stamp); }
+
+  button{
+    font-family: 'Courier Prime', monospace;
+    cursor: pointer;
+    border: none;
+    border-radius: 2px;
     padding: 8px 14px;
-    border-radius: 4px;
-    cursor: pointer;
-    border: 1px solid transparent;
-    font-size: 14px;
-  }
-  button.primary {
-    background: var(--accent);
-    color: white;
-    border-color: var(--accent);
-  }
-  button.primary:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
-  button.secondary {
-    background: white;
-    border-color: var(--line);
-    color: var(--ink);
-  }
-  button.secondary:hover { border-color: var(--accent-soft); color: var(--accent); }
-  button.ghost {
-    background: transparent;
-    color: var(--muted);
-    border-color: transparent;
-    padding: 4px 8px;
-    font-size: 13px;
-  }
-  button.ghost:hover { color: var(--err); }
-  button.danger {
-    background: transparent;
-    color: var(--err);
-    border-color: var(--err);
-  }
-  button.danger:hover { background: var(--err); color: white; }
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .btn-row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 12px;
-  }
-  ul.list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-  }
-  ul.list li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--line);
-    gap: 12px;
-  }
-  ul.list li:last-child { border-bottom: none; }
-  .member-name { font-size: 16px; }
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    letter-spacing: 0.05em;
+    font-size: 12px;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    background: var(--line);
-    color: var(--ink);
+    font-weight: 700;
+    transition: transform 0.1s ease;
   }
-  .badge.pool { background: #e5dcc6; color: var(--accent); }
-  .badge.picked { background: #e6ded1; color: var(--muted); }
-  .badge.attending { background: #d8e4d0; color: var(--ok); }
-  .badge.away { background: #e6ded1; color: var(--muted); }
-  .flag {
-    font-size: 13px;
+  button:active{ transform: scale(0.97); }
+  button:disabled{ opacity: 0.4; cursor: not-allowed; }
+  .btn-primary{ background: var(--stamp); color: var(--card); }
+  .btn-ghost{ background: transparent; color: var(--card); border: 1px solid rgba(255,255,255,0.25); }
+  .btn-mini{ background: var(--green); color: var(--card); padding: 6px 10px; font-size: 11px; }
+  .btn-mini.remove{ background: transparent; color: var(--stamp); border: 1px solid var(--stamp); }
+
+  .addrow{ display:flex; gap:8px; margin-top: 4px; }
+  .addrow input{
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 2px;
+    color: var(--card);
     padding: 10px 12px;
+    font-size: 13px;
+  }
+  .addrow input::placeholder{ color: #7f8f84; }
+
+  .drawer{
+    text-align: center;
+    padding: 26px 18px;
+    border: 1px solid rgba(185,150,87,0.35);
+    border-radius: 3px;
+    background: rgba(0,0,0,0.15);
+  }
+  .drawcard{
+    font-family: 'Fraunces', serif;
+    font-weight: 700;
+    font-size: 26px;
+    min-height: 36px;
+    margin-bottom: 14px;
+    color: var(--brass);
+  }
+  .drawcard.settled{ color: var(--card); }
+
+  .winner-banner{
+    background: var(--card);
+    color: var(--ink);
+    border-radius: 3px;
+    padding: 20px;
+    text-align:center;
+    box-shadow: 0 6px 0 var(--card-shadow), 0 10px 18px rgba(0,0,0,0.35);
+    margin-top: 16px;
+  }
+  .winner-banner .stampbig{
+    display:inline-block;
+    border: 3px solid var(--stamp);
+    color: var(--stamp);
+    font-family:'Fraunces', serif;
+    font-weight:700;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    padding: 4px 12px;
+    transform: rotate(-3deg);
     border-radius: 4px;
-    margin: 8px 0;
-  }
-  .flag.info { background: #efe7d3; color: var(--ink); }
-  .flag.warn { background: #f4e6c8; color: var(--warn); }
-  .flag.err { background: #f4d4d0; color: var(--err); }
-  .flag.ok { background: #d8e4d0; color: var(--ok); }
-  .pick-hero {
-    text-align: center;
-    padding: 32px 16px;
-  }
-  .pick-hero .name {
-    font-size: clamp(32px, 6vw, 52px);
-    color: var(--accent);
-    margin: 12px 0;
-  }
-  .pick-hero .label { color: var(--muted); font-style: italic; }
-  .history-item {
-    padding: 12px 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .history-item:last-child { border-bottom: none; }
-  .history-item .title { font-size: 17px; }
-  .history-item .meta { font-size: 13px; color: var(--muted); margin-top: 2px; }
-  .empty {
-    color: var(--muted);
-    font-style: italic;
-    text-align: center;
-    padding: 24px 0;
-  }
-  .toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
+    margin-bottom: 10px;
     font-size: 13px;
-    color: var(--muted);
-    cursor: pointer;
-    user-select: none;
   }
-  .toggle input { width: auto; }
-  .stats {
-    display: flex;
-    gap: 24px;
-    flex-wrap: wrap;
-    padding: 12px 0;
-    color: var(--muted);
-    font-size: 14px;
+  .winner-banner .wname{
+    font-family:'Fraunces', serif; font-weight:700; font-size: 24px;
   }
-  .stats strong { color: var(--ink); font-weight: normal; font-size: 22px; display: block; }
-  .footer-note {
-    text-align: center;
-    color: var(--muted);
-    font-size: 13px;
-    margin-top: 32px;
-    font-style: italic;
+  .winner-banner .wbook{ font-size: 13px; color: var(--ink-soft); margin-top: 4px; font-style: italic; }
+
+  .cycle-banner{
+    background: var(--green); color: var(--card);
+    border-radius: 3px; padding: 12px 16px; font-size: 12.5px;
+    margin-bottom: 14px; letter-spacing: 0.02em;
+  }
+  .flash{
+    background: var(--stamp); color: var(--card);
+    border-radius: 3px; padding: 10px 14px; font-size: 12px;
+    margin-bottom: 14px; letter-spacing: 0.02em;
+  }
+  .flash.info{ background: var(--green); }
+
+  .history-item{
+    display:flex; justify-content:space-between; gap: 10px;
+    font-size: 12.5px; padding: 8px 2px; border-bottom: 1px dotted rgba(38,35,28,0.15);
+    color: var(--ink-soft);
+  }
+  .history-item:last-child{ border-bottom: none; }
+  .history-item .h-who{ color: var(--ink); font-weight: 700; }
+  .empty-note{ font-size: 12.5px; color: #93a19a; padding: 6px 2px; }
+
+  /* Reading Room / dashboard */
+  .stat-grid{
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  @media (max-width: 560px){ .stat-grid{ grid-template-columns: repeat(2, 1fr); } }
+  .stat-card{
+    background: var(--card);
+    color: var(--ink);
+    border-radius: 2px;
+    box-shadow: 0 6px 0 var(--card-shadow), 0 10px 18px rgba(0,0,0,0.35);
+    padding: 14px 14px 16px;
+    text-align: left;
+  }
+  .stat-card .stat-label{
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--stamp);
+    margin-bottom: 6px;
+  }
+  .stat-card .stat-number{
+    font-family: 'Fraunces', serif; font-weight: 700; font-size: 34px; line-height: 1;
+  }
+  .stat-card .stat-suffix{
+    font-size: 11px; color: var(--ink-soft); margin-top: 4px; font-style: italic;
+  }
+
+  .leader-row{
+    display:flex; align-items:center; gap: 10px;
+    padding: 6px 0;
+    font-size: 13px; color: var(--ink);
+  }
+  .leader-row .lname{ min-width: 120px; font-family:'Fraunces', serif; font-weight: 600; }
+  .leader-row .lbar{
+    flex: 1; height: 8px; background: rgba(162,62,47,0.15); border-radius: 999px; overflow: hidden;
+  }
+  .leader-row .lbar > span{ display:block; height: 100%; background: var(--stamp); }
+  .leader-row .lcount{ min-width: 24px; text-align: right; color: var(--ink-soft); font-size: 12px; }
+
+  .genre-row{
+    display:flex; justify-content:space-between; padding: 5px 0;
+    font-size: 12.5px; color: var(--ink);
+    border-bottom: 1px dotted rgba(38,35,28,0.12);
+  }
+  .genre-row:last-child{ border-bottom: none; }
+
+  footer{
+    text-align:center; margin-top: 40px; font-size: 11px; color: #7f8f84;
+  }
+  footer button{ margin-top: 8px; margin-left: 4px; margin-right: 4px; }
+
+  .loading{ text-align:center; padding: 60px 0; color: var(--brass); font-family:'Fraunces',serif; font-style: italic; }
+
+  .setup{
+    background: var(--card); color: var(--ink); border-radius: 3px;
+    padding: 20px; box-shadow: 0 6px 0 var(--card-shadow), 0 10px 18px rgba(0,0,0,0.35);
+  }
+  .setup h2{ font-family:'Fraunces',serif; margin: 0 0 8px; color: var(--stamp); }
+  .setup code{
+    display:block; background: #efe3c8; padding: 8px 10px; border-radius: 2px;
+    font-size: 12px; word-break: break-all; margin: 6px 0;
+  }
+  .setup p{ font-size: 13px; }
+
+  .librarian-tag{
+    display:inline-block; background: var(--brass); color: var(--felt);
+    padding: 2px 8px; border-radius: 2px; font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; font-weight: 700; margin-left: 8px;
+  }
+
+  /* Modal */
+  .modal-back{
+    position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 40; padding: 20px;
+  }
+  .modal{
+    background: var(--card); color: var(--ink); padding: 22px 20px;
+    border-radius: 3px; max-width: 380px; width: 100%;
+    box-shadow: 0 6px 0 var(--card-shadow), 0 20px 40px rgba(0,0,0,0.5);
+  }
+  .modal h3{ font-family:'Fraunces',serif; margin: 0 0 6px; }
+  .modal p{ font-size: 13px; color: var(--ink-soft); margin: 0 0 12px; }
+  .modal input{
+    width: 100%; padding: 10px 12px; font-size: 14px;
+    border: 1px solid var(--ink-soft); border-radius: 2px;
+    font-family:'Courier Prime', monospace; background: white; color: var(--ink);
+  }
+  .modal-actions{ display:flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-actions button.btn-primary{ background: var(--stamp); color: var(--card); }
+  .modal-actions button.btn-ghost{
+    background: transparent; border: 1px solid var(--ink-soft); color: var(--ink-soft);
   }
 </style>
 </head>
 <body>
+<div class="wrap" id="app">
+  <div class="loading">Pulling the ledger…</div>
+</div>
 
-<header>
-  <h1>The Shelf</h1>
-  <div class="sub">A fair-and-balanced book club picker</div>
-</header>
+<script type="module">
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-<main>
-  <nav class="tabs" role="tablist">
-    <button class="tab active" data-tab="round">This Round</button>
-    <button class="tab" data-tab="members">Members</button>
-    <button class="tab" data-tab="history">History</button>
-    <button class="tab" data-tab="settings">Settings</button>
-  </nav>
+// ---------- Configuration ----------
+// Fill these in after creating a Supabase project (see README).
+const SUPABASE_URL = "REPLACE_WITH_SUPABASE_URL";
+const SUPABASE_ANON_KEY = "REPLACE_WITH_SUPABASE_ANON_KEY";
 
-  <!-- ROUND -->
-  <section class="panel active" id="panel-round">
-    <div class="card">
-      <h2>Draw a Picker</h2>
-      <div id="round-status"></div>
-      <div id="pick-area"></div>
-      <div class="btn-row" id="round-actions"></div>
-    </div>
+const CONFIGURED = !SUPABASE_URL.startsWith("REPLACE_") && !SUPABASE_ANON_KEY.startsWith("REPLACE_");
+const supabase = CONFIGURED ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
-    <div class="card" id="submission-card" style="display:none">
-      <h2>Submit This Round's Book</h2>
-      <div id="submission-flags"></div>
-      <div class="row two">
-        <div>
-          <label for="book-title">Title</label>
-          <input id="book-title" placeholder="e.g. Piranesi" />
-        </div>
-        <div>
-          <label for="book-author">Author</label>
-          <input id="book-author" placeholder="e.g. Susanna Clarke" />
-        </div>
-      </div>
-      <div class="row two" style="margin-top:12px">
-        <div>
-          <label for="book-genre">Genre</label>
-          <select id="book-genre"></select>
-        </div>
-        <div>
-          <label for="book-submitter">Submitted by (confirm your name)</label>
-          <input id="book-submitter" placeholder="Type your name to confirm" />
-        </div>
-      </div>
-      <div class="btn-row">
-        <button class="primary" id="submit-book">Log Book &amp; End Round</button>
-        <button class="secondary" id="cancel-round">Cancel Round</button>
-      </div>
-    </div>
-  </section>
+// ---------- State ----------
+const emptyState = () => ({ roster: [], eliminated: [], history: [], cycleNumber: 1 });
+let state = emptyState();
+let submissions = {};        // { memberName: bookTitle }
+let spinning = false;
+let flashMsg = null;         // { kind, text }
+let lastWinner = null;       // { name, book }
+let cycleNotice = null;      // number of just-completed cycle
+let pendingRender = false;
 
-  <!-- MEMBERS -->
-  <section class="panel" id="panel-members">
-    <div class="card">
-      <h2>Add a Member</h2>
-      <div class="row two">
-        <input id="new-member" placeholder="Name" />
-        <button class="primary" id="add-member">Add Member</button>
-      </div>
-      <div id="member-flags"></div>
-    </div>
+const setFlash = (kind, text) => {
+  flashMsg = { kind, text };
+  setTimeout(() => { if (flashMsg && flashMsg.text === text) { flashMsg = null; render(); } }, 4000);
+};
 
-    <div class="card">
-      <h2>Members</h2>
-      <div class="stats" id="member-stats"></div>
-      <h3>In the current pool</h3>
-      <ul class="list" id="pool-list"></ul>
-      <h3>Already picked this cycle</h3>
-      <ul class="list" id="picked-list"></ul>
-    </div>
+// ---------- Admin session ----------
+const ADMIN_KEY = "shelf-admin-pw";
+const isAdmin = () => !!sessionStorage.getItem(ADMIN_KEY);
+const getAdminPw = () => sessionStorage.getItem(ADMIN_KEY) || "";
+const setAdminPw = (pw) => sessionStorage.setItem(ADMIN_KEY, pw);
+const clearAdminPw = () => sessionStorage.removeItem(ADMIN_KEY);
 
-    <div class="card">
-      <h2>Attendance for the Next Draw</h2>
-      <p style="color:var(--muted); font-size:14px; margin-top:0">
-        Only members marked attending will be eligible for the next draw. Uncheck anyone who isn't showing up.
-      </p>
-      <ul class="list" id="attendance-list"></ul>
-      <div class="btn-row">
-        <button class="secondary" id="mark-all-attending">Mark all attending</button>
-      </div>
-    </div>
-  </section>
-
-  <!-- HISTORY -->
-  <section class="panel" id="panel-history">
-    <div class="card">
-      <h2>Past Picks</h2>
-      <div class="stats" id="history-stats"></div>
-      <div id="history-list"></div>
-    </div>
-  </section>
-
-  <!-- SETTINGS -->
-  <section class="panel" id="panel-settings">
-    <div class="card">
-      <h2>Rules</h2>
-      <div class="row">
-        <div>
-          <label for="genre-cooldown">Genre cooldown (number of recent books whose genre can't be repeated)</label>
-          <input id="genre-cooldown" type="number" min="0" max="10" step="1" />
-        </div>
-      </div>
-      <p style="color:var(--muted); font-size:13px; margin-top:8px">
-        Set to 0 to allow any genre. Set to 2 to disallow the last two books' genres.
-      </p>
-    </div>
-    <div class="card">
-      <h2>Genres</h2>
-      <p style="color:var(--muted); font-size:14px; margin-top:0">
-        The list of genres members can pick from when submitting a book.
-      </p>
-      <div class="row two">
-        <input id="new-genre" placeholder="Add a genre (e.g. Sci-Fi)" />
-        <button class="primary" id="add-genre">Add Genre</button>
-      </div>
-      <ul class="list" id="genre-list"></ul>
-    </div>
-    <div class="card">
-      <h2>Data</h2>
-      <p style="color:var(--muted); font-size:14px; margin-top:0">
-        Everything is stored in this browser's local storage. Export a backup or share the JSON with someone else.
-      </p>
-      <div class="btn-row">
-        <button class="secondary" id="export-data">Export JSON</button>
-        <button class="secondary" id="import-data">Import JSON</button>
-        <button class="danger" id="reset-data">Reset Everything</button>
-      </div>
-      <input id="import-file" type="file" accept="application/json" style="display:none" />
-    </div>
-    <div class="footer-note">The Shelf — a small tool for fair random book picks.</div>
-  </section>
-</main>
-
-<script>
-"use strict";
-
-const STORAGE_KEY = "the-shelf:v1";
-
-const DEFAULT_GENRES = [
-  "Fiction", "Non-Fiction", "Mystery", "Thriller", "Sci-Fi",
-  "Fantasy", "Romance", "Historical", "Memoir", "Horror",
-  "Literary", "Poetry", "Graphic Novel", "Classic"
-];
-
-const defaultState = () => ({
-  members: [],            // { id, name, attending }
-  pickedThisCycle: [],    // memberIds already picked in the current cycle
-  currentRound: null,     // { pickedMemberId } or null
-  history: [],            // { id, memberId, memberName, title, author, genre, submittedBy, date }
-  genres: [...DEFAULT_GENRES],
-  genreCooldown: 2,
-});
-
-let state = load();
-
-// ---------- persistence ----------
-function load() {
+async function callAdmin(action, payload = {}) {
+  const pw = getAdminPw();
+  if (!pw) { promptLibrarianPassword(action, payload); return; }
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultState();
-    const parsed = JSON.parse(raw);
-    const base = defaultState();
-    return { ...base, ...parsed };
-  } catch (e) {
-    console.warn("Failed to load state", e);
-    return defaultState();
-  }
-}
-function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-// ---------- utils ----------
-const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
-const norm = (s) => (s || "").trim().toLowerCase();
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
-  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-}[c]));
-
-function flash(container, kind, msg) {
-  const el = document.createElement("div");
-  el.className = `flag ${kind}`;
-  el.textContent = msg;
-  container.innerHTML = "";
-  container.appendChild(el);
-  setTimeout(() => { if (el.parentNode === container) container.innerHTML = ""; }, 4500);
-}
-
-// ---------- tabs ----------
-document.querySelectorAll(".tab").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-    btn.classList.add("active");
-    document.getElementById("panel-" + btn.dataset.tab).classList.add("active");
-  });
-});
-
-// ---------- members ----------
-function currentPool() {
-  return state.members.filter(m => !state.pickedThisCycle.includes(m.id));
-}
-function attendingPool() {
-  return currentPool().filter(m => m.attending);
-}
-
-function addMember() {
-  const input = document.getElementById("new-member");
-  const flags = document.getElementById("member-flags");
-  const name = input.value.trim();
-  if (!name) return;
-  if (state.members.some(m => norm(m.name) === norm(name))) {
-    flash(flags, "err", `"${name}" is already in the group.`);
-    return;
-  }
-  state.members.push({ id: uid(), name, attending: true });
-  input.value = "";
-  save();
-  render();
-  flash(flags, "ok", `Added ${name}.`);
-}
-
-function removeMember(id) {
-  const m = state.members.find(x => x.id === id);
-  if (!m) return;
-  if (!confirm(`Remove ${m.name} from the group? Their past picks stay in the history.`)) return;
-  state.members = state.members.filter(x => x.id !== id);
-  state.pickedThisCycle = state.pickedThisCycle.filter(x => x !== id);
-  save();
-  render();
-}
-
-function toggleAttendance(id) {
-  const m = state.members.find(x => x.id === id);
-  if (!m) return;
-  m.attending = !m.attending;
-  save();
-  render();
-}
-
-// ---------- round / draw ----------
-function drawPicker() {
-  const flags = document.getElementById("round-status");
-  const pool = attendingPool();
-  if (pool.length === 0) {
-    if (currentPool().length === 0 && state.members.length > 0) {
-      flash(flags, "info", "Everyone's had a turn — resetting the cycle.");
-      state.pickedThisCycle = [];
-      save();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-update`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({ password: pw, action, payload }),
+    });
+    if (res.status === 401) {
+      clearAdminPw();
+      setFlash("err", "Wrong password. Locked back out.");
       render();
       return;
     }
-    flash(flags, "err", "No eligible members. Add members or mark someone attending.");
-    return;
-  }
-  const chosen = pool[Math.floor(Math.random() * pool.length)];
-  state.currentRound = { pickedMemberId: chosen.id, startedAt: Date.now() };
-  save();
-  render();
-}
-
-function cancelRound() {
-  if (!confirm("Cancel this round? The picker will go back into the pool.")) return;
-  state.currentRound = null;
-  save();
-  render();
-}
-
-function recentGenres(n) {
-  return state.history.slice(-n).map(h => h.genre).filter(Boolean);
-}
-
-function submitBook() {
-  const flags = document.getElementById("submission-flags");
-  const round = state.currentRound;
-  if (!round) return;
-  const picker = state.members.find(m => m.id === round.pickedMemberId);
-  if (!picker) return;
-
-  const title = document.getElementById("book-title").value.trim();
-  const author = document.getElementById("book-author").value.trim();
-  const genre = document.getElementById("book-genre").value;
-  const submittedBy = document.getElementById("book-submitter").value.trim();
-
-  if (!title) { flash(flags, "err", "Title is required."); return; }
-  if (!genre) { flash(flags, "err", "Pick a genre."); return; }
-  if (!submittedBy) { flash(flags, "err", "Type your name to confirm submission."); return; }
-  if (norm(submittedBy) !== norm(picker.name)) {
-    flash(flags, "err", `Name doesn't match — expected "${picker.name}".`);
-    return;
-  }
-
-  const cooldown = state.genreCooldown | 0;
-  if (cooldown > 0 && recentGenres(cooldown).some(g => norm(g) === norm(genre))) {
-    flash(flags, "err", `Genre cooldown: "${genre}" was picked in the last ${cooldown} book(s).`);
-    return;
-  }
-  const dup = state.history.find(h => norm(h.title) === norm(title));
-  if (dup) {
-    if (!confirm(`"${title}" already appears in the history (picked by ${dup.memberName}). Submit anyway?`)) return;
-  }
-
-  state.history.push({
-    id: uid(),
-    memberId: picker.id,
-    memberName: picker.name,
-    title, author, genre, submittedBy,
-    date: new Date().toISOString(),
-  });
-  state.pickedThisCycle.push(picker.id);
-  state.currentRound = null;
-
-  // Auto-reset cycle when everyone in the group has been picked.
-  if (state.pickedThisCycle.length >= state.members.length && state.members.length > 0) {
-    state.pickedThisCycle = [];
-  }
-
-  // Clear the form.
-  ["book-title", "book-author", "book-submitter"].forEach(id => document.getElementById(id).value = "");
-  save();
-  render();
-  flash(document.getElementById("round-status"), "ok", `Logged "${title}" for ${picker.name}.`);
-}
-
-// ---------- genres ----------
-function addGenre() {
-  const input = document.getElementById("new-genre");
-  const g = input.value.trim();
-  if (!g) return;
-  if (state.genres.some(x => norm(x) === norm(g))) return;
-  state.genres.push(g);
-  input.value = "";
-  save();
-  render();
-}
-function removeGenre(g) {
-  state.genres = state.genres.filter(x => x !== g);
-  save();
-  render();
-}
-
-// ---------- import/export ----------
-function exportData() {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `the-shelf-${new Date().toISOString().slice(0,10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-function importData() {
-  document.getElementById("import-file").click();
-}
-document.getElementById("import-file").addEventListener("change", (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const data = JSON.parse(reader.result);
-      if (!data.members || !Array.isArray(data.members)) throw new Error("Not a Shelf backup");
-      if (!confirm("Replace all current data with the imported backup?")) return;
-      state = { ...defaultState(), ...data };
-      save();
-      render();
-    } catch (err) {
-      alert("Import failed: " + err.message);
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      setFlash("err", `Admin action failed: ${t || res.statusText}`);
+      return;
     }
+    const body = await res.json();
+    if (body.state) state = body.state;
+    if (body.submissions) submissions = body.submissions;
+    if (body.winner) { lastWinner = body.winner; }
+    if (body.cycleCompleted) { cycleNotice = body.cycleCompleted; }
+    render();
+  } catch (err) {
+    setFlash("err", `Network error: ${err.message}`);
+  }
+}
+
+function promptLibrarianPassword(retryAction, retryPayload) {
+  const back = document.createElement("div");
+  back.className = "modal-back";
+  back.innerHTML = `
+    <div class="modal">
+      <h3>Librarian Mode</h3>
+      <p>Enter the admin password to unlock adding members, drawing cards, and resetting the ledger.</p>
+      <input type="password" id="pw-input" autocomplete="current-password" placeholder="Password" />
+      <div class="modal-actions">
+        <button class="btn-ghost" id="pw-cancel">Cancel</button>
+        <button class="btn-primary" id="pw-ok">Unlock</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(back);
+  const input = back.querySelector("#pw-input");
+  input.focus();
+  const close = () => document.body.removeChild(back);
+  back.querySelector("#pw-cancel").addEventListener("click", close);
+  const submit = async () => {
+    const pw = input.value.trim();
+    if (!pw) return;
+    setAdminPw(pw);
+    close();
+    if (retryAction) callAdmin(retryAction, retryPayload);
+    else render();
   };
-  reader.readAsText(file);
-  e.target.value = "";
-});
-function resetAll() {
-  if (!confirm("Wipe all members, picks, and history? This cannot be undone.")) return;
-  state = defaultState();
-  save();
+  back.querySelector("#pw-ok").addEventListener("click", submit);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+}
+
+// ---------- Data loading ----------
+async function loadAll() {
+  if (!CONFIGURED) { render(); return; }
+  try {
+    const [{ data: sData, error: sErr }, { data: subData, error: subErr }] = await Promise.all([
+      supabase.from("shelf_state").select("data").eq("id", 1).single(),
+      supabase.from("shelf_submissions").select("member_name, book"),
+    ]);
+    if (sErr && sErr.code !== "PGRST116") throw sErr;
+    if (subErr) throw subErr;
+    state = { ...emptyState(), ...(sData && sData.data ? sData.data : {}) };
+    submissions = {};
+    (subData || []).forEach(r => { submissions[r.member_name] = r.book; });
+  } catch (err) {
+    setFlash("err", `Couldn't load: ${err.message}`);
+  }
   render();
 }
 
-// ---------- render ----------
-function render() {
-  renderRound();
-  renderMembers();
-  renderHistory();
-  renderSettings();
+function subscribeRealtime() {
+  if (!CONFIGURED) return;
+  supabase.channel("shelf-live")
+    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_state" }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_submissions" }, () => queueRefresh())
+    .subscribe();
+}
+let refreshTimer = null;
+function queueRefresh() {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(() => { refreshTimer = null; loadAll(); }, 300);
 }
 
-function renderRound() {
-  const statusEl = document.getElementById("round-status");
-  const pickEl = document.getElementById("pick-area");
-  const actionsEl = document.getElementById("round-actions");
-  const subCard = document.getElementById("submission-card");
+// ---------- Book submission (open to anyone) ----------
+async function submitBook(name, book) {
+  if (!CONFIGURED) return;
+  book = book.trim();
+  try {
+    if (!book) {
+      await supabase.from("shelf_submissions").delete().eq("member_name", name);
+      delete submissions[name];
+    } else {
+      await supabase.from("shelf_submissions").upsert({ member_name: name, book });
+      submissions[name] = book;
+    }
+    render();
+  } catch (err) {
+    setFlash("err", `Couldn't save: ${err.message}`);
+  }
+}
 
-  statusEl.innerHTML = "";
-  pickEl.innerHTML = "";
-  actionsEl.innerHTML = "";
+// ---------- Draw animation ----------
+async function runDraw() {
+  if (spinning) return;
+  const eligible = Object.keys(submissions).filter(n => !state.eliminated.includes(n) && state.roster.includes(n));
+  if (eligible.length === 0) { setFlash("err", "No eligible submissions to draw from."); return; }
+  spinning = true;
+  render();
 
-  if (state.members.length === 0) {
-    pickEl.innerHTML = `<div class="empty">No members yet. Add some on the Members tab.</div>`;
-    subCard.style.display = "none";
+  const el = document.getElementById("drawcard");
+  let ticks = 0;
+  const maxTicks = 18 + Math.floor(Math.random() * 6);
+  await new Promise(resolve => {
+    const interval = setInterval(() => {
+      const flashName = eligible[Math.floor(Math.random() * eligible.length)];
+      if (el) el.textContent = flashName;
+      ticks++;
+      if (ticks >= maxTicks) { clearInterval(interval); resolve(); }
+    }, 90);
+  });
+
+  spinning = false;
+  await callAdmin("draw", {});
+}
+
+// ---------- Rendering ----------
+function esc(str) {
+  const d = document.createElement("div");
+  d.textContent = str == null ? "" : String(str);
+  return d.innerHTML;
+}
+function attr(str) {
+  return String(str == null ? "" : str).replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+}
+function fmtDate(iso) {
+  try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); }
+  catch (e) { return ""; }
+}
+
+function computeStats() {
+  const total = state.history.length;
+  const perMember = {};
+  state.roster.forEach(n => { perMember[n] = 0; });
+  state.history.forEach(h => { if (perMember[h.winner] != null) perMember[h.winner]++; else perMember[h.winner] = 1; });
+  const leaderboard = Object.entries(perMember).sort((a, b) => b[1] - a[1]);
+  const maxPicks = leaderboard.reduce((m, [, c]) => Math.max(m, c), 0);
+  const picksThisCycle = state.eliminated.length;
+  const rosterSize = state.roster.length;
+  const cycleProgress = rosterSize > 0 ? Math.round((picksThisCycle / rosterSize) * 100) : 0;
+  const submittedCount = Object.keys(submissions).filter(n => state.roster.includes(n) && !state.eliminated.includes(n)).length;
+  return { total, leaderboard, maxPicks, picksThisCycle, rosterSize, cycleProgress, submittedCount };
+}
+
+function render(...args) {
+  if (document.activeElement && (document.activeElement.tagName === "INPUT")) {
+    pendingRender = true;
+    return;
+  }
+  pendingRender = false;
+
+  const app = document.getElementById("app");
+
+  if (!CONFIGURED) {
+    app.innerHTML = renderSetupNotice();
     return;
   }
 
-  const attending = attendingPool();
-  const cycleTotal = state.members.length;
-  const pickedCount = state.pickedThisCycle.length;
+  const stats = computeStats();
+  const admin = isAdmin();
+  const active = state.roster.filter(n => !state.eliminated.includes(n));
+  const eligibleCount = Object.keys(submissions).filter(n => !state.eliminated.includes(n) && state.roster.includes(n)).length;
 
-  if (state.currentRound) {
-    const picker = state.members.find(m => m.id === state.currentRound.pickedMemberId);
-    if (picker) {
-      pickEl.innerHTML = `
-        <div class="pick-hero">
-          <div class="label">This round's picker is</div>
-          <div class="name">${esc(picker.name)}</div>
-          <div class="label">Submit their book below.</div>
+  let html = `
+    <header>
+      <div class="eyebrow">Circulation Ledger · Cycle ${state.cycleNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
+      <h1>The Shelf</h1>
+      <div class="sub">Submit a book. Draw a card. Once you're picked, you wait for the shelf to turn over.</div>
+      <div class="rule"></div>
+    </header>
+  `;
+
+  if (flashMsg) {
+    html += `<div class="flash ${flashMsg.kind === 'info' ? 'info' : ''}">${esc(flashMsg.text)}</div>`;
+  }
+
+  if (cycleNotice) {
+    html += `<div class="cycle-banner">Cycle ${cycleNotice} complete — every member's back in the stacks. Cycle ${state.cycleNumber} begins now.</div>`;
+    cycleNotice = null;
+  }
+
+  if (lastWinner) {
+    html += `
+      <div class="winner-banner">
+        <div class="stampbig">Selected</div>
+        <div class="wname">${esc(lastWinner.name)}</div>
+        <div class="wbook">${lastWinner.book ? esc(lastWinner.book) : ''}</div>
+      </div>
+    `;
+  }
+
+  // ---- Reading Room (stats) ----
+  html += `<section><div class="section-title">Reading Room</div>`;
+  html += `
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-label">Books Read</div>
+        <div class="stat-number">${stats.total}</div>
+        <div class="stat-suffix">all cycles</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">This Cycle</div>
+        <div class="stat-number">${stats.picksThisCycle}<span style="font-size:16px; color:var(--ink-soft)">/${stats.rosterSize}</span></div>
+        <div class="stat-suffix">${stats.cycleProgress}% through</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Members</div>
+        <div class="stat-number">${stats.rosterSize}</div>
+        <div class="stat-suffix">on the shelf</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">In the Box</div>
+        <div class="stat-number">${stats.submittedCount}</div>
+        <div class="stat-suffix">books submitted</div>
+      </div>
+    </div>
+  `;
+  if (stats.total > 0) {
+    html += `<div class="card no-rule" style="margin-top: 12px;">`;
+    html += `<div style="font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:var(--stamp); margin-bottom: 10px;">Ledger by Reader</div>`;
+    stats.leaderboard.forEach(([name, count]) => {
+      const pct = stats.maxPicks > 0 ? Math.max(4, Math.round((count / stats.maxPicks) * 100)) : 0;
+      html += `
+        <div class="leader-row">
+          <div class="lname">${esc(name)}</div>
+          <div class="lbar"><span style="width: ${pct}%;"></span></div>
+          <div class="lcount">${count}</div>
         </div>
       `;
-      subCard.style.display = "block";
-      populateGenreSelect();
-      renderCooldownHint();
-      return;
-    }
-  }
-
-  subCard.style.display = "none";
-
-  const info = document.createElement("div");
-  info.className = "flag info";
-  info.innerHTML = `
-    Cycle: <strong>${pickedCount}</strong> of <strong>${cycleTotal}</strong> picked.
-    <strong>${attending.length}</strong> attending and eligible for the next draw.
-  `;
-  statusEl.appendChild(info);
-
-  const drawBtn = document.createElement("button");
-  drawBtn.className = "primary";
-  drawBtn.textContent = "Draw This Round's Picker";
-  drawBtn.disabled = attending.length === 0;
-  drawBtn.addEventListener("click", drawPicker);
-  actionsEl.appendChild(drawBtn);
-
-  if (state.pickedThisCycle.length > 0) {
-    const resetBtn = document.createElement("button");
-    resetBtn.className = "secondary";
-    resetBtn.textContent = "Reset Cycle";
-    resetBtn.addEventListener("click", () => {
-      if (confirm("Reset the cycle? Everyone goes back into the pool.")) {
-        state.pickedThisCycle = [];
-        save();
-        render();
-      }
     });
-    actionsEl.appendChild(resetBtn);
+    html += `</div>`;
   }
-}
+  html += `</section>`;
 
-function renderCooldownHint() {
-  const flags = document.getElementById("submission-flags");
-  flags.innerHTML = "";
-  const cd = state.genreCooldown | 0;
-  if (cd > 0) {
-    const recent = recentGenres(cd);
-    if (recent.length > 0) {
-      const el = document.createElement("div");
-      el.className = "flag warn";
-      el.textContent = `Off-limits this round (recent ${cd}): ${recent.join(", ")}`;
-      flags.appendChild(el);
-    }
+  // ---- Card Catalog (admin only) ----
+  if (admin) {
+    html += `
+      <section>
+        <div class="section-title">Card Catalog</div>
+        <div class="card">
+          <div class="addrow">
+            <input type="text" id="new-member" placeholder="Add a member's name" />
+            <button class="btn-mini" id="add-member-btn">File card</button>
+          </div>
+        </div>
+      </section>
+    `;
   }
-}
 
-function populateGenreSelect() {
-  const sel = document.getElementById("book-genre");
-  const current = sel.value;
-  sel.innerHTML = `<option value="">— pick a genre —</option>` +
-    state.genres.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join("");
-  if (current) sel.value = current;
-}
-
-function renderMembers() {
-  const stats = document.getElementById("member-stats");
-  const poolList = document.getElementById("pool-list");
-  const pickedList = document.getElementById("picked-list");
-  const attendanceList = document.getElementById("attendance-list");
-
-  stats.innerHTML = `
-    <div><strong>${state.members.length}</strong> total members</div>
-    <div><strong>${currentPool().length}</strong> in current pool</div>
-    <div><strong>${state.members.filter(m => m.attending).length}</strong> marked attending</div>
-  `;
-
-  const inPool = currentPool();
-  poolList.innerHTML = inPool.length === 0
-    ? `<div class="empty">Pool is empty — everyone's had a turn.</div>`
-    : inPool.map(m => `
-        <li>
-          <span class="member-name">${esc(m.name)}</span>
-          <span>
-            <span class="badge pool">In pool</span>
-            <button class="ghost" data-remove="${m.id}">Remove</button>
-          </span>
-        </li>
-      `).join("");
-
-  const picked = state.members.filter(m => state.pickedThisCycle.includes(m.id));
-  pickedList.innerHTML = picked.length === 0
-    ? `<div class="empty">No one has been picked yet in this cycle.</div>`
-    : picked.map(m => `
-        <li>
-          <span class="member-name">${esc(m.name)}</span>
-          <span>
-            <span class="badge picked">Picked</span>
-            <button class="ghost" data-remove="${m.id}">Remove</button>
-          </span>
-        </li>
-      `).join("");
-
-  attendanceList.innerHTML = state.members.length === 0
-    ? `<div class="empty">Add members first.</div>`
-    : state.members.map(m => `
-        <li>
-          <span class="member-name">${esc(m.name)}</span>
-          <span>
-            <label class="toggle">
-              <input type="checkbox" data-attend="${m.id}" ${m.attending ? "checked" : ""} />
-              ${m.attending ? '<span class="badge attending">Attending</span>' : '<span class="badge away">Away</span>'}
-            </label>
-          </span>
-        </li>
-      `).join("");
-
-  document.querySelectorAll("[data-remove]").forEach(btn => {
-    btn.addEventListener("click", () => removeMember(btn.dataset.remove));
-  });
-  document.querySelectorAll("[data-attend]").forEach(cb => {
-    cb.addEventListener("change", () => toggleAttendance(cb.dataset.attend));
-  });
-}
-
-function renderHistory() {
-  const list = document.getElementById("history-list");
-  const stats = document.getElementById("history-stats");
-
-  stats.innerHTML = `
-    <div><strong>${state.history.length}</strong> books logged</div>
-    <div><strong>${new Set(state.history.map(h => h.memberId)).size}</strong> unique pickers</div>
-    <div><strong>${new Set(state.history.map(h => h.genre)).size}</strong> genres covered</div>
-  `;
-
-  if (state.history.length === 0) {
-    list.innerHTML = `<div class="empty">No picks yet. When a round ends, it shows up here.</div>`;
-    return;
+  // ---- This Round ----
+  html += `<section><div class="section-title">This Round</div>`;
+  if (active.length === 0) {
+    html += `<div class="empty-note">No one's on the shelf yet — a librarian needs to add members.</div>`;
+  } else {
+    active.forEach(name => {
+      const submitted = submissions[name];
+      html += `
+        <div class="card">
+          <div class="card-row">
+            <div class="name">${esc(name)}</div>
+            ${submitted ? `<span class="status">Submitted</span>` : `<span class="status">Awaiting</span>`}
+          </div>
+          <div class="addrow" style="margin-top:8px;">
+            <input type="text" placeholder="Book title" value="${attr(submitted || '')}"
+              data-submit-for="${attr(name)}"
+              onkeydown="if(event.key==='Enter'){ this.blur(); }" />
+            ${submitted ? `<button class="btn-mini remove" data-clear="${attr(name)}">Clear</button>` : ''}
+            ${admin ? `<button class="btn-mini remove" data-remove="${attr(name)}">Remove</button>` : ''}
+          </div>
+        </div>
+      `;
+    });
   }
-  const items = [...state.history].reverse().map(h => `
-    <div class="history-item">
-      <div class="title">${esc(h.title)}${h.author ? ` <span style="color:var(--muted); font-style:italic">by ${esc(h.author)}</span>` : ""}</div>
-      <div class="meta">
-        Picked by ${esc(h.memberName)}
-        · <span class="badge">${esc(h.genre || "—")}</span>
-        · ${new Date(h.date).toLocaleDateString()}
+  html += `</section>`;
+
+  // ---- Checked out this cycle ----
+  const eliminatedThisCycle = state.roster.filter(n => state.eliminated.includes(n));
+  if (eliminatedThisCycle.length) {
+    html += `<section><div class="section-title">Checked Out — Cycle ${state.cycleNumber}</div>`;
+    eliminatedThisCycle.forEach(name => {
+      html += `
+        <div class="card eliminated">
+          <div class="card-row">
+            <div class="name">${esc(name)}</div>
+            <span class="stamp-mark">Checked Out</span>
+          </div>
+        </div>
+      `;
+    });
+    html += `</section>`;
+  }
+
+  // ---- Draw ----
+  html += `
+    <section>
+      <div class="section-title">Draw</div>
+      <div class="drawer">
+        <div class="drawcard" id="drawcard">${spinning ? '…' : (eligibleCount > 0 ? eligibleCount + ' card' + (eligibleCount === 1 ? '' : 's') + ' in the box' : 'The box is empty')}</div>
+        ${admin
+          ? `<button class="btn-primary" id="draw-btn" ${(eligibleCount === 0 || spinning) ? 'disabled' : ''}>${spinning ? 'Drawing…' : 'Draw a Card'}</button>`
+          : `<div style="font-size: 12px; color: #a9b8ae; font-style: italic;">Only the librarian can pull a card. Submit a book above.</div>`
+        }
       </div>
-    </div>
-  `).join("");
-  list.innerHTML = items;
+    </section>
+  `;
+
+  // ---- Ledger ----
+  html += `<section><div class="section-title">Ledger</div>`;
+  if (state.history.length === 0) {
+    html += `<div class="empty-note">No picks recorded yet.</div>`;
+  } else {
+    html += `<div class="card no-rule">`;
+    state.history.slice(0, 25).forEach(h => {
+      html += `
+        <div class="history-item">
+          <span><span class="h-who">${esc(h.winner)}</span> — ${esc(h.book || '')}</span>
+          <span>Cycle ${h.cycle} · ${fmtDate(h.ts)}</span>
+        </div>
+      `;
+    });
+    html += `</div>`;
+  }
+  html += `</section>`;
+
+  // ---- Footer ----
+  html += `<footer>`;
+  html += `Shared with everyone who has this link.<br/>`;
+  if (admin) {
+    html += `<button class="btn-ghost" id="lock-btn">Lock librarian mode</button>`;
+    html += `<button class="btn-ghost" id="reset-btn">Reset the shelf</button>`;
+  } else {
+    html += `<button class="btn-ghost" id="unlock-btn">Librarian mode</button>`;
+  }
+  html += `</footer>`;
+
+  app.innerHTML = html;
+  wireUp();
 }
 
-function renderSettings() {
-  const cd = document.getElementById("genre-cooldown");
-  cd.value = state.genreCooldown;
+function renderSetupNotice() {
+  return `
+    <header>
+      <div class="eyebrow">Setup required</div>
+      <h1>The Shelf</h1>
+      <div class="rule"></div>
+    </header>
+    <div class="setup">
+      <h2>Connect Supabase to get started</h2>
+      <p>This app needs a Supabase project so everyone in the book club can share the same state.</p>
+      <ol style="font-size:13px; line-height:1.6;">
+        <li>Create a free Supabase project at <b>supabase.com</b>.</li>
+        <li>Run the SQL in <code>supabase/schema.sql</code> in the SQL editor.</li>
+        <li>Deploy the edge function in <code>supabase/functions/admin-update</code> and set its <b>ADMIN_PASSWORD</b> secret.</li>
+        <li>Edit <code>index.html</code> and replace <b>SUPABASE_URL</b> and <b>SUPABASE_ANON_KEY</b> with your project values.</li>
+      </ol>
+      <p>Full instructions are in the README.</p>
+    </div>
+  `;
+}
 
-  const list = document.getElementById("genre-list");
-  list.innerHTML = state.genres.map(g => `
-    <li>
-      <span>${esc(g)}</span>
-      <button class="ghost" data-genre="${esc(g)}">Remove</button>
-    </li>
-  `).join("");
-  document.querySelectorAll("[data-genre]").forEach(btn => {
-    btn.addEventListener("click", () => removeGenre(btn.dataset.genre));
+function wireUp() {
+  const add = document.getElementById("add-member-btn");
+  if (add) add.addEventListener("click", () => {
+    const input = document.getElementById("new-member");
+    const name = input.value.trim();
+    if (!name) return;
+    input.value = "";
+    callAdmin("add_member", { name });
+  });
+  const newMember = document.getElementById("new-member");
+  if (newMember) newMember.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") add && add.click();
+  });
+
+  document.querySelectorAll("[data-submit-for]").forEach(el => {
+    el.addEventListener("blur", () => {
+      const name = el.dataset.submitFor;
+      submitBook(name, el.value);
+      if (pendingRender) render();
+    });
+  });
+  document.querySelectorAll("[data-clear]").forEach(el => {
+    el.addEventListener("click", () => submitBook(el.dataset.clear, ""));
+  });
+  document.querySelectorAll("[data-remove]").forEach(el => {
+    el.addEventListener("click", () => {
+      if (!confirm(`Remove ${el.dataset.remove} from the shelf?`)) return;
+      callAdmin("remove_member", { name: el.dataset.remove });
+    });
+  });
+
+  const drawBtn = document.getElementById("draw-btn");
+  if (drawBtn) drawBtn.addEventListener("click", runDraw);
+
+  const unlock = document.getElementById("unlock-btn");
+  if (unlock) unlock.addEventListener("click", () => promptLibrarianPassword());
+  const lock = document.getElementById("lock-btn");
+  if (lock) lock.addEventListener("click", () => { clearAdminPw(); render(); });
+  const reset = document.getElementById("reset-btn");
+  if (reset) reset.addEventListener("click", () => {
+    if (!confirm("This clears the whole roster, history, and ledger for everyone. Are you sure?")) return;
+    callAdmin("reset", {});
   });
 }
 
-// ---------- wire up ----------
-document.getElementById("add-member").addEventListener("click", addMember);
-document.getElementById("new-member").addEventListener("keydown", (e) => { if (e.key === "Enter") addMember(); });
-document.getElementById("submit-book").addEventListener("click", submitBook);
-document.getElementById("cancel-round").addEventListener("click", cancelRound);
-document.getElementById("mark-all-attending").addEventListener("click", () => {
-  state.members.forEach(m => m.attending = true);
-  save();
-  render();
-});
-document.getElementById("add-genre").addEventListener("click", addGenre);
-document.getElementById("new-genre").addEventListener("keydown", (e) => { if (e.key === "Enter") addGenre(); });
-document.getElementById("genre-cooldown").addEventListener("change", (e) => {
-  const v = Math.max(0, Math.min(10, parseInt(e.target.value, 10) || 0));
-  state.genreCooldown = v;
-  e.target.value = v;
-  save();
-});
-document.getElementById("export-data").addEventListener("click", exportData);
-document.getElementById("import-data").addEventListener("click", importData);
-document.getElementById("reset-data").addEventListener("click", resetAll);
-
-render();
+// ---------- Boot ----------
+loadAll();
+subscribeRealtime();
+window.addEventListener("focus", () => queueRefresh());
 </script>
 </body>
 </html>
