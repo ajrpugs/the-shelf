@@ -242,10 +242,12 @@
     margin-bottom: 10px;
     font-size: 13px;
   }
-  .winner-banner .wname{
-    font-family:'Fraunces', serif; font-weight:700; font-size: 24px;
+  .winner-banner .wbook{
+    font-family:'Fraunces', serif; font-weight:700; font-size: 26px;
+    line-height: 1.15;
   }
-  .winner-banner .wbook{ font-size: 13px; color: var(--ink-soft); margin-top: 4px; font-style: italic; }
+  .winner-banner .wname{ font-size: 13px; color: var(--ink-soft); margin-top: 8px; font-style: italic; letter-spacing: 0.04em; }
+  .winner-banner .wname b{ color: var(--ink); font-weight: 700; font-style: normal; }
 
   .cycle-banner{
     background: var(--green); color: var(--card);
@@ -559,11 +561,14 @@ const WHEEL_COLORS = [
   "#5f6b3d", "#c07141"
 ];
 
-function eligibleNames() {
-  return Object.keys(submissions).filter(n => !isEliminated(n)).sort((a, b) => a.localeCompare(b));
+function eligibleEntries() {
+  return Object.entries(submissions)
+    .filter(([n]) => !isEliminated(n))
+    .map(([name, book]) => ({ name, book }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function drawWheel(canvas, names, rotation) {
+function drawWheel(canvas, entries, rotation) {
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   const size = Math.max(200, Math.round(rect.width || 320));
@@ -578,16 +583,28 @@ function drawWheel(canvas, names, rotation) {
   const cx = size / 2;
   const cy = size / 2;
   const radius = size / 2 - 6;
-  const N = names.length;
+  const N = entries.length;
   if (N === 0) return;
 
   const anglePer = (2 * Math.PI) / N;
+  const bookFontSize = N > 12 ? 11 : N > 8 ? 12 : 14;
+  const nameFontSize = N > 12 ? 9 : N > 8 ? 10 : 11;
+  const maxWidth = radius - 44;
+
+  function truncateToWidth(text, font) {
+    ctx.font = font;
+    let display = text;
+    while (ctx.measureText(display).width > maxWidth && display.length > 3) {
+      display = display.slice(0, -2) + "…";
+    }
+    return display;
+  }
 
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(rotation);
 
-  names.forEach((name, i) => {
+  entries.forEach((entry, i) => {
     const start = i * anglePer - Math.PI / 2;
     const end = start + anglePer;
 
@@ -606,15 +623,20 @@ function drawWheel(canvas, names, rotation) {
     ctx.rotate(mid);
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
+
+    const bookFont = `600 ${bookFontSize}px "Fraunces", serif`;
+    const nameFont = `italic ${nameFontSize}px "Fraunces", serif`;
+    const bookDisplay = truncateToWidth(entry.book || "", bookFont);
+    const nameDisplay = truncateToWidth(entry.name || "", nameFont);
+
     ctx.fillStyle = "#F2E8D5";
-    const fontSize = N > 12 ? 12 : N > 8 ? 13 : 15;
-    ctx.font = `600 ${fontSize}px "Fraunces", serif`;
-    let display = name;
-    const maxWidth = radius - 44;
-    while (ctx.measureText(display).width > maxWidth && display.length > 3) {
-      display = display.slice(0, -2) + "…";
-    }
-    ctx.fillText(display, radius - 14, 0);
+    ctx.font = bookFont;
+    ctx.fillText(bookDisplay, radius - 14, -bookFontSize * 0.55);
+
+    ctx.fillStyle = "rgba(242,232,213,0.82)";
+    ctx.font = nameFont;
+    ctx.fillText(nameDisplay, radius - 14, bookFontSize * 0.65);
+
     ctx.restore();
   });
 
@@ -638,11 +660,11 @@ function drawWheel(canvas, names, rotation) {
 function paintWheel() {
   const canvas = document.getElementById("wheel-canvas");
   if (!canvas) return;
-  drawWheel(canvas, eligibleNames(), 0);
+  drawWheel(canvas, eligibleEntries(), 0);
 }
 
-async function spinToWinner(canvas, names, winnerIdx) {
-  const N = names.length;
+async function spinToWinner(canvas, entries, winnerIdx) {
+  const N = entries.length;
   const anglePer = (2 * Math.PI) / N;
   const jitter = (Math.random() - 0.5) * anglePer * 0.65;
   const targetR = -(winnerIdx + 0.5) * anglePer + jitter;
@@ -657,7 +679,7 @@ async function spinToWinner(canvas, names, winnerIdx) {
       const t = Math.min(1, (now - start) / duration);
       const eased = 1 - Math.pow(1 - t, 4);
       const rotation = finalR * eased;
-      drawWheel(canvas, names, rotation);
+      drawWheel(canvas, entries, rotation);
       if (t < 1) requestAnimationFrame(frame);
       else resolve();
     }
@@ -667,8 +689,8 @@ async function spinToWinner(canvas, names, winnerIdx) {
 
 async function runDraw() {
   if (spinning) return;
-  const names = eligibleNames();
-  if (names.length === 0) { setFlash("err", "No eligible submissions to spin."); return; }
+  const entries = eligibleEntries();
+  if (entries.length === 0) { setFlash("err", "No eligible submissions to spin."); return; }
   const pw = getAdminPw();
   if (!pw) { promptLibrarianPassword("draw", {}); return; }
 
@@ -704,9 +726,9 @@ async function runDraw() {
     }
     const body = await res.json();
     const winner = body.winner || {};
-    let winnerIdx = names.indexOf(winner.name);
+    let winnerIdx = entries.findIndex(e => e.name === winner.name);
     if (winnerIdx < 0) winnerIdx = 0;
-    await spinToWinner(canvas, names, winnerIdx);
+    await spinToWinner(canvas, entries, winnerIdx);
     spinning = false;
     if (body.state) state = normalizeState(body.state);
     if (body.submissions) submissions = body.submissions;
@@ -743,7 +765,7 @@ function computeStats() {
   const leaderboard = Object.entries(perMember).sort((a, b) => b[1] - a[1]);
   const maxPicks = leaderboard.reduce((m, [, c]) => Math.max(m, c), 0);
   const picksThisRound = state.eliminated.length;
-  const submittedCount = eligibleNames().length;
+  const submittedCount = eligibleEntries().length;
   const regulars = new Set(state.history.map(h => h.winner)).size;
   return { total, leaderboard, maxPicks, picksThisRound, submittedCount, regulars };
 }
@@ -793,8 +815,8 @@ function render() {
     html += `
       <div class="winner-banner">
         <div class="stampbig">Selected</div>
-        <div class="wname">${esc(lastWinner.name)}</div>
-        <div class="wbook">${lastWinner.book ? esc(lastWinner.book) : ''}</div>
+        <div class="wbook">${lastWinner.book ? esc(lastWinner.book) : '—'}</div>
+        <div class="wname">picked by <b>${esc(lastWinner.name)}</b></div>
       </div>
     `;
   }
@@ -868,7 +890,9 @@ function render() {
   if (eligibleSubs.length === 0) {
     html += `<div class="empty-note">The wheel is empty. Be the first to add a book above.</div>`;
   } else {
+    const me = normName(myName);
     eligibleSubs.forEach(([name, book]) => {
+      const canWithdraw = admin || (me && normName(name) === me);
       html += `
         <div class="card">
           <div class="card-row" style="align-items: flex-start;">
@@ -876,7 +900,7 @@ function render() {
               <div class="name">${esc(name)}</div>
               <div class="submitted-book">${esc(book)}</div>
             </div>
-            <button class="btn-mini remove" data-withdraw="${attr(name)}">Withdraw</button>
+            ${canWithdraw ? `<button class="btn-mini remove" data-withdraw="${attr(name)}">Withdraw</button>` : ''}
           </div>
         </div>
       `;
@@ -884,15 +908,28 @@ function render() {
   }
   html += `</section>`;
 
-  // ---- Checked Out this round ----
+  // ---- Winners this round ----
   if (state.eliminated.length) {
-    html += `<section><div class="section-title">Checked Out — Round ${state.roundNumber}</div>`;
+    html += `<section><div class="section-title">Winners — Round ${state.roundNumber}</div>`;
+    // Show most recent winner first
+    const winsThisRound = state.history
+      .filter(h => h.round === state.roundNumber)
+      .slice();
+    // Fallback for any name in eliminated that isn't in history (shouldn't happen, but be safe)
     state.eliminated.forEach(name => {
+      if (!winsThisRound.some(h => h.winner === name)) {
+        winsThisRound.push({ winner: name, book: "" });
+      }
+    });
+    winsThisRound.forEach(h => {
       html += `
         <div class="card eliminated">
-          <div class="card-row">
-            <div class="name">${esc(name)}</div>
-            <span class="stamp-mark">Checked Out</span>
+          <div class="card-row" style="align-items: flex-start;">
+            <div style="flex:1; min-width:0;">
+              <div class="name">${esc(h.book || "—")}</div>
+              <div class="submitted-book">picked by ${esc(h.winner)}</div>
+            </div>
+            <span class="stamp-mark">Winner</span>
           </div>
         </div>
       `;
@@ -910,7 +947,7 @@ function render() {
         <div class="wheel-pointer"></div>
         <canvas id="wheel-canvas" class="wheel-canvas"></canvas>
       </div>
-      <div class="spin-caption">${eligibleCount} name${eligibleCount === 1 ? '' : 's'} on the wheel</div>
+      <div class="spin-caption">${eligibleCount} book${eligibleCount === 1 ? '' : 's'} on the wheel</div>
     `;
   }
   html += `<div class="spin-actions">`;

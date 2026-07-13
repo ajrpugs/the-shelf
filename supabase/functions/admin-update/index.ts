@@ -90,7 +90,8 @@ Deno.serve(async (req) => {
         });
         state.eliminated.push(chosen);
         winner = { name: chosen, book };
-        await client.from("shelf_submissions").delete().eq("member_name", chosen);
+        // Clear the wheel — everyone submits again for the next round.
+        await client.from("shelf_submissions").delete().neq("member_name", "");
         break;
       }
       case "new_round": {
