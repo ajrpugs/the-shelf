@@ -162,22 +162,61 @@
     font-size: 12.5px; margin-top: 10px;
   }
 
-  .drawer{
+  /* Wheel */
+  .wheel-holder{
+    position: relative;
+    width: 100%;
+    max-width: 420px;
+    aspect-ratio: 1;
+    margin: 0 auto 16px;
+    padding: 22px 0 0;
+  }
+  .wheel-canvas{
+    display: block;
+    width: 100%;
+    height: calc(100% - 22px);
+    filter: drop-shadow(0 8px 20px rgba(0,0,0,0.45));
+  }
+  .wheel-pointer{
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 14px solid transparent;
+    border-right: 14px solid transparent;
+    border-top: 28px solid var(--brass);
+    z-index: 2;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+  }
+  .wheel-empty{
     text-align: center;
-    padding: 26px 18px;
-    border: 1px solid rgba(185,150,87,0.35);
-    border-radius: 3px;
-    background: rgba(0,0,0,0.15);
-  }
-  .drawcard{
-    font-family: 'Fraunces', serif;
-    font-weight: 700;
-    font-size: 26px;
-    min-height: 36px;
-    margin-bottom: 14px;
+    padding: 60px 20px;
     color: var(--brass);
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 16px;
+    border: 1px dashed rgba(185,150,87,0.35);
+    border-radius: 4px;
+    background: rgba(0,0,0,0.15);
+    max-width: 420px;
+    margin: 0 auto 16px;
   }
-  .drawcard.settled{ color: var(--card); }
+  .spin-caption{
+    text-align: center;
+    font-size: 12px;
+    color: #a9b8ae;
+    margin-top: 8px;
+    font-style: italic;
+  }
+  .spin-actions{
+    text-align: center;
+    margin-top: 10px;
+  }
+  .spin-actions button{
+    padding: 12px 28px;
+    font-size: 13px;
+  }
 
   .winner-banner{
     background: var(--card);
@@ -332,13 +371,13 @@ const CONFIGURED = !SUPABASE_URL.startsWith("REPLACE_") && !SUPABASE_ANON_KEY.st
 const supabase = CONFIGURED ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 // ---------- State ----------
-const emptyState = () => ({ eliminated: [], history: [], cycleNumber: 1 });
+const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
 let state = emptyState();
-let submissions = {};        // { memberName: bookTitle }
+let submissions = {};
 let spinning = false;
 let flashMsg = null;
 let lastWinner = null;
-let cycleNotice = null;
+let roundNotice = null;
 let pendingRender = false;
 
 const SAVED_NAME_KEY = "shelf-my-name";
@@ -349,6 +388,21 @@ const setFlash = (kind, text) => {
   flashMsg = { kind, text };
   setTimeout(() => { if (flashMsg && flashMsg.text === text) { flashMsg = null; render(); } }, 4000);
 };
+
+// Normalize legacy field names (cycleNumber → roundNumber, cycle → round).
+function normalizeState(raw) {
+  const r = raw || {};
+  return {
+    eliminated: Array.isArray(r.eliminated) ? r.eliminated : [],
+    history: Array.isArray(r.history) ? r.history.map(h => ({
+      round: h.round ?? h.cycle ?? 1,
+      winner: h.winner,
+      book: h.book,
+      ts: h.ts,
+    })) : [],
+    roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
+  };
+}
 
 // ---------- Admin session ----------
 const ADMIN_KEY = "shelf-admin-pw";
@@ -382,10 +436,10 @@ async function callAdmin(action, payload = {}) {
       return;
     }
     const body = await res.json();
-    if (body.state) state = body.state;
+    if (body.state) state = normalizeState(body.state);
     if (body.submissions) submissions = body.submissions;
-    if (body.winner) { lastWinner = body.winner; }
-    if (body.cycleCompleted) { cycleNotice = body.cycleCompleted; }
+    if (body.winner) lastWinner = body.winner;
+    if (body.roundCompleted) roundNotice = body.roundCompleted;
     render();
   } catch (err) {
     setFlash("err", `Network error: ${err.message}`);
@@ -398,7 +452,7 @@ function promptLibrarianPassword(retryAction, retryPayload) {
   back.innerHTML = `
     <div class="modal">
       <h3>Librarian Mode</h3>
-      <p>Enter the admin password to unlock drawing cards and starting a new cycle.</p>
+      <p>Enter the admin password to unlock spinning the wheel and starting a new round.</p>
       <input type="password" id="pw-input" autocomplete="current-password" placeholder="Password" />
       <div class="modal-actions">
         <button class="btn-ghost" id="pw-cancel">Cancel</button>
@@ -433,7 +487,7 @@ async function loadAll() {
     ]);
     if (sErr && sErr.code !== "PGRST116") throw sErr;
     if (subErr) throw subErr;
-    state = { ...emptyState(), ...(sData && sData.data ? sData.data : {}) };
+    state = normalizeState(sData && sData.data);
     submissions = {};
     (subData || []).forEach(r => { submissions[r.member_name] = r.book; });
   } catch (err) {
@@ -468,7 +522,7 @@ async function submitMyBook(name, book) {
   if (!name || !book) return;
 
   if (isEliminated(name)) {
-    setFlash("err", `${name} was already picked this cycle. Wait for the shelf to turn over.`);
+    setFlash("err", `${name} was already picked this round. Wait for the shelf to turn over.`);
     render();
     return;
   }
@@ -480,7 +534,7 @@ async function submitMyBook(name, book) {
     await supabase.from("shelf_submissions").upsert({ member_name: canonical, book });
     submissions[canonical] = book;
     saveName(canonical);
-    setFlash("info", existingKey ? `Updated ${canonical}'s pick to "${book}".` : `Added ${canonical} to the draw box.`);
+    setFlash("info", existingKey ? `Updated ${canonical}'s pick to "${book}".` : `Added ${canonical} to the wheel.`);
     render();
   } catch (err) {
     setFlash("err", `Couldn't save: ${err.message}`);
@@ -499,28 +553,171 @@ async function withdrawSubmission(name) {
   }
 }
 
-// ---------- Draw animation ----------
-async function runDraw() {
-  if (spinning) return;
-  const eligible = Object.keys(submissions).filter(n => !isEliminated(n));
-  if (eligible.length === 0) { setFlash("err", "No eligible submissions to draw from."); return; }
-  spinning = true;
-  render();
+// ---------- Wheel ----------
+const WHEEL_COLORS = [
+  "#A23E2F", "#3D5A4C", "#B99657", "#7a4c26", "#4a5d6c", "#8a3f5f",
+  "#5f6b3d", "#c07141"
+];
 
-  const el = document.getElementById("drawcard");
-  let ticks = 0;
-  const maxTicks = 18 + Math.floor(Math.random() * 6);
-  await new Promise(resolve => {
-    const interval = setInterval(() => {
-      const flashName = eligible[Math.floor(Math.random() * eligible.length)];
-      if (el) el.textContent = flashName;
-      ticks++;
-      if (ticks >= maxTicks) { clearInterval(interval); resolve(); }
-    }, 90);
+function eligibleNames() {
+  return Object.keys(submissions).filter(n => !isEliminated(n)).sort((a, b) => a.localeCompare(b));
+}
+
+function drawWheel(canvas, names, rotation) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const size = Math.max(200, Math.round(rect.width || 320));
+  if (canvas.width !== size * dpr) {
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, size, size);
+
+  const cx = size / 2;
+  const cy = size / 2;
+  const radius = size / 2 - 6;
+  const N = names.length;
+  if (N === 0) return;
+
+  const anglePer = (2 * Math.PI) / N;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+
+  names.forEach((name, i) => {
+    const start = i * anglePer - Math.PI / 2;
+    const end = start + anglePer;
+
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, radius, start, end);
+    ctx.closePath();
+    ctx.fillStyle = WHEEL_COLORS[i % WHEEL_COLORS.length];
+    ctx.fill();
+    ctx.strokeStyle = "rgba(15, 15, 15, 0.35)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.save();
+    const mid = (start + end) / 2;
+    ctx.rotate(mid);
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#F2E8D5";
+    const fontSize = N > 12 ? 12 : N > 8 ? 13 : 15;
+    ctx.font = `600 ${fontSize}px "Fraunces", serif`;
+    let display = name;
+    const maxWidth = radius - 44;
+    while (ctx.measureText(display).width > maxWidth && display.length > 3) {
+      display = display.slice(0, -2) + "…";
+    }
+    ctx.fillText(display, radius - 14, 0);
+    ctx.restore();
   });
 
-  spinning = false;
-  await callAdmin("draw", {});
+  ctx.beginPath();
+  ctx.arc(0, 0, 30, 0, 2 * Math.PI);
+  ctx.fillStyle = "#F2E8D5";
+  ctx.fill();
+  ctx.strokeStyle = "#A23E2F";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  ctx.font = 'italic 12px "Fraunces", serif';
+  ctx.fillStyle = "#A23E2F";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Shelf", 0, 0);
+
+  ctx.restore();
+}
+
+function paintWheel() {
+  const canvas = document.getElementById("wheel-canvas");
+  if (!canvas) return;
+  drawWheel(canvas, eligibleNames(), 0);
+}
+
+async function spinToWinner(canvas, names, winnerIdx) {
+  const N = names.length;
+  const anglePer = (2 * Math.PI) / N;
+  const jitter = (Math.random() - 0.5) * anglePer * 0.65;
+  const targetR = -(winnerIdx + 0.5) * anglePer + jitter;
+  const spins = 6;
+  const finalR = targetR + spins * 2 * Math.PI;
+
+  const duration = 5200;
+  const start = performance.now();
+
+  return new Promise(resolve => {
+    function frame(now) {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 4);
+      const rotation = finalR * eased;
+      drawWheel(canvas, names, rotation);
+      if (t < 1) requestAnimationFrame(frame);
+      else resolve();
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+async function runDraw() {
+  if (spinning) return;
+  const names = eligibleNames();
+  if (names.length === 0) { setFlash("err", "No eligible submissions to spin."); return; }
+  const pw = getAdminPw();
+  if (!pw) { promptLibrarianPassword("draw", {}); return; }
+
+  const canvas = document.getElementById("wheel-canvas");
+  const btn = document.getElementById("spin-btn");
+  if (!canvas) return;
+  spinning = true;
+  if (btn) { btn.disabled = true; btn.textContent = "Spinning…"; }
+
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-update`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({ password: pw, action: "draw", payload: {} }),
+    });
+    if (res.status === 401) {
+      spinning = false;
+      clearAdminPw();
+      setFlash("err", "Wrong password. Locked back out.");
+      render();
+      return;
+    }
+    if (!res.ok) {
+      spinning = false;
+      const t = await res.text().catch(() => "");
+      setFlash("err", `Draw failed: ${t || res.statusText}`);
+      render();
+      return;
+    }
+    const body = await res.json();
+    const winner = body.winner || {};
+    let winnerIdx = names.indexOf(winner.name);
+    if (winnerIdx < 0) winnerIdx = 0;
+    await spinToWinner(canvas, names, winnerIdx);
+    spinning = false;
+    if (body.state) state = normalizeState(body.state);
+    if (body.submissions) submissions = body.submissions;
+    lastWinner = winner;
+    if (body.roundCompleted) roundNotice = body.roundCompleted;
+    render();
+  } catch (err) {
+    spinning = false;
+    setFlash("err", `Network error: ${err.message}`);
+    render();
+  }
 }
 
 // ---------- Rendering ----------
@@ -545,14 +742,15 @@ function computeStats() {
   });
   const leaderboard = Object.entries(perMember).sort((a, b) => b[1] - a[1]);
   const maxPicks = leaderboard.reduce((m, [, c]) => Math.max(m, c), 0);
-  const picksThisCycle = state.eliminated.length;
-  const submittedCount = Object.keys(submissions).filter(n => !isEliminated(n)).length;
+  const picksThisRound = state.eliminated.length;
+  const submittedCount = eligibleNames().length;
   const regulars = new Set(state.history.map(h => h.winner)).size;
-  return { total, leaderboard, maxPicks, picksThisCycle, submittedCount, regulars };
+  return { total, leaderboard, maxPicks, picksThisRound, submittedCount, regulars };
 }
 
 function render() {
-  if (document.activeElement && (document.activeElement.tagName === "INPUT")) {
+  if (spinning) { pendingRender = true; return; }
+  if (document.activeElement && document.activeElement.tagName === "INPUT") {
     pendingRender = true;
     return;
   }
@@ -571,12 +769,13 @@ function render() {
   const eligibleSubs = Object.entries(submissions)
     .filter(([n]) => !isEliminated(n))
     .sort((a, b) => a[0].localeCompare(b[0]));
+  const eligibleCount = eligibleSubs.length;
 
   let html = `
     <header>
-      <div class="eyebrow">Circulation Ledger · Cycle ${state.cycleNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
+      <div class="eyebrow">Circulation · Round ${state.roundNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
       <h1>The Shelf</h1>
-      <div class="sub">Drop your name and a book in the box. When it's your card the librarian pulls, you win the round.</div>
+      <div class="sub">Add your book. Spin the wheel. Once your name lands, you sit out the round.</div>
       <div class="rule"></div>
     </header>
   `;
@@ -585,9 +784,9 @@ function render() {
     html += `<div class="flash ${flashMsg.kind === 'info' ? 'info' : ''}">${esc(flashMsg.text)}</div>`;
   }
 
-  if (cycleNotice) {
-    html += `<div class="cycle-banner">Cycle ${cycleNotice} closed. Cycle ${state.cycleNumber} is open — everyone's back in the stacks.</div>`;
-    cycleNotice = null;
+  if (roundNotice) {
+    html += `<div class="cycle-banner">Round ${roundNotice} closed. Round ${state.roundNumber} is open — everyone's back in the stacks.</div>`;
+    roundNotice = null;
   }
 
   if (lastWinner) {
@@ -611,10 +810,10 @@ function render() {
           <input type="text" id="my-name" placeholder="How you'd like to be listed" value="${attr(myName)}" autocomplete="off" />
           <label for="my-book">Book title</label>
           <input type="text" id="my-book" placeholder="What you'd like the club to read" autocomplete="off" />
-          <button class="btn-primary" id="my-submit">Drop it in the box</button>
+          <button class="btn-primary" id="my-submit">Add to the wheel</button>
         </div>
         ${meAlreadyPicked
-          ? `<div class="submit-warning">You (<b>${esc(myName)}</b>) were already picked this cycle. Wait for the shelf to turn over before submitting again.</div>`
+          ? `<div class="submit-warning">You (<b>${esc(myName)}</b>) were already picked this round. Wait for the shelf to turn over before submitting again.</div>`
           : `<div class="submit-hint">Already submitted? Use the same name and it'll update your pick.</div>`
         }
       </div>
@@ -628,11 +827,11 @@ function render() {
       <div class="stat-card">
         <div class="stat-label">Books Read</div>
         <div class="stat-number">${stats.total}</div>
-        <div class="stat-suffix">all cycles</div>
+        <div class="stat-suffix">all rounds</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">This Cycle</div>
-        <div class="stat-number">${stats.picksThisCycle}</div>
+        <div class="stat-label">This Round</div>
+        <div class="stat-number">${stats.picksThisRound}</div>
         <div class="stat-suffix">picked so far</div>
       </div>
       <div class="stat-card">
@@ -641,15 +840,15 @@ function render() {
         <div class="stat-suffix">unique winners</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">In the Box</div>
+        <div class="stat-label">On the Wheel</div>
         <div class="stat-number">${stats.submittedCount}</div>
-        <div class="stat-suffix">awaiting the draw</div>
+        <div class="stat-suffix">awaiting the spin</div>
       </div>
     </div>
   `;
   if (stats.total > 0) {
     html += `<div class="card no-rule" style="margin-top: 12px;">`;
-    html += `<div style="font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:var(--stamp); margin-bottom: 10px;">Ledger by Reader</div>`;
+    html += `<div style="font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:var(--stamp); margin-bottom: 10px;">Reads by Reader</div>`;
     stats.leaderboard.forEach(([name, count]) => {
       const pct = stats.maxPicks > 0 ? Math.max(4, Math.round((count / stats.maxPicks) * 100)) : 0;
       html += `
@@ -664,10 +863,10 @@ function render() {
   }
   html += `</section>`;
 
-  // ---- In the Draw Box ----
-  html += `<section><div class="section-title">In the Draw Box</div>`;
+  // ---- On the Wheel ----
+  html += `<section><div class="section-title">On the Wheel</div>`;
   if (eligibleSubs.length === 0) {
-    html += `<div class="empty-note">The box is empty. Be the first to drop a recommendation in.</div>`;
+    html += `<div class="empty-note">The wheel is empty. Be the first to add a book above.</div>`;
   } else {
     eligibleSubs.forEach(([name, book]) => {
       html += `
@@ -685,9 +884,9 @@ function render() {
   }
   html += `</section>`;
 
-  // ---- Checked out this cycle ----
+  // ---- Checked Out this round ----
   if (state.eliminated.length) {
-    html += `<section><div class="section-title">Checked Out — Cycle ${state.cycleNumber}</div>`;
+    html += `<section><div class="section-title">Checked Out — Round ${state.roundNumber}</div>`;
     state.eliminated.forEach(name => {
       html += `
         <div class="card eliminated">
@@ -701,23 +900,29 @@ function render() {
     html += `</section>`;
   }
 
-  // ---- Draw ----
-  const eligibleCount = eligibleSubs.length;
-  html += `
-    <section>
-      <div class="section-title">Draw</div>
-      <div class="drawer">
-        <div class="drawcard" id="drawcard">${spinning ? '…' : (eligibleCount > 0 ? eligibleCount + ' card' + (eligibleCount === 1 ? '' : 's') + ' in the box' : 'The box is empty')}</div>
-        ${admin
-          ? `<button class="btn-primary" id="draw-btn" ${(eligibleCount === 0 || spinning) ? 'disabled' : ''}>${spinning ? 'Drawing…' : 'Draw a Card'}</button>`
-          : `<div style="font-size: 12px; color: #a9b8ae; font-style: italic;">Only the librarian can pull a card.</div>`
-        }
+  // ---- Spin the Wheel ----
+  html += `<section><div class="section-title">Spin the Wheel</div>`;
+  if (eligibleCount === 0) {
+    html += `<div class="wheel-empty">Add a book above to fill the wheel.</div>`;
+  } else {
+    html += `
+      <div class="wheel-holder">
+        <div class="wheel-pointer"></div>
+        <canvas id="wheel-canvas" class="wheel-canvas"></canvas>
       </div>
-    </section>
-  `;
+      <div class="spin-caption">${eligibleCount} name${eligibleCount === 1 ? '' : 's'} on the wheel</div>
+    `;
+  }
+  html += `<div class="spin-actions">`;
+  if (admin) {
+    html += `<button class="btn-primary" id="spin-btn" ${(eligibleCount === 0 || spinning) ? 'disabled' : ''}>${spinning ? 'Spinning…' : 'Spin the Wheel'}</button>`;
+  } else {
+    html += `<div style="font-size: 12px; color: #a9b8ae; font-style: italic;">Only the librarian can spin the wheel.</div>`;
+  }
+  html += `</div></section>`;
 
-  // ---- Ledger ----
-  html += `<section><div class="section-title">Ledger</div>`;
+  // ---- Past Reads ----
+  html += `<section><div class="section-title">Past Reads</div>`;
   if (state.history.length === 0) {
     html += `<div class="empty-note">No picks recorded yet.</div>`;
   } else {
@@ -726,7 +931,7 @@ function render() {
       html += `
         <div class="history-item">
           <span><span class="h-who">${esc(h.winner)}</span> — ${esc(h.book || '')}</span>
-          <span>Cycle ${h.cycle} · ${fmtDate(h.ts)}</span>
+          <span>Round ${h.round} · ${fmtDate(h.ts)}</span>
         </div>
       `;
     });
@@ -739,7 +944,7 @@ function render() {
   html += `Shared with everyone who has this link.<br/>`;
   if (admin) {
     html += `<button class="btn-ghost" id="lock-btn">Lock librarian mode</button>`;
-    html += `<button class="btn-ghost" id="new-cycle-btn">Start new cycle</button>`;
+    html += `<button class="btn-ghost" id="new-round-btn">Start new round</button>`;
     html += `<button class="btn-ghost" id="reset-btn">Reset the shelf</button>`;
   } else {
     html += `<button class="btn-ghost" id="unlock-btn">Librarian mode</button>`;
@@ -748,6 +953,7 @@ function render() {
 
   app.innerHTML = html;
   wireUp();
+  requestAnimationFrame(paintWheel);
 }
 
 function renderSetupNotice() {
@@ -781,17 +987,17 @@ function wireUp() {
     el.addEventListener("click", () => withdrawSubmission(el.dataset.withdraw));
   });
 
-  const drawBtn = document.getElementById("draw-btn");
-  if (drawBtn) drawBtn.addEventListener("click", runDraw);
+  const spinBtn = document.getElementById("spin-btn");
+  if (spinBtn) spinBtn.addEventListener("click", runDraw);
 
   const unlock = document.getElementById("unlock-btn");
   if (unlock) unlock.addEventListener("click", () => promptLibrarianPassword());
   const lock = document.getElementById("lock-btn");
   if (lock) lock.addEventListener("click", () => { clearAdminPw(); render(); });
-  const newCycle = document.getElementById("new-cycle-btn");
-  if (newCycle) newCycle.addEventListener("click", () => {
-    if (!confirm("Close the current cycle? Everyone goes back into the pool and the draw box is emptied.")) return;
-    callAdmin("new_cycle", {});
+  const newRound = document.getElementById("new-round-btn");
+  if (newRound) newRound.addEventListener("click", () => {
+    if (!confirm("Close the current round? Everyone goes back into the pool and the wheel is emptied.")) return;
+    callAdmin("new_round", {});
   });
   const reset = document.getElementById("reset-btn");
   if (reset) reset.addEventListener("click", () => {
@@ -799,6 +1005,10 @@ function wireUp() {
     callAdmin("reset", {});
   });
 }
+
+window.addEventListener("resize", () => {
+  if (!spinning) paintWheel();
+});
 
 // ---------- Boot ----------
 loadAll();

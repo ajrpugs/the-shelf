@@ -1,6 +1,6 @@
 # The Shelf
 
-A tiny book-club picker with a library-ledger vibe. Everyone can submit their book recommendation; a designated librarian draws the card. Once you're picked, you sit out until the cycle turns over.
+A tiny book-club picker with a library-ledger vibe. Everyone can submit their book recommendation; a designated librarian spins the wheel to pick. Once you're picked, you sit out until the round turns over.
 
 Single-page HTML frontend + Supabase backend (Postgres + Realtime + one Edge Function). Free tier is more than enough for a book club.
 
@@ -8,15 +8,15 @@ Single-page HTML frontend + Supabase backend (Postgres + Realtime + one Edge Fun
 
 - **Anyone with the link** can:
   - Type their name and a book title into the form to drop a recommendation in the draw box. (Honor system — no login.)
-  - See current submissions, who's already been picked this cycle, the ledger, and stats.
+  - See current submissions, who's already been picked this round, past reads, and stats.
   - Update their own pick by re-submitting under the same name.
   - Withdraw a submission.
 - **Only the librarian** (whoever has the password) can:
-  - Draw a card (the server picks randomly from the box, minus anyone already picked this cycle).
-  - Start a new cycle (empties the box, puts everyone back in the pool).
+  - Spin the wheel (the server picks randomly from the wheel, minus anyone already picked this round).
+  - Start a new round (empties the box, puts everyone back in the pool).
   - Reset the whole shelf.
 
-There is no explicit roster — the roster is implicit in who submits. Once you're picked, you sit out until the librarian starts a new cycle.
+There is no explicit roster — the roster is implicit in who submits. Once you're picked, you sit out until the librarian starts a new round.
 
 ## Setup
 

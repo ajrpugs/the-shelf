@@ -1,12 +1,8 @@
 // Supabase Edge Function: admin-update
 //
 // Password-gated writes for shelf_state. Anyone can drop a book into
-// shelf_submissions from the browser via RLS; only the librarian can pull a
-// card, start a new cycle, or reset.
-//
-// Deploy:
-//   supabase functions deploy admin-update --no-verify-jwt
-//   supabase secrets set ADMIN_PASSWORD='your-password-here'
+// shelf_submissions from the browser via RLS; only the librarian can spin
+// the wheel, start a new round, or reset.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -16,14 +12,31 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+type HistoryItem = { round: number; winner: string; book: string; ts: string };
 type State = {
   eliminated: string[];
-  history: Array<{ cycle: number; winner: string; book: string; ts: string }>;
-  cycleNumber: number;
+  history: HistoryItem[];
+  roundNumber: number;
 };
 
-const emptyState = (): State => ({ eliminated: [], history: [], cycleNumber: 1 });
+const emptyState = (): State => ({ eliminated: [], history: [], roundNumber: 1 });
 const norm = (s: string) => (s || "").trim().toLowerCase();
+
+function normalizeState(raw: any): State {
+  const r = raw ?? {};
+  return {
+    eliminated: Array.isArray(r.eliminated) ? r.eliminated : [],
+    history: Array.isArray(r.history)
+      ? r.history.map((h: any) => ({
+          round: h.round ?? h.cycle ?? 1,
+          winner: h.winner,
+          book: h.book,
+          ts: h.ts,
+        }))
+      : [],
+    roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
+  };
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -48,16 +61,11 @@ Deno.serve(async (req) => {
   const { data: row, error: readErr } = await client
     .from("shelf_state").select("data").eq("id", 1).single();
   if (readErr && readErr.code !== "PGRST116") return json({ error: readErr.message }, 500);
-  const raw = (row?.data ?? {}) as Partial<State>;
-  const state: State = {
-    eliminated: raw.eliminated ?? [],
-    history: raw.history ?? [],
-    cycleNumber: raw.cycleNumber ?? 1,
-  };
+  const state: State = normalizeState(row?.data);
 
   const action = body.action;
   let winner: { name: string; book: string } | null = null;
-  let cycleCompleted: number | null = null;
+  let roundCompleted: number | null = null;
 
   try {
     switch (action) {
@@ -75,7 +83,7 @@ Deno.serve(async (req) => {
         const chosen = eligible[Math.floor(Math.random() * eligible.length)];
         const book = submissions[chosen];
         state.history.unshift({
-          cycle: state.cycleNumber,
+          round: state.roundNumber,
           winner: chosen,
           book,
           ts: new Date().toISOString(),
@@ -85,16 +93,15 @@ Deno.serve(async (req) => {
         await client.from("shelf_submissions").delete().eq("member_name", chosen);
         break;
       }
-      case "new_cycle": {
-        cycleCompleted = state.cycleNumber;
+      case "new_round": {
+        roundCompleted = state.roundNumber;
         state.eliminated = [];
-        state.cycleNumber += 1;
+        state.roundNumber += 1;
         await client.from("shelf_submissions").delete().neq("member_name", "");
         break;
       }
       case "reset": {
-        const fresh = emptyState();
-        Object.assign(state, fresh);
+        Object.assign(state, emptyState());
         await client.from("shelf_submissions").delete().neq("member_name", "");
         break;
       }
@@ -117,7 +124,7 @@ Deno.serve(async (req) => {
     submissions[r.member_name] = r.book;
   });
 
-  return json({ state, submissions, winner, cycleCompleted });
+  return json({ state, submissions, winner, roundCompleted });
 });
 
 function json(body: unknown, status = 200) {
