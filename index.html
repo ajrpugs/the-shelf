@@ -511,7 +511,7 @@ function normalizeState(raw) {
 }
 
 // ---------- Book covers (Open Library) ----------
-const COVER_CACHE_KEY = "shelf-covers-v2";
+const COVER_CACHE_KEY = "shelf-covers-v3";
 let coverCache = {};
 try { coverCache = JSON.parse(localStorage.getItem(COVER_CACHE_KEY) || "{}") || {}; }
 catch { coverCache = {}; }
