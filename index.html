@@ -328,6 +328,9 @@
     color: var(--ink-soft);
   }
   .genre-tag b{ color: var(--stamp); font-weight: 700; font-size: 11px; }
+  a.genre-tag{ text-decoration: none; }
+  .genre-tag-link{ cursor: pointer; transition: border-color 0.12s, color 0.12s, background 0.12s; }
+  .genre-tag-link:hover{ border-color: var(--brass); color: var(--ink); background: rgba(236,227,207,0.10); }
   .genre-loading{ font-size: 12px; color: var(--muted); font-style: italic; }
 
   /* Stats sub-cards: shared heading, superlatives, decade labels */
@@ -875,7 +878,7 @@ async function decorateStats() {
   const recurring = ranked.filter(([, c]) => c >= 2);
   ranked = (recurring.length >= 5 ? recurring : ranked).slice(0, 14);
   setHTML("genre-tags", ranked.length
-    ? ranked.map(([s, c]) => `<span class="genre-tag">${esc(titleCase(s))}<b>${c}</b></span>`).join("")
+    ? ranked.map(([s, c]) => `<a class="genre-tag genre-tag-link" href="#tag=${encodeURIComponent(s)}">${esc(titleCase(s))}<b>${c}</b></a>`).join("")
     : `<span class="genre-loading">Not enough shelf data yet.</span>`);
 }
 
@@ -1564,6 +1567,10 @@ function render() {
     renderBookDetail(app, { kind: "shelf", userId: route.userId });
     return;
   }
+  if (route.name === "tag") {
+    renderTagPage(app, route.tag);
+    return;
+  }
 
   const stats = computeStats();
   const admin = isAdmin();
@@ -1856,6 +1863,8 @@ function parseRoute() {
   if (book) return { name: "book", round: parseInt(book[1], 10) };
   const shelf = hash.match(/^#shelf=(.+)$/);
   if (shelf) return { name: "shelf", userId: decodeURIComponent(shelf[1]) };
+  const tag = hash.match(/^#tag=(.+)$/);
+  if (tag) return { name: "tag", tag: decodeURIComponent(tag[1]) };
   return { name: "main" };
 }
 
@@ -1961,6 +1970,48 @@ async function decorateBookDetail(book) {
   if (detail.isbn.length) extra.push(`<div><span class="bd-k">ISBN</span> ${esc(detail.isbn[0])}</div>`);
   if (detail.olKey) extra.push(`<div><a class="footer-link" href="https://openlibrary.org${attr(detail.olKey)}" target="_blank" rel="noopener">View on Open Library ↗</a></div>`);
   set("bd-extra", extra.length ? `<div class="bd-block bd-extra">${extra.join("")}</div>` : "");
+}
+
+// Tag page: past reads that carry a given subject (from "What we've been
+// reading"). tag is the normalized lowercase subject.
+function renderTagPage(app, tag) {
+  window.scrollTo(0, 0);
+  const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
+  app.innerHTML = `
+    <header><div class="eyebrow">Tagged</div><h1>The Shelf</h1><div class="rule"></div></header>
+    ${back}
+    <section>
+      <div class="section-title">${esc(titleCase(tag))}</div>
+      <div id="tag-list" class="card no-rule"><span class="genre-loading">Finding books…</span></div>
+    </section>`;
+  decorateTagPage(tag);
+}
+
+async function decorateTagPage(tag) {
+  const hashAtCall = location.hash;
+  const entries = state.history.filter(h => h.book);
+  const metas = await Promise.all(entries.map(h => resolveBookMeta(h.book)));
+  if (location.hash !== hashAtCall) return; // navigated away
+  const box = document.getElementById("tag-list");
+  if (!box) return;
+  const matches = entries.filter((h, i) => cleanSubjects((metas[i] || {}).subjects).includes(tag));
+  if (matches.length === 0) {
+    box.innerHTML = `<div class="empty-note">No past reads tagged “${esc(titleCase(tag))}”.</div>`;
+    return;
+  }
+  box.innerHTML = matches.map(h => {
+    const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
+    return `
+      <div class="history-item">
+        <span class="cover-slot tiny" data-cover-title="${attr(h.book)}"></span>
+        <span class="h-content">
+          ${h.winner_username ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<span class="h-who">${esc(h.winner_username)}</span> — ` : ''}<a class="book-link" href="#book=${h.round}">${esc(h.book)}</a><span class="book-meta" data-meta-title="${attr(h.book)}"></span>
+        </span>
+        <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+      </div>`;
+  }).join("");
+  decorateCovers();
+  decorateMeta();
 }
 
 function renderLoginGate() {
