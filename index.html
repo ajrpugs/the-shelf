@@ -399,6 +399,20 @@
   .bd-review .bd-score-max{ font-size: 15px; color: var(--ink-soft); font-weight: 400; margin-left: 2px; }
   .bd-review .score-pill{ font-size: 13px; align-self: center; }
 
+  /* Reader profile */
+  .reader-link{ color: inherit; text-decoration: none; cursor: pointer; }
+  .reader-link:hover{ color: var(--brass); text-decoration: underline; }
+  .reader-head{ display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+  .reader-avatar{ width: 60px; height: 60px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+  .reader-avatar-ph{ background: rgba(236,227,207,0.10); border: 1px solid var(--panel-border); }
+  .reader-name{ font-family: 'Fraunces', serif; font-weight: 700; font-size: 26px; color: var(--card); }
+  .stat-grid.reader-stats{ grid-template-columns: repeat(4, 1fr); }
+  .stat-card .stat-number.band-exc{ color: var(--green); }
+  .stat-card .stat-number.band-great{ color: var(--brass); }
+  .stat-card .stat-number.band-good{ color: var(--muted); }
+  .stat-card .stat-number.band-bad{ color: var(--stamp); }
+  .reader-shelf{ margin-top: 12px; display: flex; align-items: center; flex-wrap: wrap; }
+
   /* Book covers (Open Library) */
   .cover-slot{
     overflow: hidden;
@@ -1574,6 +1588,7 @@ function computeStats() {
     const key = h.winner_id || `name:${h.winner_username}`;
     if (!perUser[key]) {
       perUser[key] = {
+        key,
         name: h.winner_username,
         avatar: h.winner_id ? userAvatar(h.winner_id) : null,
         count: 0,
@@ -1626,6 +1641,15 @@ function ratingTotal(h) {
   return Number.isFinite(t) ? t : null;
 }
 
+// A reader's stable identity: their Discord id when linked, else name-based
+// (so unlinked pickers like "Hunter" still aggregate and get a profile).
+function readerKey(id, name) {
+  return id ? id : `name:${name || ""}`;
+}
+function readerHref(id, name) {
+  return `#reader=${encodeURIComponent(readerKey(id, name))}`;
+}
+
 function render() {
   if (spinning) { pendingRender = true; return; }
   if (document.activeElement && document.activeElement.tagName === "INPUT") {
@@ -1658,6 +1682,10 @@ function render() {
   }
   if (route.name === "tag") {
     renderTagPage(app, route.tag);
+    return;
+  }
+  if (route.name === "reader") {
+    renderReaderPage(app, route.key);
     return;
   }
 
@@ -1704,7 +1732,7 @@ function render() {
             <div class="wname">
               picked by
               ${currentPickAvatar ? `<img class="avatar-mini" src="${attr(currentPickAvatar)}" alt="">` : ''}
-              <b>${esc(currentPick.winner_username)}</b>
+              <a class="reader-link" href="${readerHref(currentPick.winner_id, currentPick.winner_username)}"><b>${esc(currentPick.winner_username)}</b></a>
             </div>
           </div>
         </div>
@@ -1748,7 +1776,7 @@ function render() {
               <div class="name"><span class="shelf-title" data-shelf-id="${attr(entry.id)}" data-link-title="${attr(entry.book)}">${esc(entry.book)}</span><span class="book-meta" data-meta-title="${attr(entry.book)}"></span></div>
               <div class="submitted-book">
                 ${entry.avatar_url ? `<img class="avatar-mini" src="${attr(entry.avatar_url)}" alt="">` : ''}
-                submitted by ${esc(entry.name)}
+                submitted by <a class="reader-link" href="${readerHref(entry.id, entry.name)}">${esc(entry.name)}</a>
               </div>
             </div>
           </div>
@@ -1802,7 +1830,7 @@ function render() {
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
           <span class="h-content">
             ${h.winner_username
-              ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<span class="h-who">${esc(h.winner_username)}</span> — <a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`
+              ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — <a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`
               : `<a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
           </span>
           ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
@@ -1884,7 +1912,7 @@ function render() {
       html += `
         <div class="leader-row">
           ${avatarEl}
-          <div class="lname">${esc(entry.name)}</div>
+          <div class="lname"><a class="reader-link" href="#reader=${encodeURIComponent(entry.key)}">${esc(entry.name)}</a></div>
           <div class="lbar"><span style="width: ${pct}%;"></span></div>
           <div class="lcount">${entry.count}</div>
         </div>
@@ -1974,6 +2002,8 @@ function parseRoute() {
   if (shelf) return { name: "shelf", userId: decodeURIComponent(shelf[1]) };
   const tag = hash.match(/^#tag=(.+)$/);
   if (tag) return { name: "tag", tag: decodeURIComponent(tag[1]) };
+  const reader = hash.match(/^#reader=(.+)$/);
+  if (reader) return { name: "reader", key: decodeURIComponent(reader[1]) };
   return { name: "main" };
 }
 
@@ -2002,7 +2032,7 @@ function renderBookDetail(app, ctx) {
     eyebrow = `Past read · Round ${h.round}`;
     const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
     const who = h.winner_username
-      ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<b>${esc(h.winner_username)}</b>`
+      ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="reader-link" href="${readerHref(h.winner_id, h.winner_username)}"><b>${esc(h.winner_username)}</b></a>`
       : `<span class="detail-muted">no picker recorded</span>`;
     metaLine = `Picked by ${who} · Round ${h.round} · ${fmtDate(h.ts)}`;
     const total = ratingTotal(h);
@@ -2023,7 +2053,7 @@ function renderBookDetail(app, ctx) {
     book = u.book;
     eyebrow = `On the shelf`;
     const avatar = u.avatar_url || null;
-    metaLine = `Added by ${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<b>${esc(u.discord_username || "Reader")}</b>`;
+    metaLine = `Added by ${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="reader-link" href="${readerHref(u.id, u.discord_username)}"><b>${esc(u.discord_username || "Reader")}</b></a>`;
   }
 
   app.innerHTML = `
@@ -2127,11 +2157,92 @@ async function decorateTagPage(tag) {
       <div class="history-item">
         <span class="cover-slot tiny" data-cover-title="${attr(h.book)}"></span>
         <span class="h-content">
-          ${h.winner_username ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<span class="h-who">${esc(h.winner_username)}</span> — ` : ''}<a class="book-link" href="#book=${h.round}">${esc(h.book)}</a><span class="book-meta" data-meta-title="${attr(h.book)}"></span>
+          ${h.winner_username ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — ` : ''}<a class="book-link" href="#book=${h.round}">${esc(h.book)}</a><span class="book-meta" data-meta-title="${attr(h.book)}"></span>
         </span>
         <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
       </div>`;
   }).join("");
+  decorateCovers();
+  decorateMeta();
+}
+
+// Reader profile: a picker's stats + their picks. key is a Discord id or
+// "name:<name>" for unlinked pickers.
+function renderReaderPage(app, key) {
+  window.scrollTo(0, 0);
+  const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
+
+  let name = "Reader", avatar = null, userId = null;
+  if (key.startsWith("name:")) {
+    name = key.slice(5) || "Reader";
+  } else {
+    userId = key;
+    const u = users.find(x => x.id === key);
+    if (u) { name = u.discord_username || "Reader"; avatar = u.avatar_url || null; }
+    else { const h = state.history.find(e => e.winner_id === key); if (h) name = h.winner_username; }
+  }
+
+  const picks = state.history.filter(h => readerKey(h.winner_id, h.winner_username) === key);
+  const shelfUser = userId ? users.find(x => x.id === userId) : null;
+  const shelfBook = shelfUser && (shelfUser.book || "").trim() ? shelfUser.book.trim() : null;
+
+  if (picks.length === 0 && !shelfBook) {
+    return renderDetailMissing(app, back, state.history.length === 0 && users.length === 0, `No reads recorded for ${name}.`);
+  }
+
+  const rated = picks.map(ratingTotal).filter(t => t != null);
+  const avg = rated.length ? Math.round(rated.reduce((a, b) => a + b, 0) / rated.length) : null;
+  const avgBand = ratingBand(avg);
+  const best = rated.length ? Math.max(...rated) : null;
+  const worst = rated.length ? Math.min(...rated) : null;
+  const sorted = [...picks].sort((a, b) => {
+    const ra = ratingTotal(a), rb = ratingTotal(b);
+    if (ra == null && rb == null) return b.round - a.round;
+    if (ra == null) return 1;
+    if (rb == null) return -1;
+    if (rb !== ra) return rb - ra;
+    return b.round - a.round;
+  });
+
+  let html = `
+    <header><div class="eyebrow">Reader</div><h1>The Shelf</h1><div class="rule"></div></header>
+    ${back}
+    <div class="reader-head">
+      ${avatar ? `<img class="reader-avatar" src="${attr(avatar)}" alt="">` : `<span class="reader-avatar reader-avatar-ph"></span>`}
+      <div class="reader-name">${esc(name)}</div>
+    </div>
+    <div class="stat-grid reader-stats">
+      <div class="stat-card"><div class="stat-label">Books picked</div><div class="stat-number">${picks.length}</div><div class="stat-suffix">all rounds</div></div>
+      <div class="stat-card"><div class="stat-label">Avg rating</div><div class="stat-number ${avgBand ? avgBand.cls : ''}">${avg != null ? avg : '—'}</div><div class="stat-suffix">${avgBand ? avgBand.label : 'unrated'}</div></div>
+      <div class="stat-card"><div class="stat-label">Best</div><div class="stat-number ${ratingBand(best) ? ratingBand(best).cls : ''}">${best != null ? best : '—'}</div><div class="stat-suffix">highest pick</div></div>
+      <div class="stat-card"><div class="stat-label">Worst</div><div class="stat-number ${ratingBand(worst) ? ratingBand(worst).cls : ''}">${worst != null ? worst : '—'}</div><div class="stat-suffix">lowest pick</div></div>
+    </div>`;
+
+  if (shelfBook) {
+    html += `<div class="card no-rule reader-shelf"><span class="mini-head" style="margin:0 10px 0 0;">On the shelf now</span><a class="book-link" href="#shelf=${encodeURIComponent(userId)}">${esc(shelfBook)}</a></div>`;
+  }
+
+  html += `<section style="margin-top:16px;"><div class="section-title">Picks</div>`;
+  if (picks.length === 0) {
+    html += `<div class="empty-note">No picks have come up yet.</div>`;
+  } else {
+    html += `<div class="card no-rule">`;
+    sorted.forEach(h => {
+      const total = ratingTotal(h);
+      const band = ratingBand(total);
+      html += `
+        <div class="history-item">
+          <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
+          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a><span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
+          ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
+          <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+        </div>`;
+    });
+    html += `</div>`;
+  }
+  html += `</section>`;
+
+  app.innerHTML = html;
   decorateCovers();
   decorateMeta();
 }
