@@ -263,7 +263,7 @@
     border: 1px solid var(--panel-border);
     border-radius: 3px;
     padding: 20px;
-    text-align:center;
+    text-align:left;
     box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
     margin-top: 16px;
     margin-bottom: 20px;
@@ -282,19 +282,28 @@
     margin-bottom: 10px;
     font-size: 13px;
   }
+  .winner-banner .wn-top{ display: flex; gap: 18px; align-items: flex-start; margin-top: 4px; }
+  .winner-banner .wn-top .cover-slot.large{ margin: 0; }
+  .winner-banner .wn-head{ flex: 1; min-width: 0; }
+  @media (max-width: 480px){
+    .winner-banner{ text-align: center; }
+    .winner-banner .wn-top{ flex-direction: column; align-items: center; }
+    .winner-banner .wdesc{ text-align: center; }
+    .winner-banner .wtags{ justify-content: center; }
+  }
   .winner-banner .wbook{
-    font-family:'Fraunces', serif; font-weight:700; font-size: 26px;
+    font-family:'Fraunces', serif; font-weight:700; font-size: 24px;
     line-height: 1.15;
   }
-  .winner-banner .wname{ font-size: 13px; color: var(--ink-soft); margin-top: 8px; font-style: italic; letter-spacing: 0.04em; }
+  .winner-banner .wname{ font-size: 13px; color: var(--ink-soft); margin-top: 10px; font-style: italic; letter-spacing: 0.04em; }
   .winner-banner .wname b{ color: var(--ink); font-weight: 700; font-style: normal; }
   .winner-banner .wauthor{ font-size: 14px; color: var(--ink-soft); font-style: italic; margin-top: 4px; }
   .winner-banner .wdesc{
-    text-align: left; max-width: 480px; margin: 14px auto 0;
+    margin: 16px 0 0;
     font-size: 13px; line-height: 1.55; color: var(--ink-soft);
     padding-top: 14px; border-top: 1px dotted rgba(236,227,207,0.14);
   }
-  .winner-banner .wtags{ justify-content: center; margin-top: 12px; }
+  .winner-banner .wtags{ justify-content: flex-start; margin-top: 12px; }
   .winner-banner .wmore{
     display: inline-block; margin-top: 14px; font-size: 12px;
     color: var(--brass); text-decoration: none; letter-spacing: 0.04em;
@@ -799,6 +808,8 @@ const SUBJECT_STOP = [
   "accessible book", "protected daisy", "in library", "internet archive",
   "open library staff picks", "overdrive", "large type books", "reading level",
   "lending library", "print disabled", "container", "browserlending",
+  // common non-English subject noise that slips through as plain ASCII
+  "meurtre", "policier", "roman ", "littérature", "ficção", "novela",
 ];
 function cleanSubjects(subjects) {
   const out = [];
@@ -806,7 +817,8 @@ function cleanSubjects(subjects) {
     if (typeof s !== "string") continue;
     const low = s.toLowerCase().trim();
     if (!low || low.length > 40) continue;
-    if (low.includes(":")) continue;
+    if (low.includes(":") || low.includes(",")) continue;  // tag codes / catalog lists
+    if (/[^\x00-\x7f]/.test(low)) continue;                 // accented / non-Latin (foreign)
     if (SUBJECT_STOP.some(w => low.includes(w))) continue;
     out.push(low);
   }
@@ -1644,14 +1656,18 @@ function render() {
     html += `
       <div class="winner-banner">
         <div class="stampbig">Next up</div>
-        <div class="cover-slot large" data-cover-title="${attr(currentPick.book || '')}"></div>
-        <div class="wbook">${currentPick.book ? `<a class="book-link" href="#book=${currentPick.round}">${esc(currentPick.book)}</a>` : '—'}</div>
-        ${currentPick.book ? `<div class="wauthor" id="nextup-author"></div>` : ''}
-        ${currentPick.book ? `<div class="wmeta book-meta" data-meta-title="${attr(currentPick.book)}"></div>` : ''}
-        <div class="wname">
-          picked by
-          ${currentPickAvatar ? `<img class="avatar-mini" src="${attr(currentPickAvatar)}" alt="">` : ''}
-          <b>${esc(currentPick.winner_username)}</b>
+        <div class="wn-top">
+          <div class="cover-slot large" data-cover-title="${attr(currentPick.book || '')}"></div>
+          <div class="wn-head">
+            <div class="wbook">${currentPick.book ? `<a class="book-link" href="#book=${currentPick.round}">${esc(currentPick.book)}</a>` : '—'}</div>
+            ${currentPick.book ? `<div class="wauthor" id="nextup-author"></div>` : ''}
+            ${currentPick.book ? `<div class="wmeta book-meta" data-meta-title="${attr(currentPick.book)}"></div>` : ''}
+            <div class="wname">
+              picked by
+              ${currentPickAvatar ? `<img class="avatar-mini" src="${attr(currentPickAvatar)}" alt="">` : ''}
+              <b>${esc(currentPick.winner_username)}</b>
+            </div>
+          </div>
         </div>
         ${currentPick.book ? `<div class="wdesc" id="nextup-desc"></div>` : ''}
         ${currentPick.book ? `<div class="wtags genre-tags" id="nextup-tags"></div>` : ''}
@@ -1999,7 +2015,7 @@ async function decorateBookDetail(book) {
 
   const subs = [...new Set(cleanSubjects(detail.subjects))].slice(0, 16);
   set("bd-subjects", subs.length
-    ? `<div class="bd-block"><div class="bd-block-head">Subjects</div><div class="genre-tags">${subs.map(s => `<span class="genre-tag">${esc(titleCase(s))}</span>`).join("")}</div></div>`
+    ? `<div class="bd-block"><div class="bd-block-head">Subjects</div><div class="genre-tags">${subs.map(s => `<a class="genre-tag genre-tag-link" href="#tag=${encodeURIComponent(s)}">${esc(titleCase(s))}</a>`).join("")}</div></div>`
     : "");
 
   const chip = (arr) => arr.map(s => `<span class="genre-tag">${esc(s)}</span>`).join("");
