@@ -272,13 +272,34 @@
   .flash.info{ background: var(--green); }
 
   .history-item{
-    display:flex; justify-content:space-between; gap: 10px;
+    display:flex; align-items: center; gap: 10px;
     font-size: 12.5px; padding: 8px 2px; border-bottom: 1px dotted rgba(38,35,28,0.15);
     color: var(--ink-soft);
   }
   .history-item:last-child{ border-bottom: none; }
+  .history-item .h-content{ flex: 1; min-width: 0; }
+  .history-item .h-meta{ white-space: nowrap; }
   .history-item .h-who{ color: var(--ink); font-weight: 700; }
   .empty-note{ font-size: 12.5px; color: var(--muted); padding: 6px 2px; }
+
+  /* Book covers (Google Books thumbnails) */
+  .cover-slot{
+    overflow: hidden;
+    border-radius: 3px;
+    background: rgba(0,0,0,0.08);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    flex-shrink: 0;
+  }
+  .cover-slot img{ display: block; width: 100%; height: 100%; object-fit: cover; }
+  .cover-slot.tiny{ width: 28px; height: 42px; }
+  .cover-slot.small{ width: 46px; height: 69px; }
+  .cover-slot.large{
+    display: block;
+    width: 110px; height: 165px;
+    margin: 14px auto 12px;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.28);
+  }
+  .cover-slot.no-cover{ display: none; }
 
   /* Stats / dashboard */
   .stat-grid{
@@ -393,6 +414,101 @@ let pendingRender = false;
 const SAVED_NAME_KEY = "shelf-my-name";
 const savedName = () => localStorage.getItem(SAVED_NAME_KEY) || "";
 const saveName = (name) => localStorage.setItem(SAVED_NAME_KEY, name);
+
+// ---------- Book covers ----------
+const COVER_CACHE_KEY = "shelf-covers-v1";
+let coverCache = {};
+try { coverCache = JSON.parse(localStorage.getItem(COVER_CACHE_KEY) || "{}") || {}; }
+catch { coverCache = {}; }
+const pendingCovers = new Map();
+
+function normalizeForMatch(s) {
+  return (s || "")
+    .replace(/\s+by\s+.+$/i, "")           // strip "by <author>" tail
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")               // punctuation → space
+    .replace(/^\s*(the|a|an)\s+/i, "")     // leading article
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseTitleAuthor(raw) {
+  const m = (raw || "").match(/^(.+?)\s+by\s+(.+)$/i);
+  return m ? { title: m[1].trim(), author: m[2].trim() } : { title: (raw || "").trim(), author: null };
+}
+
+async function fetchCoverFromGoogle(rawTitle) {
+  const { title, author } = parseTitleAuthor(rawTitle);
+  if (!title) return null;
+  const q = author
+    ? `intitle:${encodeURIComponent(title)}+inauthor:${encodeURIComponent(author)}`
+    : `intitle:${encodeURIComponent(title)}`;
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5&printType=books&fields=items(volumeInfo(title,imageLinks))`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const body = await res.json();
+    const items = body.items || [];
+    const normTitle = normalizeForMatch(title);
+    for (const item of items) {
+      const info = item.volumeInfo || {};
+      if (!info.imageLinks) continue;
+      const resultNorm = normalizeForMatch(info.title || "");
+      if (!resultNorm) continue;
+      const matches = resultNorm === normTitle
+        || resultNorm.includes(normTitle)
+        || normTitle.includes(resultNorm);
+      if (!matches) continue;
+      const thumb = info.imageLinks.thumbnail || info.imageLinks.smallThumbnail || "";
+      return thumb ? thumb.replace(/^http:/, "https:") : null;
+    }
+    return null;
+  } catch { return null; }
+}
+
+async function resolveCover(rawTitle) {
+  const key = normalizeForMatch(rawTitle);
+  if (!key) return null;
+  if (key in coverCache) return coverCache[key];
+  if (pendingCovers.has(key)) return pendingCovers.get(key);
+  const promise = fetchCoverFromGoogle(rawTitle).then(url => {
+    coverCache[key] = url || null;
+    try { localStorage.setItem(COVER_CACHE_KEY, JSON.stringify(coverCache)); } catch {}
+    return coverCache[key];
+  });
+  pendingCovers.set(key, promise);
+  const result = await promise;
+  pendingCovers.delete(key);
+  return result;
+}
+
+function insertCoverImg(el, url) {
+  const img = document.createElement("img");
+  img.src = url;
+  img.alt = "";
+  img.loading = "lazy";
+  el.appendChild(img);
+}
+
+function decorateCovers() {
+  document.querySelectorAll(".cover-slot[data-cover-title]").forEach(el => {
+    if (el.dataset.coverDone === "1") return;
+    el.dataset.coverDone = "1";
+    const raw = el.dataset.coverTitle;
+    const key = normalizeForMatch(raw);
+    if (!key) { el.classList.add("no-cover"); return; }
+    if (key in coverCache) {
+      const cached = coverCache[key];
+      if (cached) insertCoverImg(el, cached);
+      else el.classList.add("no-cover");
+      return;
+    }
+    resolveCover(raw).then(url => {
+      if (url) insertCoverImg(el, url);
+      else el.classList.add("no-cover");
+    });
+  });
+}
 
 const setFlash = (kind, text) => {
   flashMsg = { kind, text };
@@ -825,6 +941,7 @@ function render() {
     html += `
       <div class="winner-banner">
         <div class="stampbig">Next up</div>
+        <div class="cover-slot large" data-cover-title="${attr(currentPick.book || '')}"></div>
         <div class="wbook">${currentPick.book ? esc(currentPick.book) : '—'}</div>
         <div class="wname">picked by <b>${esc(currentPick.winner)}</b></div>
       </div>
@@ -863,6 +980,7 @@ function render() {
       html += `
         <div class="card">
           <div class="card-row" style="align-items: flex-start;">
+            <span class="cover-slot small" data-cover-title="${attr(book)}"></span>
             <div style="flex:1; min-width:0;">
               <div class="name">${esc(book)}</div>
               <div class="submitted-book">submitted by ${esc(name)}</div>
@@ -906,8 +1024,9 @@ function render() {
     state.history.slice(0, 25).forEach(h => {
       html += `
         <div class="history-item">
-          <span><span class="h-who">${esc(h.winner)}</span> — ${esc(h.book || '')}</span>
-          <span>Round ${h.round} · ${fmtDate(h.ts)}</span>
+          <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
+          <span class="h-content"><span class="h-who">${esc(h.winner)}</span> — ${esc(h.book || '')}</span>
+          <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
         </div>
       `;
     });
@@ -973,6 +1092,7 @@ function render() {
   app.innerHTML = html;
   wireUp();
   requestAnimationFrame(paintWheel);
+  decorateCovers();
 }
 
 function renderSetupNotice() {
