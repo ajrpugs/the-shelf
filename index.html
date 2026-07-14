@@ -357,12 +357,36 @@
     padding: 6px 0;
     font-size: 13px; color: var(--ink);
   }
-  .leader-row .lname{ min-width: 120px; font-family:'Fraunces', serif; font-weight: 600; }
+  .leader-avatar{
+    width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+    object-fit: cover;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  }
+  .leader-avatar-placeholder{
+    width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+    background: rgba(0,0,0,0.1);
+  }
+  .leader-row .lname{ min-width: 96px; font-family:'Fraunces', serif; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .leader-row .lbar{
     flex: 1; height: 8px; background: rgba(162,62,47,0.15); border-radius: 999px; overflow: hidden;
   }
   .leader-row .lbar > span{ display:block; height: 100%; background: var(--stamp); }
   .leader-row .lcount{ min-width: 24px; text-align: right; color: var(--ink-soft); font-size: 12px; }
+
+  /* Compact My Book card */
+  .my-book-card{ padding: 12px 14px; }
+  .my-book-row{ display: flex; gap: 8px; align-items: center; }
+  .my-book-row input{ flex: 1; }
+  .my-book-row button{ padding: 10px 16px; font-size: 12px; }
+  .my-book-status{ font-size: 11.5px; margin-top: 8px; color: var(--ink-soft); font-style: italic; }
+  .my-book-status.waiting{ color: var(--stamp); font-style: normal; }
+  .my-book-status.active{ color: var(--green); }
+  .link-clear{
+    background: none; border: none; padding: 0 0 0 4px;
+    font: inherit; text-transform: none; letter-spacing: 0;
+    color: var(--stamp); text-decoration: underline; cursor: pointer;
+    font-weight: 400; font-size: inherit;
+  }
 
   footer{
     text-align:center; margin-top: 40px; font-size: 11px; color: var(--muted);
@@ -583,7 +607,7 @@ async function callAdmin(action, payload = {}) {
     const prevRound = state.roundNumber;
     if (body.state) state = normalizeState(body.state);
     if (body.roundAdvanced && state.roundNumber > prevRound) {
-      setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back on the wheel.`);
+      setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back on the shelf.`);
     }
     render();
   } catch (err) {
@@ -596,7 +620,7 @@ function promptLibrarianPassword(retryAction, retryPayload) {
   back.className = "modal-back";
   back.innerHTML = `
     <div class="modal">
-      <h3>Librarian Mode</h3>
+      <h3>Librarian mode</h3>
       <p>Enter the admin password to unlock spinning the wheel and resetting the shelf.</p>
       <input type="password" id="pw-input" autocomplete="current-password" placeholder="Password" />
       <div class="modal-actions">
@@ -895,7 +919,7 @@ async function spinToWinner(canvas, entries, winnerIdx) {
 async function runDraw() {
   if (spinning) return;
   const entries = eligibleEntries();
-  if (entries.length === 0) { setFlash("err", "No eligible readers to spin — everyone needs a book set."); return; }
+  if (entries.length === 0) { setFlash("err", "No eligible readers — everyone needs a book set."); return; }
   const pw = getAdminPw();
   if (!pw) { promptLibrarianPassword("draw", {}); return; }
 
@@ -903,7 +927,7 @@ async function runDraw() {
   const btn = document.getElementById("spin-btn");
   if (!canvas) return;
   spinning = true;
-  if (btn) { btn.disabled = true; btn.textContent = "Spinning…"; }
+  if (btn) { btn.disabled = true; btn.textContent = "Choosing…"; }
 
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-update`, {
@@ -938,7 +962,7 @@ async function runDraw() {
     const prevRound = state.roundNumber;
     if (body.state) state = normalizeState(body.state);
     if (body.roundAdvanced && state.roundNumber > prevRound) {
-      setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back on the wheel.`);
+      setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back on the shelf.`);
     }
     render();
   } catch (err) {
@@ -964,16 +988,43 @@ function fmtDate(iso) {
 
 function computeStats() {
   const total = state.history.length;
-  const perName = {};
+  // Aggregate leaderboard by winner_id when present (survives username changes),
+  // fall back to name for legacy entries without an id.
+  const perUser = {};
   state.history.forEach(h => {
-    perName[h.winner_username] = (perName[h.winner_username] || 0) + 1;
+    const key = h.winner_id || `name:${h.winner_username}`;
+    if (!perUser[key]) {
+      perUser[key] = {
+        name: h.winner_username,
+        avatar: h.winner_id ? userAvatar(h.winner_id) : null,
+        count: 0,
+      };
+    } else if (!perUser[key].avatar && h.winner_id) {
+      perUser[key].avatar = userAvatar(h.winner_id);
+    }
+    perUser[key].count++;
   });
-  const leaderboard = Object.entries(perName).sort((a, b) => b[1] - a[1]);
-  const maxPicks = leaderboard.reduce((m, [, c]) => Math.max(m, c), 0);
+  const leaderboard = Object.values(perUser).sort((a, b) => b.count - a.count);
+  const maxPicks = leaderboard.reduce((m, e) => Math.max(m, e.count), 0);
+
   const picksThisRound = state.eliminated.length;
   const submittedCount = eligibleEntries().length;
   const regulars = new Set(state.history.map(h => h.winner_username)).size;
-  return { total, leaderboard, maxPicks, picksThisRound, submittedCount, regulars };
+  const roundsFinished = Math.max(0, state.roundNumber - 1);
+  const totalReaders = users.length;
+  const wonUserIds = new Set(state.history.map(h => h.winner_id).filter(Boolean));
+  const neverPicked = users.filter(u => !wonUserIds.has(u.id)).length;
+  const monthAgo = Date.now() - 30 * 24 * 3600 * 1000;
+  const booksThisMonth = state.history.filter(h => {
+    const t = new Date(h.ts).getTime();
+    return Number.isFinite(t) && t > monthAgo;
+  }).length;
+  const perRoundAvg = roundsFinished > 0 ? (total / roundsFinished).toFixed(1) : "—";
+
+  return {
+    total, leaderboard, maxPicks, picksThisRound, submittedCount, regulars,
+    roundsFinished, totalReaders, neverPicked, booksThisMonth, perRoundAvg
+  };
 }
 
 function userAvatar(userId) {
@@ -1047,31 +1098,29 @@ function render() {
     `;
   }
 
-  // ---- My Book ----
+  // ---- My book ----
   html += `
     <section>
-      <div class="section-title">My Book</div>
-      <div class="card no-rule">
-        <div class="submit-form">
-          <label for="my-book">I want to read</label>
-          <input type="text" id="my-book" placeholder="Any book you'd like the club to read" value="${attr(myBook)}" autocomplete="off" />
-          <button class="btn-primary" id="save-book">${myBook ? 'Update my pick' : 'Add to the wheel'}</button>
-          ${myBook ? `<button class="btn-mini remove" id="clear-book" style="margin-top: 4px;">Clear my book</button>` : ''}
+      <div class="section-title">My book</div>
+      <div class="card no-rule my-book-card">
+        <div class="my-book-row">
+          <input type="text" id="my-book" placeholder="What you'd like to read" value="${attr(myBook)}" autocomplete="off" />
+          <button class="btn-primary" id="save-book">Save</button>
         </div>
         ${iAmEliminated
-          ? `<div class="submit-warning">You've been picked this round. Your next book will land on the wheel once the round rolls over.</div>`
+          ? `<div class="my-book-status waiting">Picked this round — see you next round.</div>`
           : myBook
-            ? `<div class="submit-status">Your book is on the wheel. Change it any time — the update is instant.</div>`
-            : `<div class="submit-hint">Add a book to join the wheel. It stays across rounds unless you clear it.</div>`
+            ? `<div class="my-book-status active">On the shelf<button class="link-clear" id="clear-book">clear</button></div>`
+            : `<div class="my-book-status">Add a book to join the shelf.</div>`
         }
       </div>
     </section>
   `;
 
-  // ---- On the Wheel ----
-  html += `<section><div class="section-title">On the Wheel</div>`;
+  // ---- On the shelf ----
+  html += `<section><div class="section-title">On the shelf</div>`;
   if (eligibleSubs.length === 0) {
-    html += `<div class="empty-note">The wheel is empty. Be the first to add a book above.</div>`;
+    html += `<div class="empty-note">The shelf is empty. Be the first to add a book above.</div>`;
   } else {
     eligibleSubs.forEach(entry => {
       html += `
@@ -1092,29 +1141,29 @@ function render() {
   }
   html += `</section>`;
 
-  // ---- Spin the Wheel ----
-  html += `<section><div class="section-title">Spin the Wheel</div>`;
+  // ---- Choose our next read ----
+  html += `<section><div class="section-title">Choose our next read</div>`;
   if (eligibleCount === 0) {
-    html += `<div class="wheel-empty">Add a book above to fill the wheel.</div>`;
+    html += `<div class="wheel-empty">Add a book above to fill the shelf.</div>`;
   } else {
     html += `
       <div class="wheel-holder">
         <div class="wheel-pointer"></div>
         <canvas id="wheel-canvas" class="wheel-canvas"></canvas>
       </div>
-      <div class="spin-caption">${eligibleCount} book${eligibleCount === 1 ? '' : 's'} on the wheel</div>
+      <div class="spin-caption">${eligibleCount} book${eligibleCount === 1 ? '' : 's'} on the shelf</div>
     `;
   }
   html += `<div class="spin-actions">`;
   if (admin) {
-    html += `<button class="btn-primary" id="spin-btn" ${(eligibleCount === 0 || spinning) ? 'disabled' : ''}>${spinning ? 'Spinning…' : 'Spin the Wheel'}</button>`;
+    html += `<button class="btn-primary" id="spin-btn" ${(eligibleCount === 0 || spinning) ? 'disabled' : ''}>${spinning ? 'Choosing…' : 'Choose our next read'}</button>`;
   } else {
-    html += `<div style="font-size: 12px; color: var(--muted); font-style: italic;">Only the librarian can spin the wheel.</div>`;
+    html += `<div style="font-size: 12px; color: var(--muted); font-style: italic;">Only the librarian can choose the next read.</div>`;
   }
   html += `</div></section>`;
 
-  // ---- Past Reads ----
-  html += `<section><div class="section-title">Past Reads</div>`;
+  // ---- Past reads ----
+  html += `<section><div class="section-title">Past reads</div>`;
   if (state.history.length === 0) {
     html += `<div class="empty-note">No picks recorded yet.</div>`;
   } else {
@@ -1141,12 +1190,27 @@ function render() {
   html += `
     <div class="stat-grid">
       <div class="stat-card">
-        <div class="stat-label">Books Read</div>
+        <div class="stat-label">Books read</div>
         <div class="stat-number">${stats.total}</div>
         <div class="stat-suffix">all rounds</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">This Round</div>
+        <div class="stat-label">Rounds finished</div>
+        <div class="stat-number">${stats.roundsFinished}</div>
+        <div class="stat-suffix">so far</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Readers</div>
+        <div class="stat-number">${stats.totalReaders}</div>
+        <div class="stat-suffix">signed in</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">On the shelf</div>
+        <div class="stat-number">${stats.submittedCount}</div>
+        <div class="stat-suffix">awaiting the pick</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">This round</div>
         <div class="stat-number">${stats.picksThisRound}</div>
         <div class="stat-suffix">picked so far</div>
       </div>
@@ -1156,22 +1220,31 @@ function render() {
         <div class="stat-suffix">unique winners</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">On the Wheel</div>
-        <div class="stat-number">${stats.submittedCount}</div>
-        <div class="stat-suffix">awaiting the spin</div>
+        <div class="stat-label">Never picked</div>
+        <div class="stat-number">${stats.neverPicked}</div>
+        <div class="stat-suffix">still waiting</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">This month</div>
+        <div class="stat-number">${stats.booksThisMonth}</div>
+        <div class="stat-suffix">books picked</div>
       </div>
     </div>
   `;
   if (stats.total > 0) {
     html += `<div class="card no-rule" style="margin-top: 12px;">`;
-    html += `<div style="font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:var(--stamp); margin-bottom: 10px;">Reads by Reader</div>`;
-    stats.leaderboard.forEach(([name, count]) => {
-      const pct = stats.maxPicks > 0 ? Math.max(4, Math.round((count / stats.maxPicks) * 100)) : 0;
+    html += `<div style="font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:var(--stamp); margin-bottom: 10px;">Reads by reader</div>`;
+    stats.leaderboard.forEach(entry => {
+      const pct = stats.maxPicks > 0 ? Math.max(4, Math.round((entry.count / stats.maxPicks) * 100)) : 0;
+      const avatarEl = entry.avatar
+        ? `<img class="leader-avatar" src="${attr(entry.avatar)}" alt="">`
+        : `<span class="leader-avatar-placeholder"></span>`;
       html += `
         <div class="leader-row">
-          <div class="lname">${esc(name)}</div>
+          ${avatarEl}
+          <div class="lname">${esc(entry.name)}</div>
           <div class="lbar"><span style="width: ${pct}%;"></span></div>
-          <div class="lcount">${count}</div>
+          <div class="lcount">${entry.count}</div>
         </div>
       `;
     });
