@@ -15,6 +15,69 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const PUBLIC_KEY = Deno.env.get("DISCORD_PUBLIC_KEY") ?? "";
 
+// --- Open Library cover + Discord post ---------------------------------------
+
+function normalizeForMatch(s: string): string {
+  return (s || "")
+    .replace(/\s+by\s+.+$/i, "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/^\s*(the|a|an)\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function parseTitleAuthor(raw: string): { title: string; author: string | null } {
+  const m = (raw || "").match(/^(.+?)\s+by\s+(.+)$/i);
+  return m ? { title: m[1].trim(), author: m[2].trim() } : { title: (raw || "").trim(), author: null };
+}
+async function fetchCover(rawTitle: string): Promise<string | null> {
+  const { title, author } = parseTitleAuthor(rawTitle);
+  if (!title) return null;
+  const params = new URLSearchParams({ title, limit: "5", fields: "title,cover_i" });
+  if (author) params.set("author", author);
+  const url = `https://openlibrary.org/search.json?${params.toString()}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const body = await res.json();
+    const docs = (body.docs ?? []) as Array<{ title?: string; cover_i?: number }>;
+    const normTitle = normalizeForMatch(title);
+    for (const doc of docs) {
+      if (!doc.cover_i) continue;
+      const resultNorm = normalizeForMatch(doc.title || "");
+      if (!resultNorm) continue;
+      const matches = resultNorm === normTitle || resultNorm.includes(normTitle) || normTitle.includes(resultNorm);
+      if (!matches) continue;
+      return `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`;
+    }
+    return null;
+  } catch { return null; }
+}
+async function postBookSet(webhookUrl: string, args: {
+  book: string; cover: string | null; username: string;
+  avatarUrl: string | null; previousBook: string | null;
+}): Promise<void> {
+  const embed: Record<string, unknown> = {
+    title: args.book,
+    description: args.previousBook ? `Changed from *${args.previousBook}*.` : `Added to the shelf.`,
+    color: 0x6a8672,
+    footer: { text: "The Shelf · book updated" },
+    timestamp: new Date().toISOString(),
+  };
+  if (args.cover) embed.thumbnail = { url: args.cover };
+  if (args.avatarUrl) embed.author = { name: args.username, icon_url: args.avatarUrl };
+  const content = args.previousBook
+    ? `📚 **${args.username}** updated their pick.`
+    : `📚 **${args.username}** just added a book to the shelf.`;
+  try {
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, embeds: [embed] }),
+    });
+  } catch (err) { console.error("Discord webhook error:", err); }
+}
+
 // --- Ed25519 signature verification ------------------------------------------
 
 function hexToBytes(hex: string): Uint8Array {
@@ -96,7 +159,7 @@ async function handleMyBook(interaction: any) {
 
   const { data: user, error: lookupErr } = await client
     .from("shelf_users")
-    .select("id, discord_username, book")
+    .select("id, discord_username, avatar_url, book")
     .eq("discord_id", discordUserId)
     .maybeSingle();
   if (lookupErr) {
@@ -108,6 +171,8 @@ async function handleMyBook(interaction: any) {
       `Hey ${discordUsername} — you need to sign in on the web once first so The Shelf knows you: https://ajrpugs.github.io/the-shelf/`,
     );
   }
+
+  const prevBook = (user.book ?? "").trim();
 
   if (!bookTitle) {
     const { error } = await client.from("shelf_users").update({ book: null }).eq("id", user.id);
@@ -121,8 +186,22 @@ async function handleMyBook(interaction: any) {
     .eq("id", user.id);
   if (error) return reply("Couldn't save your book. Try again.");
 
-  const changed = (user.book ?? "").trim() && (user.book ?? "").trim() !== bookTitle;
-  const verb = changed ? "Updated" : "Set";
+  // Post to the channel only when a book was actually set or changed.
+  if (bookTitle !== prevBook) {
+    const webhookUrl = Deno.env.get("DISCORD_WEBHOOK_URL");
+    if (webhookUrl) {
+      const cover = await fetchCover(bookTitle);
+      await postBookSet(webhookUrl, {
+        book: bookTitle,
+        cover,
+        username: user.discord_username || discordUsername,
+        avatarUrl: user.avatar_url ?? null,
+        previousBook: prevBook || null,
+      });
+    }
+  }
+
+  const verb = prevBook ? "Updated" : "Set";
   return reply(`📚 ${verb} your pick to **${bookTitle}**. You're on the shelf.`);
 }
 

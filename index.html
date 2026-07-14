@@ -801,15 +801,23 @@ async function setMyBook(book) {
   if (!session) return;
   book = (book || "").trim();
   try {
-    const { data, error } = await supabase
-      .from("shelf_users")
-      .update({ book: book || null, updated_at: new Date().toISOString() })
-      .eq("id", session.user.id)
-      .select().single();
-    if (error) throw error;
-    myUserRow = data;
-    const idx = users.findIndex(u => u.id === data.id);
-    if (idx >= 0) users[idx] = data; else users.push(data);
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/set-book`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ book }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      throw new Error(t || res.statusText);
+    }
+    const body = await res.json();
+    myUserRow = body.user;
+    const idx = users.findIndex(u => u.id === body.user.id);
+    if (idx >= 0) users[idx] = body.user; else users.push(body.user);
     setFlash("info", book ? `Your pick: "${book}".` : "Cleared your book.");
     render();
   } catch (err) {
