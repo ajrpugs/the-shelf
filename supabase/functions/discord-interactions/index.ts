@@ -27,7 +27,7 @@ function normalizeForMatch(s: string): string {
     .trim();
 }
 function parseTitleAuthor(raw: string): { title: string; author: string | null } {
-  const m = (raw || "").match(/^(.+?)\s+by\s+(.+)$/i);
+  const m = (raw || "").match(/^(.+?)\s+(?:by|[-–—])\s+(.+)$/i);
   return m ? { title: m[1].trim(), author: m[2].trim() } : { title: (raw || "").trim(), author: null };
 }
 async function fetchCover(rawTitle: string): Promise<string | null> {
