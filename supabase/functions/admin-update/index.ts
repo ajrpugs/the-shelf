@@ -283,6 +283,19 @@ Deno.serve(async (req) => {
         if (error) throw error;
         break;
       }
+      case "admin_set_book": {
+        // Librarian typo-fixes a reader's pick. Deliberately does NOT post to
+        // Discord (unlike set-book) — it's a silent correction.
+        const userId = String(payload.user_id ?? "");
+        if (!userId) throw new Error("user_id required");
+        const bookVal = String(payload.book ?? "").trim();
+        const { error } = await client
+          .from("shelf_users")
+          .update({ book: bookVal || null, updated_at: new Date().toISOString() })
+          .eq("id", userId);
+        if (error) throw error;
+        break;
+      }
       case "admin_remove_user": {
         const userId = String(payload.user_id ?? "");
         if (!userId) throw new Error("user_id required");
