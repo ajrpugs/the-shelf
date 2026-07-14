@@ -1099,6 +1099,7 @@ function computeStats() {
   // fall back to name for legacy entries without an id.
   const perUser = {};
   state.history.forEach(h => {
+    if (!h.winner_id && !h.winner_username) return; // anonymous pick — off the leaderboard
     const key = h.winner_id || `name:${h.winner_username}`;
     if (!perUser[key]) {
       perUser[key] = {
@@ -1116,7 +1117,7 @@ function computeStats() {
 
   const picksThisRound = state.eliminated.length;
   const submittedCount = eligibleEntries().length;
-  const regulars = new Set(state.history.map(h => h.winner_username)).size;
+  const regulars = new Set(state.history.map(h => h.winner_username).filter(Boolean)).size;
   const roundsFinished = Math.max(0, state.roundNumber - 1);
   const totalReaders = users.length;
   const wonUserIds = new Set(state.history.map(h => h.winner_id).filter(Boolean));
@@ -1281,8 +1282,9 @@ function render() {
         <div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
           <span class="h-content">
-            ${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}
-            <span class="h-who">${esc(h.winner_username)}</span> — ${esc(h.book || '')}
+            ${h.winner_username
+              ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<span class="h-who">${esc(h.winner_username)}</span> — ${esc(h.book || '')}`
+              : esc(h.book || '')}
           </span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
         </div>
