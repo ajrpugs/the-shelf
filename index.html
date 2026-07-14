@@ -330,8 +330,16 @@
   }
   .history-item:last-child{ border-bottom: none; }
   .history-item .h-content{ flex: 1; min-width: 0; }
+  .history-item .h-trail{ display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .history-item .h-meta{ white-space: nowrap; }
   .history-item .h-who{ color: var(--ink); font-weight: 700; }
+  /* On phones, let the title keep the first line and drop the score+date below it */
+  @media (max-width: 480px){
+    .history-item{ flex-wrap: wrap; row-gap: 4px; }
+    .history-item .h-content{ flex-basis: calc(100% - 40px); }
+    .history-item .h-trail{ margin-left: 38px; }
+    .history-item .h-meta{ font-size: 11px; }
+  }
   .empty-note{ font-size: 12.5px; color: var(--muted); padding: 6px 2px; }
 
   /* Book metadata: "· 1984 · 317pp" */
@@ -407,11 +415,17 @@
   .reader-avatar-ph{ background: rgba(236,227,207,0.10); border: 1px solid var(--panel-border); }
   .reader-name{ font-family: 'Fraunces', serif; font-weight: 700; font-size: 26px; color: var(--card); }
   .stat-grid.reader-stats{ grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 560px){ .stat-grid.reader-stats{ grid-template-columns: repeat(2, 1fr); } }
   .stat-card .stat-number.band-exc{ color: var(--green); }
   .stat-card .stat-number.band-great{ color: var(--brass); }
   .stat-card .stat-number.band-good{ color: var(--muted); }
   .stat-card .stat-number.band-bad{ color: var(--stamp); }
   .reader-shelf{ margin-top: 12px; display: flex; align-items: center; flex-wrap: wrap; }
+  .reader-extra{
+    margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px 20px;
+    font-size: 13px; color: var(--ink-soft);
+  }
+  .reader-extra b{ color: var(--ink); font-weight: 700; }
 
   /* Book covers (Open Library) */
   .cover-slot{
@@ -1833,8 +1847,10 @@ function render() {
               ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — <a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`
               : `<a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
           </span>
-          ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
-          <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+          <span class="h-trail">
+            ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
+            <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+          </span>
         </div>
       `;
     });
@@ -2159,7 +2175,7 @@ async function decorateTagPage(tag) {
         <span class="h-content">
           ${h.winner_username ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — ` : ''}<a class="book-link" href="#book=${h.round}">${esc(h.book)}</a><span class="book-meta" data-meta-title="${attr(h.book)}"></span>
         </span>
-        <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+        <span class="h-trail"><span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span></span>
       </div>`;
   }).join("");
   decorateCovers();
@@ -2218,6 +2234,13 @@ function renderReaderPage(app, key) {
       <div class="stat-card"><div class="stat-label">Worst</div><div class="stat-number ${ratingBand(worst) ? ratingBand(worst).cls : ''}">${worst != null ? worst : '—'}</div><div class="stat-suffix">lowest pick</div></div>
     </div>`;
 
+  if (picks.length) {
+    html += `<div class="card no-rule reader-extra">
+      <span class="reader-extra-item">📖 <b id="reader-pages">…</b> pages picked</span>
+      <span class="reader-extra-item">🏷️ Favorite genre: <b id="reader-genre">…</b></span>
+    </div>`;
+  }
+
   if (shelfBook) {
     html += `<div class="card no-rule reader-shelf"><span class="mini-head" style="margin:0 10px 0 0;">On the shelf now</span><a class="book-link" href="#shelf=${encodeURIComponent(userId)}">${esc(shelfBook)}</a></div>`;
   }
@@ -2234,8 +2257,10 @@ function renderReaderPage(app, key) {
         <div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
           <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a><span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
-          ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
-          <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+          <span class="h-trail">
+            ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
+            <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+          </span>
         </div>`;
     });
     html += `</div>`;
@@ -2245,6 +2270,26 @@ function renderReaderPage(app, key) {
   app.innerHTML = html;
   decorateCovers();
   decorateMeta();
+  decorateReaderExtra(picks.map(h => h.book).filter(Boolean));
+}
+
+// Pages picked + favorite genre for a reader, from the metadata of their picks.
+async function decorateReaderExtra(books) {
+  if (!document.getElementById("reader-pages")) return;
+  const metas = await Promise.all(books.map(resolveBookMeta));
+  if (parseRoute().name !== "reader") return; // navigated away
+  let pages = 0;
+  const tally = {};
+  metas.forEach(m => {
+    if (m && m.pages) pages += m.pages;
+    const seen = new Set();
+    cleanSubjects(m && m.subjects).forEach(s => { if (!seen.has(s)) { seen.add(s); tally[s] = (tally[s] || 0) + 1; } });
+  });
+  const top = Object.entries(tally).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+  const pg = document.getElementById("reader-pages");
+  const gn = document.getElementById("reader-genre");
+  if (pg) pg.textContent = pages ? pages.toLocaleString() : "—";
+  if (gn) gn.textContent = top ? titleCase(top[0]) : "—";
 }
 
 function renderLoginGate() {
