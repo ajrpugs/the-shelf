@@ -29,8 +29,10 @@ create table if not exists public.shelf_users (
   discord_username text not null default 'Reader',
   avatar_url text,
   book text,
+  discord_id text,
   updated_at timestamptz default now()
 );
+create index if not exists shelf_users_discord_id_idx on public.shelf_users(discord_id);
 
 alter table public.shelf_users enable row level security;
 

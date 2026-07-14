@@ -734,10 +734,18 @@ function displayNameFromMeta(user) {
 async function ensureUserRow(user) {
   const username = displayNameFromMeta(user);
   const avatar = user.user_metadata?.avatar_url || null;
+  const discordId = user.user_metadata?.provider_id
+    || user.user_metadata?.sub
+    || user.identities?.find(i => i.provider === "discord")?.id
+    || null;
   const { data, error } = await supabase
     .from("shelf_users")
-    .upsert({ id: user.id, discord_username: username, avatar_url: avatar },
-            { onConflict: "id" })
+    .upsert({
+      id: user.id,
+      discord_username: username,
+      avatar_url: avatar,
+      discord_id: discordId,
+    }, { onConflict: "id" })
     .select().single();
   if (error) { setFlash("err", `Sign-in setup: ${error.message}`); return; }
   myUserRow = data;
