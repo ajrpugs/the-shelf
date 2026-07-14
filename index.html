@@ -531,13 +531,34 @@ function normalizeState(raw) {
 // ---------- Book metadata (Open Library) ----------
 // One lookup per title fetches cover + first-published year + page count +
 // subjects, cached together in localStorage. resolveCover stays as a thin
-// wrapper so the wheel/cover slots keep working.
-const META_CACHE_KEY = "shelf-bookmeta-v1";
+// wrapper so the wheel/cover slots keep working. Lookups run through a small
+// concurrency-limited queue so we don't fire ~20 requests at Open Library at
+// once, and misses are NOT persisted so they retry on the next visit.
+const META_CACHE_KEY = "shelf-bookmeta-v2";
 let bookMetaCache = {};
 try { bookMetaCache = JSON.parse(localStorage.getItem(META_CACHE_KEY) || "{}") || {}; }
 catch { bookMetaCache = {}; }
 const pendingMeta = new Map();
 const EMPTY_META = { cover: null, year: null, pages: null, subjects: [] };
+const metaHasData = (m) => !!(m && (m.cover || m.year || m.pages || (m.subjects && m.subjects.length)));
+
+// Tiny concurrency limiter — at most N Open Library requests in flight.
+const META_MAX_CONCURRENT = 4;
+let metaInFlight = 0;
+const metaQueue = [];
+function pumpMetaQueue() {
+  while (metaInFlight < META_MAX_CONCURRENT && metaQueue.length) {
+    const job = metaQueue.shift();
+    metaInFlight++;
+    job().finally(() => { metaInFlight--; pumpMetaQueue(); });
+  }
+}
+function enqueueMeta(fn) {
+  return new Promise((resolve, reject) => {
+    metaQueue.push(() => fn().then(resolve, reject));
+    pumpMetaQueue();
+  });
+}
 
 function normalizeForMatch(s) {
   return (s || "")
@@ -563,8 +584,10 @@ async function fetchBookMeta(rawTitle) {
     fields: "title,author_name,cover_i,first_publish_year,number_of_pages_median,subject",
   });
   if (author) params.set("author", author);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
   try {
-    const res = await fetch(`https://openlibrary.org/search.json?${params.toString()}`);
+    const res = await fetch(`https://openlibrary.org/search.json?${params.toString()}`, { signal: ctrl.signal });
     if (!res.ok) return { ...EMPTY_META };
     const body = await res.json();
     const docs = body.docs || [];
@@ -591,6 +614,7 @@ async function fetchBookMeta(rawTitle) {
       subjects: Array.isArray(metaDoc.subject) ? metaDoc.subject.slice(0, 25) : [],
     };
   } catch { return { ...EMPTY_META }; }
+  finally { clearTimeout(timer); }
 }
 
 async function resolveBookMeta(rawTitle) {
@@ -598,15 +622,17 @@ async function resolveBookMeta(rawTitle) {
   if (!key) return { ...EMPTY_META };
   if (key in bookMetaCache) return bookMetaCache[key];
   if (pendingMeta.has(key)) return pendingMeta.get(key);
-  const promise = fetchBookMeta(rawTitle).then(meta => {
-    bookMetaCache[key] = meta;
-    try { localStorage.setItem(META_CACHE_KEY, JSON.stringify(bookMetaCache)); } catch {}
+  const promise = enqueueMeta(() => fetchBookMeta(rawTitle)).then(meta => {
+    // Only persist real hits — a miss (network blip, no match) stays uncached
+    // so the next visit retries instead of showing a permanent blank.
+    if (metaHasData(meta)) {
+      bookMetaCache[key] = meta;
+      try { localStorage.setItem(META_CACHE_KEY, JSON.stringify(bookMetaCache)); } catch {}
+    }
     return meta;
-  });
+  }).finally(() => { pendingMeta.delete(key); });
   pendingMeta.set(key, promise);
-  const result = await promise;
-  pendingMeta.delete(key);
-  return result;
+  return promise;
 }
 
 async function resolveCover(rawTitle) {
