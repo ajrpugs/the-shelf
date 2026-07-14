@@ -846,6 +846,31 @@ function eligibleEntries() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Book-cover images drawn as the background of each wheel slice. Kept as live
+// <img> elements (canvas can only draw already-loaded images) keyed by reader
+// id, and re-resolved when a reader's book changes.
+const wheelCoverImages = {}; // id -> { book, img: HTMLImageElement | null }
+
+function ensureWheelCover(entry) {
+  const book = entry.book || "";
+  const cached = wheelCoverImages[entry.id];
+  if (cached && cached.book === book) return cached;
+  const record = { book, img: null };
+  wheelCoverImages[entry.id] = record;
+  resolveCover(book).then(url => {
+    if (wheelCoverImages[entry.id] !== record || !url) return;
+    const img = new Image();
+    img.onload = () => { if (!spinning) paintWheel(); };
+    img.src = url;
+    record.img = img;
+  });
+  return record;
+}
+
+function preloadWheelCovers(entries) {
+  entries.forEach(ensureWheelCover);
+}
+
 function drawWheel(canvas, entries, rotation) {
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -883,22 +908,55 @@ function drawWheel(canvas, entries, rotation) {
   entries.forEach((entry, i) => {
     const start = i * anglePer - Math.PI / 2;
     const end = start + anglePer;
+    const mid = (start + end) / 2;
 
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.arc(0, 0, radius, start, end);
-    ctx.closePath();
+    // Wedge path — used both as the fill region and as a clip for the cover.
+    function wedgePath() {
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, radius, start, end);
+      ctx.closePath();
+    }
+
+    // Base color: a fallback for readers with no cover, and a tint underneath.
+    wedgePath();
     ctx.fillStyle = WHEEL_COLORS[i % WHEEL_COLORS.length];
     ctx.fill();
+
+    // Cover art as the slice background, clipped to the wedge and cover-fit so
+    // it fills the whole slab. A dark wash over it keeps the cream text legible.
+    const rec = wheelCoverImages[entry.id];
+    const img = rec && rec.img;
+    if (img && img.complete && img.naturalWidth > 0) {
+      ctx.save();
+      wedgePath();
+      ctx.clip();
+      ctx.rotate(mid); // slice mid-line now runs along +x
+      const half = anglePer / 2;
+      const boxW = radius;
+      const boxH = 2 * radius * Math.sin(half);
+      const scale = Math.max(boxW / img.naturalWidth, boxH / img.naturalHeight);
+      const dw = img.naturalWidth * scale;
+      const dh = img.naturalHeight * scale;
+      ctx.drawImage(img, boxW / 2 - dw / 2, -dh / 2, dw, dh);
+      ctx.fillStyle = "rgba(20, 16, 12, 0.46)";
+      ctx.fillRect(0, -radius, radius + 2, 2 * radius);
+      ctx.restore();
+    }
+
+    // Slice outline, drawn last so it sits on top of the cover.
+    wedgePath();
     ctx.strokeStyle = "rgba(15, 15, 15, 0.35)";
     ctx.lineWidth = 1;
     ctx.stroke();
 
     ctx.save();
-    const mid = (start + end) / 2;
     ctx.rotate(mid);
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
+    // Shadow so text holds up over any cover art behind it.
+    ctx.shadowColor = "rgba(0, 0, 0, 0.7)";
+    ctx.shadowBlur = 4;
 
     const bookFont = `600 ${bookFontSize}px "Fraunces", serif`;
     const nameFont = `italic ${nameFontSize}px "Fraunces", serif`;
@@ -936,7 +994,9 @@ function drawWheel(canvas, entries, rotation) {
 function paintWheel() {
   const canvas = document.getElementById("wheel-canvas");
   if (!canvas) return;
-  drawWheel(canvas, eligibleEntries(), 0);
+  const entries = eligibleEntries();
+  preloadWheelCovers(entries);
+  drawWheel(canvas, entries, 0);
 }
 
 async function spinToWinner(canvas, entries, winnerIdx) {
@@ -966,6 +1026,7 @@ async function runDraw() {
   if (spinning) return;
   const entries = eligibleEntries();
   if (entries.length === 0) { setFlash("err", "No eligible readers — everyone needs a book set."); return; }
+  preloadWheelCovers(entries);
   const pw = getAdminPw();
   if (!pw) { promptLibrarianPassword("draw", {}); return; }
 
