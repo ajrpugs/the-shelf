@@ -415,8 +415,10 @@ const SAVED_NAME_KEY = "shelf-my-name";
 const savedName = () => localStorage.getItem(SAVED_NAME_KEY) || "";
 const saveName = (name) => localStorage.setItem(SAVED_NAME_KEY, name);
 
-// ---------- Book covers ----------
-const COVER_CACHE_KEY = "shelf-covers-v1";
+// ---------- Book covers (Open Library) ----------
+// Bump the cache key so old null entries (from the previous provider) don't
+// stick around and silently suppress covers.
+const COVER_CACHE_KEY = "shelf-covers-v2";
 let coverCache = {};
 try { coverCache = JSON.parse(localStorage.getItem(COVER_CACHE_KEY) || "{}") || {}; }
 catch { coverCache = {}; }
@@ -437,30 +439,31 @@ function parseTitleAuthor(raw) {
   return m ? { title: m[1].trim(), author: m[2].trim() } : { title: (raw || "").trim(), author: null };
 }
 
-async function fetchCoverFromGoogle(rawTitle) {
+async function fetchCoverFromOpenLibrary(rawTitle) {
   const { title, author } = parseTitleAuthor(rawTitle);
   if (!title) return null;
-  const q = author
-    ? `intitle:${encodeURIComponent(title)}+inauthor:${encodeURIComponent(author)}`
-    : `intitle:${encodeURIComponent(title)}`;
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=5&printType=books&fields=items(volumeInfo(title,imageLinks))`;
+  const params = new URLSearchParams({
+    title,
+    limit: "5",
+    fields: "title,author_name,cover_i",
+  });
+  if (author) params.set("author", author);
+  const url = `https://openlibrary.org/search.json?${params.toString()}`;
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
     const body = await res.json();
-    const items = body.items || [];
+    const docs = body.docs || [];
     const normTitle = normalizeForMatch(title);
-    for (const item of items) {
-      const info = item.volumeInfo || {};
-      if (!info.imageLinks) continue;
-      const resultNorm = normalizeForMatch(info.title || "");
+    for (const doc of docs) {
+      if (!doc.cover_i) continue;
+      const resultNorm = normalizeForMatch(doc.title || "");
       if (!resultNorm) continue;
       const matches = resultNorm === normTitle
         || resultNorm.includes(normTitle)
         || normTitle.includes(resultNorm);
       if (!matches) continue;
-      const thumb = info.imageLinks.thumbnail || info.imageLinks.smallThumbnail || "";
-      return thumb ? thumb.replace(/^http:/, "https:") : null;
+      return `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`;
     }
     return null;
   } catch { return null; }
@@ -471,7 +474,7 @@ async function resolveCover(rawTitle) {
   if (!key) return null;
   if (key in coverCache) return coverCache[key];
   if (pendingCovers.has(key)) return pendingCovers.get(key);
-  const promise = fetchCoverFromGoogle(rawTitle).then(url => {
+  const promise = fetchCoverFromOpenLibrary(rawTitle).then(url => {
     coverCache[key] = url || null;
     try { localStorage.setItem(COVER_CACHE_KEY, JSON.stringify(coverCache)); } catch {}
     return coverCache[key];
