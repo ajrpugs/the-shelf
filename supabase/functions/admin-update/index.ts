@@ -51,35 +51,74 @@ function parseTitleAuthor(raw: string): { title: string; author: string | null }
     : { title: (raw || "").trim(), author: null };
 }
 
-async function fetchCover(rawTitle: string): Promise<string | null> {
-  const { title, author } = parseTitleAuthor(rawTitle);
-  if (!title) return null;
-  const params = new URLSearchParams({ title, limit: "5", fields: "title,cover_i" });
-  if (author) params.set("author", author);
-  const url = `https://openlibrary.org/search.json?${params.toString()}`;
+type BookMeta = {
+  cover: string | null;
+  year: number | null;
+  pages: number | null;
+  description: string | null;
+};
+
+async function fetchWorkDescription(key: string): Promise<string | null> {
   try {
-    const res = await fetch(url);
+    const res = await fetch(`https://openlibrary.org${key}.json`);
     if (!res.ok) return null;
+    const w = await res.json();
+    let d: unknown = (w as { description?: unknown }).description;
+    if (d && typeof d === "object") d = (d as { value?: string }).value;
+    if (typeof d !== "string") return null;
+    const first = d.replace(/\r/g, "").split("\n\n")[0].trim(); // lead paragraph
+    if (!first) return null;
+    return first.length > 600 ? first.slice(0, 597).trimEnd() + "…" : first;
+  } catch { return null; }
+}
+
+async function fetchBookMeta(rawTitle: string): Promise<BookMeta> {
+  const empty: BookMeta = { cover: null, year: null, pages: null, description: null };
+  const { title, author } = parseTitleAuthor(rawTitle);
+  if (!title) return empty;
+  const params = new URLSearchParams({
+    title,
+    limit: "5",
+    fields: "title,cover_i,first_publish_year,number_of_pages_median,key",
+  });
+  if (author) params.set("author", author);
+  try {
+    const res = await fetch(`https://openlibrary.org/search.json?${params.toString()}`);
+    if (!res.ok) return empty;
     const body = await res.json();
-    const docs = (body.docs ?? []) as Array<{ title?: string; cover_i?: number }>;
+    type OLDoc = { title?: string; cover_i?: number; first_publish_year?: number; number_of_pages_median?: number; key?: string };
+    const docs = (body.docs ?? []) as OLDoc[];
     const normTitle = normalizeForMatch(title);
+    let metaDoc: OLDoc | null = null;
+    let coverId: number | null = null;
     for (const doc of docs) {
-      if (!doc.cover_i) continue;
       const resultNorm = normalizeForMatch(doc.title || "");
       if (!resultNorm) continue;
       const matches = resultNorm === normTitle
         || resultNorm.includes(normTitle)
         || normTitle.includes(resultNorm);
       if (!matches) continue;
-      return `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`;
+      if (!metaDoc) metaDoc = doc;
+      if (coverId === null && doc.cover_i) coverId = doc.cover_i;
+      if (metaDoc && coverId !== null) break;
     }
-    return null;
-  } catch { return null; }
+    if (!metaDoc) return empty;
+    const description = metaDoc.key ? await fetchWorkDescription(metaDoc.key) : null;
+    return {
+      cover: coverId ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg` : null,
+      year: Number.isFinite(metaDoc.first_publish_year) ? metaDoc.first_publish_year! : null,
+      pages: Number.isFinite(metaDoc.number_of_pages_median) ? metaDoc.number_of_pages_median! : null,
+      description,
+    };
+  } catch { return empty; }
 }
 
 type DiscordArgs = {
   book: string;
   cover: string | null;
+  year: number | null;
+  pages: number | null;
+  description: string | null;
   username: string;
   avatarUrl: string | null;
   round: number;
@@ -87,9 +126,12 @@ type DiscordArgs = {
 };
 
 async function postToDiscord(webhookUrl: string, args: DiscordArgs): Promise<void> {
+  let description = `Picked by **${args.username}** for round ${args.round}.`;
+  if (args.description) description += `\n\n${args.description}`;
+
   const embed: Record<string, unknown> = {
     title: args.book || "—",
-    description: `Picked by **${args.username}** for round ${args.round}.`,
+    description,
     color: 0xc94a37,
     footer: {
       text: args.roundAdvanced
@@ -98,6 +140,10 @@ async function postToDiscord(webhookUrl: string, args: DiscordArgs): Promise<voi
     },
     timestamp: new Date().toISOString(),
   };
+  const fields: Array<Record<string, unknown>> = [];
+  if (args.year) fields.push({ name: "First published", value: String(args.year), inline: true });
+  if (args.pages) fields.push({ name: "Length", value: `${args.pages} pages`, inline: true });
+  if (fields.length) embed.fields = fields;
   if (args.cover) embed.thumbnail = { url: args.cover };
   if (args.avatarUrl) embed.author = { name: args.username, icon_url: args.avatarUrl };
 
@@ -260,10 +306,13 @@ Deno.serve(async (req) => {
   if (action === "draw" && winner) {
     const webhookUrl = Deno.env.get("DISCORD_WEBHOOK_URL");
     if (webhookUrl) {
-      const cover = await fetchCover(winner.book);
+      const meta = await fetchBookMeta(winner.book);
       await postToDiscord(webhookUrl, {
         book: winner.book,
-        cover,
+        cover: meta.cover,
+        year: meta.year,
+        pages: meta.pages,
+        description: meta.description,
         username: winner.winner_username,
         avatarUrl: winnerAvatarUrl,
         round: winner.round,
