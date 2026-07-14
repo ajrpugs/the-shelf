@@ -415,6 +415,13 @@
     text-align:center; margin-top: 40px; font-size: 11px; color: var(--muted);
   }
   footer button{ margin-top: 8px; margin-left: 4px; margin-right: 4px; }
+  .footer-link{
+    color: var(--brass);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--brass);
+  }
+  .footer-link:hover{ color: var(--brass-soft, var(--brass)); border-bottom-color: currentColor; }
+  .setup .footer-link{ border-bottom-color: var(--stamp); color: var(--stamp); }
 
   .loading{ text-align:center; padding: 60px 0; color: var(--brass); font-family:'Fraunces',serif; font-style: italic; }
 
@@ -1107,7 +1114,7 @@ function render() {
     <header>
       <div class="eyebrow">The Guild · Round ${state.roundNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
       <h1>The Shelf</h1>
-      <div class="sub">Set your book. When the wheel lands on you, that's the next read.</div>
+      <div class="sub">Everyone drops a book on the shelf. The wheel picks one at random — that's the next read. Once you've been picked, you sit out until the whole shelf has had a turn.</div>
       <div class="rule"></div>
       <div class="signed-in-strip">
         ${avatar ? `<img class="avatar" src="${attr(avatar)}" alt="">` : ''}
@@ -1338,7 +1345,7 @@ function render() {
 
   // ---- Footer ----
   html += `<footer>`;
-  html += `Shared with everyone in the guild.<br/>`;
+  html += `Shared with everyone in the guild · <a href="https://discord.gg/4YeGJgs8u" target="_blank" rel="noopener" class="footer-link">Join the Discord</a><br/>`;
   if (admin) {
     html += `<button class="btn-ghost" id="lock-btn">Lock librarian mode</button>`;
     html += `<button class="btn-danger" id="reset-btn">Reset the shelf</button>`;
@@ -1364,6 +1371,7 @@ function renderLoginGate() {
     <div class="setup">
       <h2>Sign in to join</h2>
       <p>The Shelf uses your Discord account to identify readers. Sign in to add your book to the wheel.</p>
+      <p style="margin-top: -4px;">Not in the club yet? <a href="https://discord.gg/4YeGJgs8u" target="_blank" rel="noopener" class="footer-link">Join the server</a>.</p>
       <button class="btn-discord" id="sign-in-btn">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.492c-1.53-.69-3.17-1.2-4.885-1.49a.075.075 0 0 0-.079.036c-.21.369-.444.85-.608 1.23a18.566 18.566 0 0 0-5.487 0 12.36 12.36 0 0 0-.617-1.23A.077.077 0 0 0 8.562 3c-1.714.29-3.354.8-4.885 1.49a.07.07 0 0 0-.032.027C.533 9.093-.32 13.555.099 17.961a.08.08 0 0 0 .031.055 20.03 20.03 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.963 19.963 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.094-.838-9.52-3.549-13.442a.061.061 0 0 0-.031-.028zM8.02 15.278c-1.182 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
         Sign in with Discord
