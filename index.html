@@ -10,14 +10,17 @@
   :root{
     --felt: #1e2137;
     --felt-dark: #12142a;
-    --card: #f6ecd0;
-    --card-shadow: #cfb37a;
-    --ink: #2a1e12;
-    --ink-soft: #766244;
-    --stamp: #c94a37;
-    --green: #6a8672;
+    --card: #f6ecd0;           /* cream — used for text & buttons on the dark felt */
+    --card-shadow: #0d0f22;    /* solid offset shadow beneath the dark cards */
+    --ink: #ece3cf;            /* primary text on the (now dark) cards */
+    --ink-soft: #a8a088;       /* muted text on the dark cards */
+    --stamp: #d5573f;          /* nudged brighter to read on dark panels */
+    --green: #7f9c86;
     --brass: #e0b45a;
     --muted: #a29b7e;
+    --panel: #2a3152;          /* dark card background */
+    --panel-2: #363d63;        /* inset fields (inputs) on cards */
+    --panel-border: rgba(236,227,207,0.10);
   }
   *{ box-sizing: border-box; }
   html,body{ margin:0; padding:0; }
@@ -91,8 +94,9 @@
   }
 
   .card{
-    background: var(--card);
+    background: var(--panel);
     color: var(--ink);
+    border: 1px solid var(--panel-border);
     border-radius: 2px;
     box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
     padding: 16px 18px;
@@ -135,8 +139,8 @@
 
   input[type=text], input[type=password]{
     font-family: 'Courier Prime', monospace;
-    background: white;
-    border: 1px solid rgba(38,35,28,0.2);
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
     padding: 10px 12px;
     font-size: 14px;
     color: var(--ink);
@@ -254,8 +258,9 @@
   }
 
   .winner-banner{
-    background: var(--card);
+    background: var(--panel);
     color: var(--ink);
+    border: 1px solid var(--panel-border);
     border-radius: 3px;
     padding: 20px;
     text-align:center;
@@ -298,7 +303,7 @@
 
   .history-item{
     display:flex; align-items: center; gap: 10px;
-    font-size: 12.5px; padding: 8px 2px; border-bottom: 1px dotted rgba(38,35,28,0.15);
+    font-size: 12.5px; padding: 8px 2px; border-bottom: 1px dotted rgba(236,227,207,0.12);
     color: var(--ink-soft);
   }
   .history-item:last-child{ border-bottom: none; }
@@ -319,7 +324,7 @@
   .genre-tag{
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 12px; padding: 4px 10px; border-radius: 999px;
-    background: rgba(42,30,18,0.05); border: 1px solid rgba(42,30,18,0.12);
+    background: rgba(236,227,207,0.06); border: 1px solid rgba(236,227,207,0.15);
     color: var(--ink-soft);
   }
   .genre-tag b{ color: var(--stamp); font-weight: 700; font-size: 11px; }
@@ -349,7 +354,7 @@
   .cover-slot.no-cover{ display: none; }
 
   /* Clickable past-read titles + book detail page */
-  .book-link{ color: inherit; text-decoration: none; border-bottom: 1px solid rgba(38,35,28,0.25); }
+  .book-link{ color: inherit; text-decoration: none; border-bottom: 1px solid rgba(236,227,207,0.32); }
   .book-link:hover{ color: var(--stamp); border-bottom-color: var(--stamp); }
   .detail-back{
     display: inline-block; margin: 4px 0 14px; font-size: 12.5px;
@@ -357,7 +362,8 @@
   }
   .detail-back:hover{ color: var(--brass); }
   .book-detail{
-    background: var(--card); color: var(--ink); border-radius: 2px;
+    background: var(--panel); color: var(--ink); border-radius: 2px;
+    border: 1px solid var(--panel-border);
     box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
     padding: 20px 20px 22px;
   }
@@ -370,7 +376,7 @@
   .bd-facts .dot{ margin: 0 7px; opacity: 0.5; }
   .bd-pick{
     font-size: 12.5px; color: var(--ink-soft); margin-top: 12px;
-    padding-top: 12px; border-top: 1px dotted rgba(38,35,28,0.2);
+    padding-top: 12px; border-top: 1px dotted rgba(236,227,207,0.16);
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   }
   .bd-pick b{ color: var(--ink); }
@@ -396,8 +402,9 @@
   }
   @media (max-width: 560px){ .stat-grid{ grid-template-columns: repeat(2, 1fr); } }
   .stat-card{
-    background: var(--card);
+    background: var(--panel);
     color: var(--ink);
+    border: 1px solid var(--panel-border);
     border-radius: 2px;
     box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
     padding: 14px 14px 16px;
@@ -440,7 +447,7 @@
   .tool-row-desc{ font-size: 12px; color: var(--ink-soft); font-style: italic; }
   .user-row{
     display: flex; align-items: center; gap: 10px;
-    padding: 10px 0; border-bottom: 1px dotted rgba(38,35,28,0.15);
+    padding: 10px 0; border-bottom: 1px dotted rgba(236,227,207,0.12);
   }
   .user-row:last-child{ border-bottom: none; }
   .user-row-content{ flex: 1; min-width: 0; }
@@ -488,7 +495,7 @@
   .loading{ text-align:center; padding: 60px 0; color: var(--brass); font-family:'Fraunces',serif; font-style: italic; }
 
   .setup{
-    background: var(--card); color: var(--ink); border-radius: 3px;
+    background: var(--panel); color: var(--ink); border-radius: 3px;
     padding: 26px 22px; text-align: center;
     box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
     max-width: 480px; margin: 0 auto;
@@ -509,7 +516,7 @@
     z-index: 40; padding: 20px;
   }
   .modal{
-    background: var(--card); color: var(--ink); padding: 22px 20px;
+    background: var(--panel); color: var(--ink); padding: 22px 20px;
     border-radius: 3px; max-width: 380px; width: 100%;
     box-shadow: 0 6px 0 var(--card-shadow), 0 20px 40px rgba(0,0,0,0.5);
   }
@@ -517,8 +524,8 @@
   .modal p{ font-size: 13px; color: var(--ink-soft); margin: 0 0 12px; }
   .modal input{
     width: 100%; padding: 10px 12px; font-size: 14px;
-    border: 1px solid var(--ink-soft); border-radius: 2px;
-    font-family:'Courier Prime', monospace; background: white; color: var(--ink);
+    border: 1px solid var(--panel-border); border-radius: 2px;
+    font-family:'Courier Prime', monospace; background: var(--panel-2); color: var(--ink);
   }
   .modal-actions{ display:flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   .modal-actions button.btn-primary{ background: var(--stamp); color: var(--card); }
@@ -1495,7 +1502,7 @@ function render() {
       <div class="winner-banner">
         <div class="stampbig">Next up</div>
         <div class="cover-slot large" data-cover-title="${attr(currentPick.book || '')}"></div>
-        <div class="wbook">${currentPick.book ? esc(currentPick.book) : '—'}</div>
+        <div class="wbook">${currentPick.book ? `<a class="book-link" href="#book=${currentPick.round}">${esc(currentPick.book)}</a>` : '—'}</div>
         ${currentPick.book ? `<div class="wmeta book-meta" data-meta-title="${attr(currentPick.book)}"></div>` : ''}
         <div class="wname">
           picked by
