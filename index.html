@@ -1848,8 +1848,8 @@ function render() {
               : `<a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
           </span>
           <span class="h-trail">
-            ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
             <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+            ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
           </span>
         </div>
       `;
@@ -2258,8 +2258,8 @@ function renderReaderPage(app, key) {
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
           <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a><span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
           <span class="h-trail">
-            ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
             <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+            ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
           </span>
         </div>`;
     });
@@ -2283,7 +2283,10 @@ async function decorateReaderExtra(books) {
   metas.forEach(m => {
     if (m && m.pages) pages += m.pages;
     const seen = new Set();
-    cleanSubjects(m && m.subjects).forEach(s => { if (!seen.has(s)) { seen.add(s); tally[s] = (tally[s] || 0) + 1; } });
+    cleanSubjects(m && m.subjects).forEach(s => {
+      if (s === "fiction") return; // too generic to be a "favorite genre"
+      if (!seen.has(s)) { seen.add(s); tally[s] = (tally[s] || 0) + 1; }
+    });
   });
   const top = Object.entries(tally).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
   const pg = document.getElementById("reader-pages");
