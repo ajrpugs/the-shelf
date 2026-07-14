@@ -1736,6 +1736,16 @@ function render() {
         <div class="stat-number">${stats.submittedCount}</div>
         <div class="stat-suffix">awaiting the pick</div>
       </div>
+      <div class="stat-card">
+        <div class="stat-label">Never picked</div>
+        <div class="stat-number">${stats.neverPicked}</div>
+        <div class="stat-suffix">still waiting</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Regulars</div>
+        <div class="stat-number">${stats.regulars}</div>
+        <div class="stat-suffix">unique winners</div>
+      </div>
     </div>
   `;
   if (stats.total > 0) {
