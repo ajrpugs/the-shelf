@@ -34,7 +34,7 @@
   }
   .wrap{ max-width: 720px; margin: 0 auto; }
 
-  header{ text-align:center; margin-bottom: 36px; }
+  header{ text-align:center; margin-bottom: 20px; }
   .eyebrow{
     font-size: 11px;
     letter-spacing: 0.28em;
@@ -58,6 +58,26 @@
   .rule{
     width: 64px; height: 2px; background: var(--stamp);
     margin: 18px auto 0;
+  }
+
+  .signed-in-strip{
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin-top: 22px;
+    font-size: 12.5px; color: var(--muted);
+  }
+  .signed-in-strip b{ color: var(--card); font-weight: 700; }
+  .signed-in-strip .sep{ opacity: 0.4; }
+  .signed-in-strip button{
+    background: transparent; color: var(--muted);
+    border: 1px solid rgba(255,255,255,0.18);
+    padding: 4px 10px; font-size: 11px;
+  }
+  .signed-in-strip button:hover{ color: var(--card); border-color: var(--brass); }
+  .avatar{ width: 22px; height: 22px; border-radius: 50%; vertical-align: middle; }
+  .avatar-mini{
+    width: 16px; height: 16px; border-radius: 50%;
+    vertical-align: middle; margin-right: 4px;
+    object-fit: cover;
   }
 
   section{ margin-bottom: 30px; }
@@ -98,9 +118,7 @@
     color: var(--ink-soft);
     font-size: 14px;
   }
-  .card.eliminated{
-    opacity: 0.55;
-  }
+  .card.eliminated{ opacity: 0.55; }
   .stamp-mark{
     display:inline-block;
     border: 2px solid var(--stamp);
@@ -146,14 +164,16 @@
   .btn-ghost{ background: transparent; color: var(--card); border: 1px solid rgba(255,255,255,0.25); }
   .btn-mini{ background: var(--green); color: var(--card); padding: 6px 10px; font-size: 11px; }
   .btn-mini.remove{ background: transparent; color: var(--stamp); border: 1px solid var(--stamp); }
-  .btn-danger{
-    background: var(--stamp); color: var(--card);
-    border: 1px solid var(--stamp);
-  }
+  .btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
   .btn-danger:hover:not(:disabled){ background: transparent; color: var(--stamp); }
-  .modal-actions button.btn-danger{
-    background: var(--stamp); color: var(--card); border: 1px solid var(--stamp);
+  .modal-actions button.btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
+  .btn-discord{
+    background: #5865F2; color: white;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 20px; font-size: 13px;
   }
+  .btn-discord:hover{ background: #4752c4; }
+  .btn-discord svg{ width: 20px; height: 20px; }
 
   /* Submit form */
   .submit-form{ display: grid; gap: 8px; }
@@ -168,6 +188,11 @@
   }
   .submit-warning{
     background: rgba(162,62,47,0.12); color: var(--stamp);
+    border-radius: 2px; padding: 8px 10px;
+    font-size: 12.5px; margin-top: 10px;
+  }
+  .submit-status{
+    background: rgba(106, 134, 114, 0.15); color: var(--green);
     border-radius: 2px; padding: 8px 10px;
     font-size: 12.5px; margin-top: 10px;
   }
@@ -282,7 +307,7 @@
   .history-item .h-who{ color: var(--ink); font-weight: 700; }
   .empty-note{ font-size: 12.5px; color: var(--muted); padding: 6px 2px; }
 
-  /* Book covers (Google Books thumbnails) */
+  /* Book covers (Open Library) */
   .cover-slot{
     overflow: hidden;
     border-radius: 3px;
@@ -348,14 +373,12 @@
 
   .setup{
     background: var(--card); color: var(--ink); border-radius: 3px;
-    padding: 20px; box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
+    padding: 26px 22px; text-align: center;
+    box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
+    max-width: 480px; margin: 0 auto;
   }
   .setup h2{ font-family:'Fraunces',serif; margin: 0 0 8px; color: var(--stamp); }
-  .setup code{
-    display:block; background: #efe3c8; padding: 8px 10px; border-radius: 2px;
-    font-size: 12px; word-break: break-all; margin: 6px 0;
-  }
-  .setup p{ font-size: 13px; }
+  .setup p{ font-size: 13px; color: var(--ink-soft); }
 
   .librarian-tag{
     display:inline-block; background: var(--brass); color: var(--felt);
@@ -406,18 +429,34 @@ const supabase = CONFIGURED ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : nu
 // ---------- State ----------
 const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
 let state = emptyState();
-let submissions = {};
+let users = [];              // shelf_users rows
+let session = null;          // Supabase auth session
+let myUserRow = null;        // Current user's shelf_users row
 let spinning = false;
 let flashMsg = null;
 let pendingRender = false;
 
-const SAVED_NAME_KEY = "shelf-my-name";
-const savedName = () => localStorage.getItem(SAVED_NAME_KEY) || "";
-const saveName = (name) => localStorage.setItem(SAVED_NAME_KEY, name);
+const setFlash = (kind, text) => {
+  flashMsg = { kind, text };
+  setTimeout(() => { if (flashMsg && flashMsg.text === text) { flashMsg = null; render(); } }, 4000);
+};
+
+function normalizeState(raw) {
+  const r = raw || {};
+  return {
+    eliminated: Array.isArray(r.eliminated) ? r.eliminated : [],
+    history: Array.isArray(r.history) ? r.history.map(h => ({
+      round: h.round ?? h.cycle ?? 1,
+      winner_id: h.winner_id ?? null,
+      winner_username: h.winner_username ?? h.winner ?? "Reader",
+      book: h.book ?? "",
+      ts: h.ts,
+    })) : [],
+    roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
+  };
+}
 
 // ---------- Book covers (Open Library) ----------
-// Bump the cache key so old null entries (from the previous provider) don't
-// stick around and silently suppress covers.
 const COVER_CACHE_KEY = "shelf-covers-v2";
 let coverCache = {};
 try { coverCache = JSON.parse(localStorage.getItem(COVER_CACHE_KEY) || "{}") || {}; }
@@ -426,10 +465,10 @@ const pendingCovers = new Map();
 
 function normalizeForMatch(s) {
   return (s || "")
-    .replace(/\s+by\s+.+$/i, "")           // strip "by <author>" tail
+    .replace(/\s+by\s+.+$/i, "")
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")               // punctuation → space
-    .replace(/^\s*(the|a|an)\s+/i, "")     // leading article
+    .replace(/[^\w\s]/g, " ")
+    .replace(/^\s*(the|a|an)\s+/i, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -442,11 +481,7 @@ function parseTitleAuthor(raw) {
 async function fetchCoverFromOpenLibrary(rawTitle) {
   const { title, author } = parseTitleAuthor(rawTitle);
   if (!title) return null;
-  const params = new URLSearchParams({
-    title,
-    limit: "5",
-    fields: "title,author_name,cover_i",
-  });
+  const params = new URLSearchParams({ title, limit: "5", fields: "title,author_name,cover_i" });
   if (author) params.set("author", author);
   const url = `https://openlibrary.org/search.json?${params.toString()}`;
   try {
@@ -513,26 +548,6 @@ function decorateCovers() {
   });
 }
 
-const setFlash = (kind, text) => {
-  flashMsg = { kind, text };
-  setTimeout(() => { if (flashMsg && flashMsg.text === text) { flashMsg = null; render(); } }, 4000);
-};
-
-// Normalize legacy field names (cycleNumber → roundNumber, cycle → round).
-function normalizeState(raw) {
-  const r = raw || {};
-  return {
-    eliminated: Array.isArray(r.eliminated) ? r.eliminated : [],
-    history: Array.isArray(r.history) ? r.history.map(h => ({
-      round: h.round ?? h.cycle ?? 1,
-      winner: h.winner,
-      book: h.book,
-      ts: h.ts,
-    })) : [],
-    roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
-  };
-}
-
 // ---------- Admin session ----------
 const ADMIN_KEY = "shelf-admin-pw";
 const isAdmin = () => !!sessionStorage.getItem(ADMIN_KEY);
@@ -567,9 +582,8 @@ async function callAdmin(action, payload = {}) {
     const body = await res.json();
     const prevRound = state.roundNumber;
     if (body.state) state = normalizeState(body.state);
-    if (body.submissions) submissions = body.submissions;
-    if (body.roundAdvanced) {
-      setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back in the stacks.`);
+    if (body.roundAdvanced && state.roundNumber > prevRound) {
+      setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back on the wheel.`);
     }
     render();
   } catch (err) {
@@ -583,7 +597,7 @@ function promptLibrarianPassword(retryAction, retryPayload) {
   back.innerHTML = `
     <div class="modal">
       <h3>Librarian Mode</h3>
-      <p>Enter the admin password to unlock spinning the wheel and starting a new round.</p>
+      <p>Enter the admin password to unlock spinning the wheel and resetting the shelf.</p>
       <input type="password" id="pw-input" autocomplete="current-password" placeholder="Password" />
       <div class="modal-actions">
         <button class="btn-ghost" id="pw-cancel">Cancel</button>
@@ -608,19 +622,106 @@ function promptLibrarianPassword(retryAction, retryPayload) {
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
 }
 
+function promptResetConfirmation() {
+  const back = document.createElement("div");
+  back.className = "modal-back";
+  back.innerHTML = `
+    <div class="modal">
+      <h3>Really wipe everything?</h3>
+      <p>This erases <b>every past read</b>, <b>every winner</b>, and drops the round counter back to <b>Round 1</b>. Every reader's "I want to read" book will also be cleared. There is no undo.</p>
+      <p>Type <b>RESET</b> below to confirm.</p>
+      <input type="text" id="reset-confirm-input" autocomplete="off" placeholder="Type RESET" />
+      <div class="modal-actions">
+        <button class="btn-ghost" id="reset-confirm-cancel">Cancel</button>
+        <button class="btn-danger" id="reset-confirm-go" disabled>Wipe everything</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(back);
+  const input = back.querySelector("#reset-confirm-input");
+  const goBtn = back.querySelector("#reset-confirm-go");
+  input.focus();
+  const close = () => { if (back.parentNode) document.body.removeChild(back); };
+  const isValid = () => input.value.trim() === "RESET";
+  input.addEventListener("input", () => { goBtn.disabled = !isValid(); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && isValid()) { close(); callAdmin("reset", {}); }
+    if (e.key === "Escape") close();
+  });
+  back.querySelector("#reset-confirm-cancel").addEventListener("click", close);
+  goBtn.addEventListener("click", () => { close(); callAdmin("reset", {}); });
+}
+
+// ---------- Auth ----------
+async function initAuth() {
+  if (!CONFIGURED) { render(); return; }
+  const { data } = await supabase.auth.getSession();
+  session = data?.session ?? null;
+  if (session) await onSignedIn();
+  else render();
+
+  supabase.auth.onAuthStateChange(async (event, s) => {
+    session = s;
+    if (event === "SIGNED_IN") await onSignedIn();
+    else if (event === "SIGNED_OUT") {
+      users = []; myUserRow = null; state = emptyState();
+      render();
+    } else if (event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+      render();
+    }
+  });
+}
+
+async function onSignedIn() {
+  await ensureUserRow(session.user);
+  await loadAll();
+  subscribeRealtime();
+}
+
+function displayNameFromMeta(user) {
+  const m = user.user_metadata || {};
+  const c = m.custom_claims || {};
+  return c.global_name || m.full_name || m.preferred_username || m.name || "Reader";
+}
+
+async function ensureUserRow(user) {
+  const username = displayNameFromMeta(user);
+  const avatar = user.user_metadata?.avatar_url || null;
+  const { data, error } = await supabase
+    .from("shelf_users")
+    .upsert({ id: user.id, discord_username: username, avatar_url: avatar },
+            { onConflict: "id" })
+    .select().single();
+  if (error) { setFlash("err", `Sign-in setup: ${error.message}`); return; }
+  myUserRow = data;
+}
+
+async function signIn() {
+  if (!CONFIGURED) return;
+  const cleanUrl = window.location.href.split("#")[0].split("?")[0];
+  await supabase.auth.signInWithOAuth({
+    provider: "discord",
+    options: { redirectTo: cleanUrl },
+  });
+}
+
+async function signOut() {
+  await supabase.auth.signOut();
+}
+
 // ---------- Data loading ----------
 async function loadAll() {
   if (!CONFIGURED) { render(); return; }
   try {
-    const [{ data: sData, error: sErr }, { data: subData, error: subErr }] = await Promise.all([
+    const [{ data: sData, error: sErr }, { data: uData, error: uErr }] = await Promise.all([
       supabase.from("shelf_state").select("data").eq("id", 1).single(),
-      supabase.from("shelf_submissions").select("member_name, book"),
+      supabase.from("shelf_users").select("*"),
     ]);
     if (sErr && sErr.code !== "PGRST116") throw sErr;
-    if (subErr) throw subErr;
-    state = normalizeState(sData && sData.data);
-    submissions = {};
-    (subData || []).forEach(r => { submissions[r.member_name] = r.book; });
+    if (uErr) throw uErr;
+    state = normalizeState(sData?.data);
+    users = uData || [];
+    if (session) myUserRow = users.find(u => u.id === session.user.id) || myUserRow;
   } catch (err) {
     setFlash("err", `Couldn't load: ${err.message}`);
   }
@@ -631,7 +732,7 @@ function subscribeRealtime() {
   if (!CONFIGURED) return;
   supabase.channel("shelf-live")
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_state" }, () => queueRefresh())
-    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_submissions" }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_users" }, () => queueRefresh())
     .subscribe();
 }
 let refreshTimer = null;
@@ -640,66 +741,38 @@ function queueRefresh() {
   refreshTimer = setTimeout(() => { refreshTimer = null; loadAll(); }, 300);
 }
 
-// ---------- Book submission (open to anyone) ----------
-function normName(n) { return (n || "").trim().toLowerCase(); }
-function isEliminated(name) {
-  return state.eliminated.some(e => normName(e) === normName(name));
-}
-
-async function submitMyBook(name, book) {
-  if (!CONFIGURED) return;
-  name = name.trim();
-  book = book.trim();
-  if (!name || !book) return;
-
-  if (isEliminated(name)) {
-    setFlash("err", `${name} has already been picked. Wait for the shelf to turn over.`);
-    render();
-    return;
-  }
-
-  const existingKey = Object.keys(submissions).find(k => normName(k) === normName(name));
-  const canonical = existingKey || name;
-
+// ---------- Reader actions ----------
+async function setMyBook(book) {
+  if (!session) return;
+  book = (book || "").trim();
   try {
-    await supabase.from("shelf_submissions").upsert({ member_name: canonical, book });
-    submissions[canonical] = book;
-    saveName(canonical);
-    setFlash("info", existingKey ? `Updated ${canonical}'s pick to "${book}".` : `Added ${canonical} to the wheel.`);
+    const { data, error } = await supabase
+      .from("shelf_users")
+      .update({ book: book || null, updated_at: new Date().toISOString() })
+      .eq("id", session.user.id)
+      .select().single();
+    if (error) throw error;
+    myUserRow = data;
+    const idx = users.findIndex(u => u.id === data.id);
+    if (idx >= 0) users[idx] = data; else users.push(data);
+    setFlash("info", book ? `Your pick: "${book}".` : "Cleared your book.");
     render();
   } catch (err) {
     setFlash("err", `Couldn't save: ${err.message}`);
   }
 }
 
-async function withdrawSubmission(name) {
-  if (!confirm(`Withdraw ${name}'s submission?`)) return;
-  try {
-    await supabase.from("shelf_submissions").delete().eq("member_name", name);
-    delete submissions[name];
-    setFlash("info", `${name} withdrew.`);
-    render();
-  } catch (err) {
-    setFlash("err", `Couldn't withdraw: ${err.message}`);
-  }
-}
-
 // ---------- Wheel ----------
 const WHEEL_COLORS = [
-  "#c94a37", // oxblood
-  "#6a8672", // sage
-  "#e0b45a", // brass gold
-  "#7a4d6a", // plum
-  "#4a6d8a", // dusty blue
-  "#8f6b3d", // chestnut
-  "#c26f3f", // burnt orange
-  "#5f6577"  // slate violet
+  "#c94a37", "#6a8672", "#e0b45a", "#7a4d6a",
+  "#4a6d8a", "#8f6b3d", "#c26f3f", "#5f6577",
 ];
 
 function eligibleEntries() {
-  return Object.entries(submissions)
-    .filter(([n]) => !isEliminated(n))
-    .map(([name, book]) => ({ name, book }))
+  const elim = new Set(state.eliminated);
+  return users
+    .filter(u => u.book && u.book.trim() && !elim.has(u.id))
+    .map(u => ({ id: u.id, name: u.discord_username || "Reader", book: u.book, avatar_url: u.avatar_url }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -715,9 +788,7 @@ function drawWheel(canvas, entries, rotation) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, size, size);
 
-  const cx = size / 2;
-  const cy = size / 2;
-  const radius = size / 2 - 6;
+  const cx = size / 2, cy = size / 2, radius = size / 2 - 6;
   const N = entries.length;
   if (N === 0) return;
 
@@ -808,7 +879,6 @@ async function spinToWinner(canvas, entries, winnerIdx) {
 
   const duration = 5200;
   const start = performance.now();
-
   return new Promise(resolve => {
     function frame(now) {
       const t = Math.min(1, (now - start) / duration);
@@ -825,7 +895,7 @@ async function spinToWinner(canvas, entries, winnerIdx) {
 async function runDraw() {
   if (spinning) return;
   const entries = eligibleEntries();
-  if (entries.length === 0) { setFlash("err", "No eligible submissions to spin."); return; }
+  if (entries.length === 0) { setFlash("err", "No eligible readers to spin — everyone needs a book set."); return; }
   const pw = getAdminPw();
   if (!pw) { promptLibrarianPassword("draw", {}); return; }
 
@@ -861,12 +931,15 @@ async function runDraw() {
     }
     const body = await res.json();
     const winner = body.winner || {};
-    let winnerIdx = entries.findIndex(e => e.name === winner.name);
+    let winnerIdx = entries.findIndex(e => e.id === winner.winner_id);
     if (winnerIdx < 0) winnerIdx = 0;
     await spinToWinner(canvas, entries, winnerIdx);
     spinning = false;
+    const prevRound = state.roundNumber;
     if (body.state) state = normalizeState(body.state);
-    if (body.submissions) submissions = body.submissions;
+    if (body.roundAdvanced && state.roundNumber > prevRound) {
+      setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back on the wheel.`);
+    }
     render();
   } catch (err) {
     spinning = false;
@@ -891,16 +964,21 @@ function fmtDate(iso) {
 
 function computeStats() {
   const total = state.history.length;
-  const perMember = {};
+  const perName = {};
   state.history.forEach(h => {
-    perMember[h.winner] = (perMember[h.winner] || 0) + 1;
+    perName[h.winner_username] = (perName[h.winner_username] || 0) + 1;
   });
-  const leaderboard = Object.entries(perMember).sort((a, b) => b[1] - a[1]);
+  const leaderboard = Object.entries(perName).sort((a, b) => b[1] - a[1]);
   const maxPicks = leaderboard.reduce((m, [, c]) => Math.max(m, c), 0);
   const picksThisRound = state.eliminated.length;
   const submittedCount = eligibleEntries().length;
-  const regulars = new Set(state.history.map(h => h.winner)).size;
+  const regulars = new Set(state.history.map(h => h.winner_username)).size;
   return { total, leaderboard, maxPicks, picksThisRound, submittedCount, regulars };
+}
+
+function userAvatar(userId) {
+  const u = users.find(u => u.id === userId);
+  return u?.avatar_url || null;
 }
 
 function render() {
@@ -918,20 +996,35 @@ function render() {
     return;
   }
 
+  if (!session) {
+    app.innerHTML = renderLoginGate();
+    wireLoginGate();
+    return;
+  }
+
   const stats = computeStats();
   const admin = isAdmin();
-  const myName = savedName();
-  const eligibleSubs = Object.entries(submissions)
-    .filter(([n]) => !isEliminated(n))
-    .sort((a, b) => a[0].localeCompare(b[0]));
+  const displayName = displayNameFromMeta(session.user);
+  const avatar = session.user.user_metadata?.avatar_url;
+  const myBook = (myUserRow?.book || "").trim();
+  const iAmEliminated = state.eliminated.includes(session.user.id);
+  const eligibleSubs = eligibleEntries();
   const eligibleCount = eligibleSubs.length;
+  const currentPick = state.history[0];
+  const currentPickAvatar = currentPick?.winner_id ? userAvatar(currentPick.winner_id) : null;
 
   let html = `
     <header>
       <div class="eyebrow">The Guild · Round ${state.roundNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
       <h1>The Shelf</h1>
-      <div class="sub">Add your book. Spin the wheel. Once your name lands, you sit out the round.</div>
+      <div class="sub">Set your book. When the wheel lands on you, that's the next read.</div>
       <div class="rule"></div>
+      <div class="signed-in-strip">
+        ${avatar ? `<img class="avatar" src="${attr(avatar)}" alt="">` : ''}
+        <span>Signed in as <b>${esc(displayName)}</b></span>
+        <span class="sep">·</span>
+        <button id="sign-out-btn">Sign out</button>
+      </div>
     </header>
   `;
 
@@ -939,34 +1032,37 @@ function render() {
     html += `<div class="flash ${flashMsg.kind === 'info' ? 'info' : ''}">${esc(flashMsg.text)}</div>`;
   }
 
-  const currentPick = state.history[0];
   if (currentPick) {
     html += `
       <div class="winner-banner">
         <div class="stampbig">Next up</div>
         <div class="cover-slot large" data-cover-title="${attr(currentPick.book || '')}"></div>
         <div class="wbook">${currentPick.book ? esc(currentPick.book) : '—'}</div>
-        <div class="wname">picked by <b>${esc(currentPick.winner)}</b></div>
+        <div class="wname">
+          picked by
+          ${currentPickAvatar ? `<img class="avatar-mini" src="${attr(currentPickAvatar)}" alt="">` : ''}
+          <b>${esc(currentPick.winner_username)}</b>
+        </div>
       </div>
     `;
   }
 
-  // ---- Recommend a Book ----
-  const meAlreadyPicked = myName && isEliminated(myName);
+  // ---- My Book ----
   html += `
     <section>
-      <div class="section-title">Recommend a Book</div>
+      <div class="section-title">My Book</div>
       <div class="card no-rule">
         <div class="submit-form">
-          <label for="my-name">Your name</label>
-          <input type="text" id="my-name" placeholder="How you'd like to be listed" value="${attr(myName)}" autocomplete="off" />
-          <label for="my-book">Book title</label>
-          <input type="text" id="my-book" placeholder="What you'd like the club to read" autocomplete="off" />
-          <button class="btn-primary" id="my-submit">Add to the wheel</button>
+          <label for="my-book">I want to read</label>
+          <input type="text" id="my-book" placeholder="Any book you'd like the club to read" value="${attr(myBook)}" autocomplete="off" />
+          <button class="btn-primary" id="save-book">${myBook ? 'Update my pick' : 'Add to the wheel'}</button>
+          ${myBook ? `<button class="btn-mini remove" id="clear-book" style="margin-top: 4px;">Clear my book</button>` : ''}
         </div>
-        ${meAlreadyPicked
-          ? `<div class="submit-warning">You (<b>${esc(myName)}</b>) have already been picked. Wait for the shelf to turn over before submitting again.</div>`
-          : `<div class="submit-hint">Already submitted? Use the same name and it'll update your pick.</div>`
+        ${iAmEliminated
+          ? `<div class="submit-warning">You've been picked this round. Your next book will land on the wheel once the round rolls over.</div>`
+          : myBook
+            ? `<div class="submit-status">Your book is on the wheel. Change it any time — the update is instant.</div>`
+            : `<div class="submit-hint">Add a book to join the wheel. It stays across rounds unless you clear it.</div>`
         }
       </div>
     </section>
@@ -977,25 +1073,24 @@ function render() {
   if (eligibleSubs.length === 0) {
     html += `<div class="empty-note">The wheel is empty. Be the first to add a book above.</div>`;
   } else {
-    const me = normName(myName);
-    eligibleSubs.forEach(([name, book]) => {
-      const canWithdraw = admin || (me && normName(name) === me);
+    eligibleSubs.forEach(entry => {
       html += `
         <div class="card">
           <div class="card-row" style="align-items: flex-start;">
-            <span class="cover-slot small" data-cover-title="${attr(book)}"></span>
+            <span class="cover-slot small" data-cover-title="${attr(entry.book)}"></span>
             <div style="flex:1; min-width:0;">
-              <div class="name">${esc(book)}</div>
-              <div class="submitted-book">submitted by ${esc(name)}</div>
+              <div class="name">${esc(entry.book)}</div>
+              <div class="submitted-book">
+                ${entry.avatar_url ? `<img class="avatar-mini" src="${attr(entry.avatar_url)}" alt="">` : ''}
+                submitted by ${esc(entry.name)}
+              </div>
             </div>
-            ${canWithdraw ? `<button class="btn-mini remove" data-withdraw="${attr(name)}">Withdraw</button>` : ''}
           </div>
         </div>
       `;
     });
   }
   html += `</section>`;
-
 
   // ---- Spin the Wheel ----
   html += `<section><div class="section-title">Spin the Wheel</div>`;
@@ -1025,10 +1120,14 @@ function render() {
   } else {
     html += `<div class="card no-rule">`;
     state.history.slice(0, 25).forEach(h => {
+      const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
       html += `
         <div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-          <span class="h-content"><span class="h-who">${esc(h.winner)}</span> — ${esc(h.book || '')}</span>
+          <span class="h-content">
+            ${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}
+            <span class="h-who">${esc(h.winner_username)}</span> — ${esc(h.book || '')}
+          </span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
         </div>
       `;
@@ -1082,10 +1181,9 @@ function render() {
 
   // ---- Footer ----
   html += `<footer>`;
-  html += `Shared with everyone who has this link.<br/>`;
+  html += `Shared with everyone in the guild.<br/>`;
   if (admin) {
     html += `<button class="btn-ghost" id="lock-btn">Lock librarian mode</button>`;
-    html += `<button class="btn-ghost" id="new-round-btn">Start new round</button>`;
     html += `<button class="btn-danger" id="reset-btn">Reset the shelf</button>`;
   } else {
     html += `<button class="btn-ghost" id="unlock-btn">Librarian mode</button>`;
@@ -1096,6 +1194,25 @@ function render() {
   wireUp();
   requestAnimationFrame(paintWheel);
   decorateCovers();
+}
+
+function renderLoginGate() {
+  return `
+    <header>
+      <div class="eyebrow">The Guild</div>
+      <h1>The Shelf</h1>
+      <div class="sub">A book-club picker where the wheel of names decides.</div>
+      <div class="rule"></div>
+    </header>
+    <div class="setup">
+      <h2>Sign in to join</h2>
+      <p>The Shelf uses your Discord account to identify readers. Sign in to add your book to the wheel.</p>
+      <button class="btn-discord" id="sign-in-btn">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.492c-1.53-.69-3.17-1.2-4.885-1.49a.075.075 0 0 0-.079.036c-.21.369-.444.85-.608 1.23a18.566 18.566 0 0 0-5.487 0 12.36 12.36 0 0 0-.617-1.23A.077.077 0 0 0 8.562 3c-1.714.29-3.354.8-4.885 1.49a.07.07 0 0 0-.032.027C.533 9.093-.32 13.555.099 17.961a.08.08 0 0 0 .031.055 20.03 20.03 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.963 19.963 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.094-.838-9.52-3.549-13.442a.061.061 0 0 0-.031-.028zM8.02 15.278c-1.182 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
+        Sign in with Discord
+      </button>
+    </div>
+  `;
 }
 
 function renderSetupNotice() {
@@ -1112,21 +1229,25 @@ function renderSetupNotice() {
   `;
 }
 
+function wireLoginGate() {
+  const btn = document.getElementById("sign-in-btn");
+  if (btn) btn.addEventListener("click", signIn);
+}
+
 function wireUp() {
-  const submitBtn = document.getElementById("my-submit");
-  if (submitBtn) submitBtn.addEventListener("click", () => {
-    const name = document.getElementById("my-name").value;
-    const book = document.getElementById("my-book").value;
-    submitMyBook(name, book);
-    document.getElementById("my-book").value = "";
+  const save = document.getElementById("save-book");
+  if (save) save.addEventListener("click", () => {
+    const val = document.getElementById("my-book").value;
+    setMyBook(val);
   });
   const bookInput = document.getElementById("my-book");
   if (bookInput) bookInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") submitBtn && submitBtn.click();
+    if (e.key === "Enter") save && save.click();
   });
-
-  document.querySelectorAll("[data-withdraw]").forEach(el => {
-    el.addEventListener("click", () => withdrawSubmission(el.dataset.withdraw));
+  const clear = document.getElementById("clear-book");
+  if (clear) clear.addEventListener("click", () => {
+    if (!confirm("Clear your book? You can add another anytime.")) return;
+    setMyBook("");
   });
 
   const spinBtn = document.getElementById("spin-btn");
@@ -1136,46 +1257,13 @@ function wireUp() {
   if (unlock) unlock.addEventListener("click", () => promptLibrarianPassword());
   const lock = document.getElementById("lock-btn");
   if (lock) lock.addEventListener("click", () => { clearAdminPw(); render(); });
-  const newRound = document.getElementById("new-round-btn");
-  if (newRound) newRound.addEventListener("click", () => {
-    if (!confirm("Close the current round and start the next one? Everyone who's been picked goes back into the running.")) return;
-    callAdmin("new_round", {});
-  });
   const reset = document.getElementById("reset-btn");
   if (reset) reset.addEventListener("click", () => {
-    if (!confirm("Wipe the entire ledger — history, submissions, everything. This cannot be undone. Continue?")) return;
+    if (!confirm("Wipe the entire ledger — history, every reader's book, everything. This cannot be undone. Continue?")) return;
     promptResetConfirmation();
   });
-}
-
-function promptResetConfirmation() {
-  const back = document.createElement("div");
-  back.className = "modal-back";
-  back.innerHTML = `
-    <div class="modal">
-      <h3>Really wipe everything?</h3>
-      <p>This erases <b>every past read</b>, <b>every winner</b>, and drops the round counter back to <b>Round 1</b>. There is no undo.</p>
-      <p>Type <b>RESET</b> below to confirm.</p>
-      <input type="text" id="reset-confirm-input" autocomplete="off" placeholder="Type RESET" />
-      <div class="modal-actions">
-        <button class="btn-ghost" id="reset-confirm-cancel">Cancel</button>
-        <button class="btn-danger" id="reset-confirm-go" disabled>Wipe everything</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(back);
-  const input = back.querySelector("#reset-confirm-input");
-  const goBtn = back.querySelector("#reset-confirm-go");
-  input.focus();
-  const close = () => { if (back.parentNode) document.body.removeChild(back); };
-  const isValid = () => input.value.trim() === "RESET";
-  input.addEventListener("input", () => { goBtn.disabled = !isValid(); });
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && isValid()) { close(); callAdmin("reset", {}); }
-    if (e.key === "Escape") close();
-  });
-  back.querySelector("#reset-confirm-cancel").addEventListener("click", close);
-  goBtn.addEventListener("click", () => { close(); callAdmin("reset", {}); });
+  const signOutBtn = document.getElementById("sign-out-btn");
+  if (signOutBtn) signOutBtn.addEventListener("click", signOut);
 }
 
 window.addEventListener("resize", () => {
@@ -1183,9 +1271,8 @@ window.addEventListener("resize", () => {
 });
 
 // ---------- Boot ----------
-loadAll();
-subscribeRealtime();
-window.addEventListener("focus", () => queueRefresh());
+initAuth();
+window.addEventListener("focus", () => { if (session) queueRefresh(); });
 </script>
 </body>
 </html>

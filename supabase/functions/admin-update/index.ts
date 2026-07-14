@@ -1,8 +1,12 @@
 // Supabase Edge Function: admin-update
 //
-// Password-gated writes for shelf_state. Anyone can drop a book into
-// shelf_submissions from the browser via RLS; only the librarian can spin
-// the wheel, start a new round, or reset.
+// Password-gated writes for shelf_state. Draw picks a random eligible reader
+// (from shelf_users where a book is set and their id isn't already in
+// eliminated). Round auto-advances when a pick empties the eligible pool.
+//
+// Deploy:
+//   supabase functions deploy admin-update --no-verify-jwt
+//   supabase secrets set ADMIN_PASSWORD='your-password-here'
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -12,15 +16,21 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-type HistoryItem = { round: number; winner: string; book: string; ts: string };
+type HistoryItem = {
+  round: number;
+  winner_id: string | null;
+  winner_username: string;
+  book: string;
+  ts: string;
+};
+
 type State = {
-  eliminated: string[];
+  eliminated: string[];       // user ids
   history: HistoryItem[];
   roundNumber: number;
 };
 
 const emptyState = (): State => ({ eliminated: [], history: [], roundNumber: 1 });
-const norm = (s: string) => (s || "").trim().toLowerCase();
 
 function normalizeState(raw: any): State {
   const r = raw ?? {};
@@ -29,8 +39,9 @@ function normalizeState(raw: any): State {
     history: Array.isArray(r.history)
       ? r.history.map((h: any) => ({
           round: h.round ?? h.cycle ?? 1,
-          winner: h.winner,
-          book: h.book,
+          winner_id: h.winner_id ?? null,
+          winner_username: h.winner_username ?? h.winner ?? "Reader",
+          book: h.book ?? "",
           ts: h.ts,
         }))
       : [],
@@ -64,48 +75,52 @@ Deno.serve(async (req) => {
   const state: State = normalizeState(row?.data);
 
   const action = body.action;
-  let winner: { name: string; book: string } | null = null;
+  let winner: HistoryItem | null = null;
   let roundAdvanced = false;
 
   try {
     switch (action) {
       case "draw": {
-        const { data: subs, error: subErr } = await client
-          .from("shelf_submissions").select("member_name, book");
-        if (subErr) throw subErr;
-        const submissions: Record<string, string> = {};
-        (subs ?? []).forEach((r: { member_name: string; book: string }) => {
-          submissions[r.member_name] = r.book;
-        });
-        const eliminatedNorm = new Set(state.eliminated.map(norm));
-        const eligible = Object.keys(submissions).filter(n => !eliminatedNorm.has(norm(n)));
-        if (eligible.length === 0) throw new Error("no eligible submissions");
+        const { data: readers, error: rErr } = await client
+          .from("shelf_users")
+          .select("id, discord_username, book")
+          .not("book", "is", null)
+          .neq("book", "");
+        if (rErr) throw rErr;
+        const eliminatedSet = new Set(state.eliminated);
+        const eligible = (readers ?? []).filter(u => !eliminatedSet.has(u.id));
+        if (eligible.length === 0) throw new Error("no eligible readers");
         const chosen = eligible[Math.floor(Math.random() * eligible.length)];
-        const book = submissions[chosen];
-        state.history.unshift({
+        const entry: HistoryItem = {
           round: state.roundNumber,
-          winner: chosen,
-          book,
+          winner_id: chosen.id,
+          winner_username: chosen.discord_username,
+          book: chosen.book,
           ts: new Date().toISOString(),
-        });
-        state.eliminated.push(chosen);
-        winner = { name: chosen, book };
-        // Clear the wheel — everyone submits again for the next spin.
-        await client.from("shelf_submissions").delete().neq("member_name", "");
+        };
+        state.history.unshift(entry);
+        state.eliminated.push(chosen.id);
+        winner = entry;
+
+        // If this pick emptied the eligible pool, roll to the next round.
+        if (eligible.length - 1 === 0) {
+          state.eliminated = [];
+          state.roundNumber += 1;
+          roundAdvanced = true;
+        }
         break;
       }
       case "new_round": {
-        // Everyone's been chosen (or the librarian's calling it early).
-        // Clear the eliminated list and advance the round.
+        // Manual round advance (librarian override).
         state.eliminated = [];
         state.roundNumber += 1;
-        await client.from("shelf_submissions").delete().neq("member_name", "");
         roundAdvanced = true;
         break;
       }
       case "reset": {
         Object.assign(state, emptyState());
-        await client.from("shelf_submissions").delete().neq("member_name", "");
+        // Also wipe everyone's book so the shelf is truly empty.
+        await client.from("shelf_users").update({ book: null }).neq("id", "00000000-0000-0000-0000-000000000000");
         break;
       }
       default:
@@ -120,14 +135,7 @@ Deno.serve(async (req) => {
     .upsert({ id: 1, data: state, updated_at: new Date().toISOString() });
   if (writeErr) return json({ error: writeErr.message }, 500);
 
-  const { data: latestSubs } = await client
-    .from("shelf_submissions").select("member_name, book");
-  const submissions: Record<string, string> = {};
-  (latestSubs ?? []).forEach((r: { member_name: string; book: string }) => {
-    submissions[r.member_name] = r.book;
-  });
-
-  return json({ state, submissions, winner, roundAdvanced });
+  return json({ state, winner, roundAdvanced });
 });
 
 function json(body: unknown, status = 200) {
