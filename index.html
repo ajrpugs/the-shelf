@@ -330,6 +330,27 @@
   .genre-tag b{ color: var(--stamp); font-weight: 700; font-size: 11px; }
   .genre-loading{ font-size: 12px; color: var(--muted); font-style: italic; }
 
+  /* Stats sub-cards: shared heading, superlatives, decade labels */
+  .mini-head{
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--stamp); margin-bottom: 10px;
+  }
+  .sup-row{
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 0; border-bottom: 1px dotted rgba(236,227,207,0.12);
+    font-size: 13px;
+  }
+  .sup-row:last-child{ border-bottom: none; }
+  .sup-ico{ font-size: 15px; width: 20px; text-align: center; }
+  .sup-label{
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-soft); min-width: 62px;
+  }
+  .sup-title{ flex: 1; min-width: 0; font-family: 'Fraunces', serif; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sup-val{ color: var(--ink-soft); white-space: nowrap; font-size: 12px; }
+  .decade-label{ font-variant-numeric: tabular-nums; min-width: 52px !important; }
+
   /* Book covers (Open Library) */
   .cover-slot{
     overflow: hidden;
@@ -779,15 +800,34 @@ function titleCase(s) {
   return s.replace(/\b\w/g, c => c.toUpperCase());
 }
 
-// Tally genres/themes across every past read and render them as tags.
-async function decorateGenres() {
-  const box = document.getElementById("genre-tags");
-  if (!box) return;
-  const books = state.history.map(h => h.book).filter(Boolean);
-  if (books.length === 0) { box.innerHTML = ""; return; }
-  const metas = await Promise.all(books.map(resolveBookMeta));
+// One metadata pass over every past read powers the API-driven stats:
+// page totals, reading time, page-based superlatives, a by-decade chart, and
+// the genre tags. Page counts on Open Library are reliable; publish years are
+// occasionally wrong, so the decade chart drops implausible years and we avoid
+// single "oldest book" claims a lone bad value could hijack.
+async function decorateStats() {
+  if (!document.getElementById("stat-pages") && !document.getElementById("genre-tags")) return;
+  const entries = state.history.filter(h => h.book);
+  const metas = await Promise.all(entries.map(h => resolveBookMeta(h.book)));
+  if (parseRoute().name !== "main") return; // navigated away while awaiting
+
+  const nextYear = new Date().getFullYear() + 1;
+  let totalPages = 0, pageCount = 0;
+  let longest = null, shortest = null;
+  const decades = {};
   const tally = {};
-  metas.forEach(m => {
+
+  entries.forEach((h, i) => {
+    const m = metas[i] || {};
+    if (m.pages) {
+      totalPages += m.pages; pageCount++;
+      if (!longest || m.pages > longest.pages) longest = { round: h.round, book: h.book, pages: m.pages };
+      if (!shortest || m.pages < shortest.pages) shortest = { round: h.round, book: h.book, pages: m.pages };
+    }
+    if (Number.isFinite(m.year) && m.year >= 1850 && m.year <= nextYear) {
+      const dec = Math.floor(m.year / 10) * 10;
+      decades[dec] = (decades[dec] || 0) + 1;
+    }
     const seen = new Set();
     cleanSubjects(m && m.subjects).forEach(s => {
       if (seen.has(s)) return; // count each subject once per book
@@ -795,14 +835,48 @@ async function decorateGenres() {
       tally[s] = (tally[s] || 0) + 1;
     });
   });
+
+  const setNum = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  const setHTML = (id, v) => { const el = document.getElementById(id); if (el) el.innerHTML = v; };
+
+  // Number tiles
+  setNum("stat-pages", totalPages ? totalPages.toLocaleString() : "—");
+  setNum("stat-avg", pageCount ? Math.round(totalPages / pageCount).toLocaleString() : "—");
+  // ~1.6 min/page for an average reader.
+  setNum("stat-hours", totalPages ? Math.max(1, Math.round(totalPages * 1.6 / 60)).toLocaleString() : "—");
+
+  // Superlatives (page-based — reliable)
+  const supRow = (icon, label, item, val) => item
+    ? `<div class="sup-row"><span class="sup-ico">${icon}</span><span class="sup-label">${label}</span>` +
+      `<a class="book-link sup-title" href="#book=${item.round}">${esc(item.book)}</a><span class="sup-val">${esc(val)}</span></div>`
+    : "";
+  const sups = [
+    supRow("📏", "Longest", longest, longest ? `${longest.pages.toLocaleString()} pp` : ""),
+    supRow("🪶", "Shortest", shortest, shortest ? `${shortest.pages.toLocaleString()} pp` : ""),
+  ].filter(Boolean).join("");
+  setHTML("superlatives", sups || `<span class="genre-loading">No page data yet.</span>`);
+
+  // Reads by decade
+  const decadeKeys = Object.keys(decades).map(Number).sort((a, b) => a - b);
+  if (decadeKeys.length) {
+    const max = Math.max(...decadeKeys.map(d => decades[d]));
+    setHTML("decade-chart", decadeKeys.map(d => {
+      const c = decades[d];
+      const pct = Math.max(6, Math.round((c / max) * 100));
+      return `<div class="leader-row"><div class="lname decade-label">${d}s</div>` +
+        `<div class="lbar"><span style="width:${pct}%;"></span></div><div class="lcount">${c}</div></div>`;
+    }).join(""));
+  } else {
+    setHTML("decade-chart", `<span class="genre-loading">No publication dates yet.</span>`);
+  }
+
+  // Genres
   let ranked = Object.entries(tally).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   const recurring = ranked.filter(([, c]) => c >= 2);
   ranked = (recurring.length >= 5 ? recurring : ranked).slice(0, 14);
-  if (!document.getElementById("genre-tags")) return; // re-rendered while we awaited
-  if (ranked.length === 0) { box.innerHTML = `<span class="genre-loading">Not enough shelf data yet.</span>`; return; }
-  box.innerHTML = ranked
-    .map(([s, c]) => `<span class="genre-tag">${esc(titleCase(s))}<b>${c}</b></span>`)
-    .join("");
+  setHTML("genre-tags", ranked.length
+    ? ranked.map(([s, c]) => `<span class="genre-tag">${esc(titleCase(s))}<b>${c}</b></span>`).join("")
+    : `<span class="genre-loading">Not enough shelf data yet.</span>`);
 }
 
 // ---------- Book detail (for the per-book page) ----------
@@ -1626,6 +1700,9 @@ function render() {
   html += `</section>`;
 
   // ---- Stats ----
+  // Club numbers render now; the API-derived tiles/blocks (pages, reading time,
+  // superlatives, decades, genres) fill in via decorateStats once the Open
+  // Library metadata for every past read resolves.
   html += `<section><div class="section-title">Stats</div>`;
   html += `
     <div class="stat-grid">
@@ -1635,9 +1712,19 @@ function render() {
         <div class="stat-suffix">all rounds</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Rounds finished</div>
-        <div class="stat-number">${stats.roundsFinished}</div>
-        <div class="stat-suffix">so far</div>
+        <div class="stat-label">Pages turned</div>
+        <div class="stat-number" id="stat-pages">—</div>
+        <div class="stat-suffix">across the shelf</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Avg length</div>
+        <div class="stat-number" id="stat-avg">—</div>
+        <div class="stat-suffix">pages / book</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Reading time</div>
+        <div class="stat-number" id="stat-hours">—</div>
+        <div class="stat-suffix">hours, roughly</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Readers</div>
@@ -1649,31 +1736,21 @@ function render() {
         <div class="stat-number">${stats.submittedCount}</div>
         <div class="stat-suffix">awaiting the pick</div>
       </div>
-      <div class="stat-card">
-        <div class="stat-label">This round</div>
-        <div class="stat-number">${stats.picksThisRound}</div>
-        <div class="stat-suffix">picked so far</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Regulars</div>
-        <div class="stat-number">${stats.regulars}</div>
-        <div class="stat-suffix">unique winners</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Never picked</div>
-        <div class="stat-number">${stats.neverPicked}</div>
-        <div class="stat-suffix">still waiting</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">This month</div>
-        <div class="stat-number">${stats.booksThisMonth}</div>
-        <div class="stat-suffix">books picked</div>
-      </div>
     </div>
   `;
   if (stats.total > 0) {
     html += `<div class="card no-rule" style="margin-top: 12px;">`;
-    html += `<div style="font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:var(--stamp); margin-bottom: 10px;">Reads by reader</div>`;
+    html += `<div class="mini-head">Shelf superlatives</div>`;
+    html += `<div id="superlatives"><span class="genre-loading">Measuring the shelf…</span></div>`;
+    html += `</div>`;
+
+    html += `<div class="card no-rule" style="margin-top: 12px;">`;
+    html += `<div class="mini-head">Reads by decade</div>`;
+    html += `<div id="decade-chart"><span class="genre-loading">Sorting by era…</span></div>`;
+    html += `</div>`;
+
+    html += `<div class="card no-rule" style="margin-top: 12px;">`;
+    html += `<div class="mini-head">Reads by reader</div>`;
     stats.leaderboard.forEach(entry => {
       const pct = stats.maxPicks > 0 ? Math.max(4, Math.round((entry.count / stats.maxPicks) * 100)) : 0;
       const avatarEl = entry.avatar
@@ -1691,7 +1768,7 @@ function render() {
     html += `</div>`;
 
     html += `<div class="card no-rule" style="margin-top: 12px;">`;
-    html += `<div style="font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:var(--stamp); margin-bottom: 10px;">What we've been reading</div>`;
+    html += `<div class="mini-head">What we've been reading</div>`;
     html += `<div id="genre-tags" class="genre-tags"><span class="genre-loading">Reading the shelf…</span></div>`;
     html += `</div>`;
   }
@@ -1759,7 +1836,7 @@ function render() {
   decorateCovers();
   decorateMeta();
   decorateShelfLinks();
-  decorateGenres();
+  decorateStats();
 }
 
 // ---------- Router + book detail page ----------
