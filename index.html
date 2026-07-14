@@ -332,10 +332,10 @@
   .history-item .h-content{ flex: 1; min-width: 0; }
   .history-item .h-meta{ white-space: nowrap; flex-shrink: 0; }
   .history-item .h-who{ color: var(--ink); font-weight: 700; }
-  /* On phones, keep pill+cover+title on line 1 and drop the date below */
+  /* On phones, keep cover+title on line 1 and drop the date+score below */
   @media (max-width: 480px){
     .history-item{ flex-wrap: wrap; row-gap: 4px; }
-    .history-item .h-content{ flex-basis: calc(100% - 84px); }
+    .history-item .h-content{ flex-basis: calc(100% - 40px); }
     .history-item .h-meta{ margin-left: auto; font-size: 11px; }
   }
   .empty-note{ font-size: 12.5px; color: var(--muted); padding: 6px 2px; }
@@ -1839,7 +1839,6 @@ function render() {
       const band = ratingBand(total);
       html += `
         <div class="history-item">
-          ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
           <span class="h-content">
             ${h.winner_username
@@ -1847,6 +1846,7 @@ function render() {
               : `<a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
           </span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+          ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
         </div>
       `;
     });
@@ -2170,12 +2170,12 @@ async function decorateTagPage(tag) {
     const band = ratingBand(total);
     return `
       <div class="history-item">
-        ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
         <span class="cover-slot tiny" data-cover-title="${attr(h.book)}"></span>
         <span class="h-content">
           ${h.winner_username ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — ` : ''}<a class="book-link" href="#book=${h.round}">${esc(h.book)}</a><span class="book-meta" data-meta-title="${attr(h.book)}"></span>
         </span>
         <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+        ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
       </div>`;
   }).join("");
   decorateCovers();
@@ -2255,10 +2255,10 @@ function renderReaderPage(app, key) {
       const band = ratingBand(total);
       html += `
         <div class="history-item">
-          ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
           <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a><span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+          ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
         </div>`;
     });
     html += `</div>`;
