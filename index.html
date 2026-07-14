@@ -288,6 +288,19 @@
   }
   .winner-banner .wname{ font-size: 13px; color: var(--ink-soft); margin-top: 8px; font-style: italic; letter-spacing: 0.04em; }
   .winner-banner .wname b{ color: var(--ink); font-weight: 700; font-style: normal; }
+  .winner-banner .wauthor{ font-size: 14px; color: var(--ink-soft); font-style: italic; margin-top: 4px; }
+  .winner-banner .wdesc{
+    text-align: left; max-width: 480px; margin: 14px auto 0;
+    font-size: 13px; line-height: 1.55; color: var(--ink-soft);
+    padding-top: 14px; border-top: 1px dotted rgba(236,227,207,0.14);
+  }
+  .winner-banner .wtags{ justify-content: center; margin-top: 12px; }
+  .winner-banner .wmore{
+    display: inline-block; margin-top: 14px; font-size: 12px;
+    color: var(--brass); text-decoration: none; letter-spacing: 0.04em;
+    border-bottom: 1px solid transparent;
+  }
+  .winner-banner .wmore:hover{ border-bottom-color: var(--brass); }
 
   .cycle-banner{
     background: var(--green); color: var(--card);
@@ -880,6 +893,31 @@ async function decorateStats() {
   setHTML("genre-tags", ranked.length
     ? ranked.map(([s, c]) => `<a class="genre-tag genre-tag-link" href="#tag=${encodeURIComponent(s)}">${esc(titleCase(s))}<b>${c}</b></a>`).join("")
     : `<span class="genre-loading">Not enough shelf data yet.</span>`);
+}
+
+// Enrich the "Next up" hero with book-page details (author, a description
+// blurb, and clickable subject tags), fetched via the rich detail lookup.
+async function decorateNextUp() {
+  if (!document.getElementById("nextup-desc")) return;
+  const pick = state.history[0];
+  if (!pick || !pick.book) return;
+  const detail = await resolveBookDetail(pick.book);
+  if (parseRoute().name !== "main") return; // navigated away
+  const a = document.getElementById("nextup-author");
+  const d = document.getElementById("nextup-desc");
+  const t = document.getElementById("nextup-tags");
+  if (a && detail.authors.length) a.textContent = `by ${detail.authors.join(", ")}`;
+  if (d && detail.description) {
+    let text = detail.description;
+    if (text.length > 340) text = text.slice(0, 337).trimEnd() + "…";
+    d.textContent = text;
+  }
+  if (t) {
+    const subs = [...new Set(cleanSubjects(detail.subjects))].slice(0, 6);
+    t.innerHTML = subs
+      .map(s => `<a class="genre-tag genre-tag-link" href="#tag=${encodeURIComponent(s)}">${esc(titleCase(s))}</a>`)
+      .join("");
+  }
 }
 
 // ---------- Book detail (for the per-book page) ----------
@@ -1608,12 +1646,16 @@ function render() {
         <div class="stampbig">Next up</div>
         <div class="cover-slot large" data-cover-title="${attr(currentPick.book || '')}"></div>
         <div class="wbook">${currentPick.book ? `<a class="book-link" href="#book=${currentPick.round}">${esc(currentPick.book)}</a>` : '—'}</div>
+        ${currentPick.book ? `<div class="wauthor" id="nextup-author"></div>` : ''}
         ${currentPick.book ? `<div class="wmeta book-meta" data-meta-title="${attr(currentPick.book)}"></div>` : ''}
         <div class="wname">
           picked by
           ${currentPickAvatar ? `<img class="avatar-mini" src="${attr(currentPickAvatar)}" alt="">` : ''}
           <b>${esc(currentPick.winner_username)}</b>
         </div>
+        ${currentPick.book ? `<div class="wdesc" id="nextup-desc"></div>` : ''}
+        ${currentPick.book ? `<div class="wtags genre-tags" id="nextup-tags"></div>` : ''}
+        ${currentPick.book ? `<a class="wmore" href="#book=${currentPick.round}">Full details →</a>` : ''}
       </div>
     `;
   }
@@ -1853,6 +1895,7 @@ function render() {
   decorateCovers();
   decorateMeta();
   decorateShelfLinks();
+  decorateNextUp();
   decorateStats();
 }
 
