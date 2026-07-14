@@ -16,12 +16,14 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+type Rating = { total: number };
 type HistoryItem = {
   round: number;
   winner_id: string | null;
   winner_username: string;
   book: string;
   ts: string;
+  rating?: Rating | null;
 };
 
 type State = {
@@ -176,6 +178,7 @@ function normalizeState(raw: any): State {
           winner_username: h.winner_username ?? h.winner ?? "Reader",
           book: h.book ?? "",
           ts: h.ts,
+          rating: h.rating ?? null,
         }))
       : [],
     roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,

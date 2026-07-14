@@ -376,6 +376,29 @@
   .sup-val{ color: var(--ink-soft); white-space: nowrap; font-size: 12px; }
   .decade-label{ font-variant-numeric: tabular-nums; min-width: 52px !important; }
 
+  /* Guild rubric ratings */
+  .score-pill{
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: 'Fraunces', serif; font-weight: 700; font-size: 12.5px;
+    padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid currentColor; flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .band-exc{ color: var(--green); }
+  .band-great{ color: var(--brass); }
+  .band-good{ color: var(--muted); }
+  .band-bad{ color: var(--stamp); }
+  .history-item .score-pill{ background: rgba(236,227,207,0.05); }
+
+  .bd-review{ }
+  .bd-review .bd-review-row{ display: flex; align-items: baseline; gap: 12px; }
+  .bd-review .bd-score{
+    font-family: 'Fraunces', serif; font-weight: 700; font-size: 34px; line-height: 1;
+    color: var(--ink);
+  }
+  .bd-review .bd-score-max{ font-size: 15px; color: var(--ink-soft); font-weight: 400; margin-left: 2px; }
+  .bd-review .score-pill{ font-size: 13px; align-self: center; }
+
   /* Book covers (Open Library) */
   .cover-slot{
     overflow: hidden;
@@ -620,6 +643,7 @@ function normalizeState(raw) {
       winner_username: h.winner_username ?? h.winner ?? "Reader",
       book: h.book ?? "",
       ts: h.ts,
+      rating: h.rating ?? null,
     })) : [],
     roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
   };
@@ -1587,6 +1611,21 @@ function userAvatar(userId) {
   return u?.avatar_url || null;
 }
 
+// The Bibliomancer's Guild rubric: five categories × 20 = /100. Bands come
+// from the average category score (total / 5) to match the rubric's per-
+// category ranges: Excellent ≥16, Great ≥11, Good ≥6, else Bad.
+function ratingBand(total) {
+  if (total == null || !Number.isFinite(total)) return null;
+  if (total >= 80) return { label: "Excellent", cls: "band-exc" };
+  if (total >= 55) return { label: "Great", cls: "band-great" };
+  if (total >= 30) return { label: "Good", cls: "band-good" };
+  return { label: "Bad", cls: "band-bad" };
+}
+function ratingTotal(h) {
+  const t = h && h.rating && h.rating.total;
+  return Number.isFinite(t) ? t : null;
+}
+
 function render() {
   if (spinning) { pendingRender = true; return; }
   if (document.activeElement && document.activeElement.tagName === "INPUT") {
@@ -1748,6 +1787,8 @@ function render() {
     html += `<div class="card no-rule">`;
     state.history.slice(0, 25).forEach(h => {
       const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
+      const total = ratingTotal(h);
+      const band = ratingBand(total);
       html += `
         <div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
@@ -1756,6 +1797,7 @@ function render() {
               ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<span class="h-who">${esc(h.winner_username)}</span> — <a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`
               : `<a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
           </span>
+          ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
         </div>
       `;
@@ -1944,7 +1986,7 @@ function renderBookDetail(app, ctx) {
   window.scrollTo(0, 0);
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
 
-  let book, eyebrow, metaLine;
+  let book, eyebrow, metaLine, reviewHtml = "";
   if (ctx.kind === "past") {
     const h = state.history.find(e => e.round === ctx.round);
     if (!h) return renderDetailMissing(app, back, state.history.length === 0, `There's no past read for round ${ctx.round}.`);
@@ -1955,6 +1997,18 @@ function renderBookDetail(app, ctx) {
       ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<b>${esc(h.winner_username)}</b>`
       : `<span class="detail-muted">no picker recorded</span>`;
     metaLine = `Picked by ${who} · Round ${h.round} · ${fmtDate(h.ts)}`;
+    const total = ratingTotal(h);
+    const band = ratingBand(total);
+    if (band) {
+      reviewHtml = `
+        <div class="bd-block bd-review ${band.cls}">
+          <div class="bd-block-head">Guild review</div>
+          <div class="bd-review-row">
+            <span class="bd-score">${total}<span class="bd-score-max">/100</span></span>
+            <span class="score-pill ${band.cls}">${band.label}</span>
+          </div>
+        </div>`;
+    }
   } else {
     const u = users.find(x => x.id === ctx.userId);
     if (!u || !(u.book || "").trim()) return renderDetailMissing(app, back, users.length === 0, `That book isn't on the shelf anymore.`);
@@ -1977,6 +2031,7 @@ function renderBookDetail(app, ctx) {
           <div class="bd-pick">${metaLine}</div>
         </div>
       </div>
+      ${reviewHtml}
       <div id="bd-desc"></div>
       <div id="bd-firstline"></div>
       <div id="bd-subjects"></div>
