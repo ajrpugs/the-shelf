@@ -1779,13 +1779,21 @@ function render() {
   }
   html += `</div></section>`;
 
-  // ---- Past reads ----
-  html += `<section><div class="section-title">Past reads</div>`;
+  // ---- Leaderboard (past reads, ranked by Guild rating) ----
+  html += `<section><div class="section-title">Leaderboard</div>`;
   if (state.history.length === 0) {
     html += `<div class="empty-note">No picks recorded yet.</div>`;
   } else {
     html += `<div class="card no-rule">`;
-    state.history.slice(0, 25).forEach(h => {
+    const ranked = [...state.history].sort((a, b) => {
+      const ra = ratingTotal(a), rb = ratingTotal(b);
+      if (ra == null && rb == null) return b.round - a.round; // both unrated: newest first
+      if (ra == null) return 1;   // unrated sinks to the bottom
+      if (rb == null) return -1;
+      if (rb !== ra) return rb - ra; // higher rating first
+      return b.round - a.round;   // tie-break: newest first
+    });
+    ranked.slice(0, 25).forEach(h => {
       const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
       const total = ratingTotal(h);
       const band = ratingBand(total);
