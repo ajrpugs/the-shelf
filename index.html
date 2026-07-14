@@ -1750,13 +1750,13 @@ function render() {
   `;
   if (stats.total > 0) {
     html += `<div class="card no-rule" style="margin-top: 12px;">`;
-    html += `<div class="mini-head">Shelf superlatives</div>`;
-    html += `<div id="superlatives"><span class="genre-loading">Measuring the shelf…</span></div>`;
+    html += `<div class="mini-head">What we've been reading</div>`;
+    html += `<div id="genre-tags" class="genre-tags"><span class="genre-loading">Reading the shelf…</span></div>`;
     html += `</div>`;
 
     html += `<div class="card no-rule" style="margin-top: 12px;">`;
-    html += `<div class="mini-head">Reads by decade</div>`;
-    html += `<div id="decade-chart"><span class="genre-loading">Sorting by era…</span></div>`;
+    html += `<div class="mini-head">Size matters</div>`;
+    html += `<div id="superlatives"><span class="genre-loading">Measuring the shelf…</span></div>`;
     html += `</div>`;
 
     html += `<div class="card no-rule" style="margin-top: 12px;">`;
@@ -1778,8 +1778,8 @@ function render() {
     html += `</div>`;
 
     html += `<div class="card no-rule" style="margin-top: 12px;">`;
-    html += `<div class="mini-head">What we've been reading</div>`;
-    html += `<div id="genre-tags" class="genre-tags"><span class="genre-loading">Reading the shelf…</span></div>`;
+    html += `<div class="mini-head">Reads by decade</div>`;
+    html += `<div id="decade-chart"><span class="genre-loading">Sorting by era…</span></div>`;
     html += `</div>`;
   }
   html += `</section>`;
