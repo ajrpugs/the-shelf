@@ -75,6 +75,7 @@ Deno.serve(async (req) => {
   const state: State = normalizeState(row?.data);
 
   const action = body.action;
+  const payload = (body.payload ?? {}) as Record<string, unknown>;
   let winner: HistoryItem | null = null;
   let roundAdvanced = false;
 
@@ -121,6 +122,35 @@ Deno.serve(async (req) => {
         Object.assign(state, emptyState());
         // Also wipe everyone's book so the shelf is truly empty.
         await client.from("shelf_users").update({ book: null }).neq("id", "00000000-0000-0000-0000-000000000000");
+        break;
+      }
+      case "undo_last_spin": {
+        if (state.history.length === 0) throw new Error("nothing to undo");
+        const last = state.history.shift()!;
+        if (last.round < state.roundNumber) {
+          // The undone pick had auto-advanced the round — roll back.
+          state.roundNumber = last.round;
+          state.eliminated = state.history
+            .filter(h => h.round === last.round && h.winner_id)
+            .map(h => h.winner_id as string);
+        } else if (last.winner_id) {
+          state.eliminated = state.eliminated.filter(id => id !== last.winner_id);
+        }
+        break;
+      }
+      case "admin_clear_book": {
+        const userId = String(payload.user_id ?? "");
+        if (!userId) throw new Error("user_id required");
+        const { error } = await client.from("shelf_users").update({ book: null }).eq("id", userId);
+        if (error) throw error;
+        break;
+      }
+      case "admin_remove_user": {
+        const userId = String(payload.user_id ?? "");
+        if (!userId) throw new Error("user_id required");
+        const { error } = await client.from("shelf_users").delete().eq("id", userId);
+        if (error) throw error;
+        state.eliminated = state.eliminated.filter(id => id !== userId);
         break;
       }
       default:

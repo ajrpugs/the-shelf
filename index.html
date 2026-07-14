@@ -373,6 +373,29 @@
   .leader-row .lbar > span{ display:block; height: 100%; background: var(--stamp); }
   .leader-row .lcount{ min-width: 24px; text-align: right; color: var(--ink-soft); font-size: 12px; }
 
+  /* Librarian tools */
+  .tool-row{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .tool-row-desc{ font-size: 12px; color: var(--ink-soft); font-style: italic; }
+  .user-row{
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 0; border-bottom: 1px dotted rgba(38,35,28,0.15);
+  }
+  .user-row:last-child{ border-bottom: none; }
+  .user-row-content{ flex: 1; min-width: 0; }
+  .user-row-name{ font-family: 'Fraunces', serif; font-weight: 600; color: var(--ink); font-size: 14px; }
+  .user-row-book{ font-size: 12px; color: var(--ink-soft); font-style: italic; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-row-tag{
+    display: inline-block; padding: 1px 6px; border-radius: 2px;
+    background: var(--stamp); color: var(--card); font-style: normal;
+    font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700;
+    margin-left: 4px;
+  }
+  .user-row-actions{ display: flex; gap: 6px; flex-wrap: wrap; }
+  .tools-label{
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--stamp); margin-bottom: 10px;
+  }
+
   /* Compact My Book card */
   .my-book-card{ padding: 12px 14px; }
   .my-book-row{ display: flex; gap: 8px; align-items: center; }
@@ -1162,6 +1185,51 @@ function render() {
   }
   html += `</div></section>`;
 
+  // ---- Librarian tools (admin only) ----
+  if (admin) {
+    const lastPick = state.history[0];
+    const undoDesc = lastPick
+      ? `Reverses the pick of "${lastPick.book}" by ${lastPick.winner_username}.`
+      : `No picks yet to undo.`;
+    html += `
+      <section>
+        <div class="section-title">Librarian tools</div>
+        <div class="card no-rule">
+          <div class="tool-row">
+            <button class="btn-primary" id="undo-btn" ${state.history.length === 0 ? 'disabled' : ''}>Undo last spin</button>
+            <span class="tool-row-desc">${esc(undoDesc)}</span>
+          </div>
+        </div>
+        <div class="card no-rule" style="margin-top:10px;">
+          <div class="tools-label">Manage readers</div>
+    `;
+    if (users.length === 0) {
+      html += `<div class="empty-note">No signed-in readers yet.</div>`;
+    } else {
+      const sorted = [...users].sort((a, b) => (a.discord_username || '').localeCompare(b.discord_username || ''));
+      sorted.forEach(u => {
+        const eliminated = state.eliminated.includes(u.id);
+        const book = (u.book || '').trim();
+        html += `
+          <div class="user-row">
+            ${u.avatar_url
+              ? `<img class="leader-avatar" src="${attr(u.avatar_url)}" alt="">`
+              : `<span class="leader-avatar-placeholder"></span>`}
+            <div class="user-row-content">
+              <div class="user-row-name">${esc(u.discord_username || 'Reader')}${eliminated ? `<span class="user-row-tag">Picked</span>` : ''}</div>
+              <div class="user-row-book">${book ? esc(book) : 'no book set'}</div>
+            </div>
+            <div class="user-row-actions">
+              ${book ? `<button class="btn-mini remove" data-admin-clear="${attr(u.id)}">Clear book</button>` : ''}
+              <button class="btn-mini remove" data-admin-remove="${attr(u.id)}">Remove</button>
+            </div>
+          </div>
+        `;
+      });
+    }
+    html += `</div></section>`;
+  }
+
   // ---- Past reads ----
   html += `<section><div class="section-title">Past reads</div>`;
   if (state.history.length === 0) {
@@ -1325,6 +1393,31 @@ function wireUp() {
 
   const spinBtn = document.getElementById("spin-btn");
   if (spinBtn) spinBtn.addEventListener("click", runDraw);
+
+  const undoBtn = document.getElementById("undo-btn");
+  if (undoBtn) undoBtn.addEventListener("click", () => {
+    const last = state.history[0];
+    if (!last) return;
+    if (!confirm(`Undo the pick of "${last.book}" by ${last.winner_username}?`)) return;
+    callAdmin("undo_last_spin", {});
+  });
+
+  document.querySelectorAll("[data-admin-clear]").forEach(el => {
+    el.addEventListener("click", () => {
+      const uid = el.dataset.adminClear;
+      const u = users.find(x => x.id === uid);
+      if (!confirm(`Clear ${u?.discord_username || 'this reader'}'s book?`)) return;
+      callAdmin("admin_clear_book", { user_id: uid });
+    });
+  });
+  document.querySelectorAll("[data-admin-remove]").forEach(el => {
+    el.addEventListener("click", () => {
+      const uid = el.dataset.adminRemove;
+      const u = users.find(x => x.id === uid);
+      if (!confirm(`Remove ${u?.discord_username || 'this reader'} from the shelf? Their past reads stay in the ledger, but they'll need to sign in again to rejoin.`)) return;
+      callAdmin("admin_remove_user", { user_id: uid });
+    });
+  });
 
   const unlock = document.getElementById("unlock-btn");
   if (unlock) unlock.addEventListener("click", () => promptLibrarianPassword());
