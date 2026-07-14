@@ -1185,51 +1185,6 @@ function render() {
   }
   html += `</div></section>`;
 
-  // ---- Librarian tools (admin only) ----
-  if (admin) {
-    const lastPick = state.history[0];
-    const undoDesc = lastPick
-      ? `Reverses the pick of "${lastPick.book}" by ${lastPick.winner_username}.`
-      : `No picks yet to undo.`;
-    html += `
-      <section>
-        <div class="section-title">Librarian tools</div>
-        <div class="card no-rule">
-          <div class="tool-row">
-            <button class="btn-primary" id="undo-btn" ${state.history.length === 0 ? 'disabled' : ''}>Undo last spin</button>
-            <span class="tool-row-desc">${esc(undoDesc)}</span>
-          </div>
-        </div>
-        <div class="card no-rule" style="margin-top:10px;">
-          <div class="tools-label">Manage readers</div>
-    `;
-    if (users.length === 0) {
-      html += `<div class="empty-note">No signed-in readers yet.</div>`;
-    } else {
-      const sorted = [...users].sort((a, b) => (a.discord_username || '').localeCompare(b.discord_username || ''));
-      sorted.forEach(u => {
-        const eliminated = state.eliminated.includes(u.id);
-        const book = (u.book || '').trim();
-        html += `
-          <div class="user-row">
-            ${u.avatar_url
-              ? `<img class="leader-avatar" src="${attr(u.avatar_url)}" alt="">`
-              : `<span class="leader-avatar-placeholder"></span>`}
-            <div class="user-row-content">
-              <div class="user-row-name">${esc(u.discord_username || 'Reader')}${eliminated ? `<span class="user-row-tag">Picked</span>` : ''}</div>
-              <div class="user-row-book">${book ? esc(book) : 'no book set'}</div>
-            </div>
-            <div class="user-row-actions">
-              ${book ? `<button class="btn-mini remove" data-admin-clear="${attr(u.id)}">Clear book</button>` : ''}
-              <button class="btn-mini remove" data-admin-remove="${attr(u.id)}">Remove</button>
-            </div>
-          </div>
-        `;
-      });
-    }
-    html += `</div></section>`;
-  }
-
   // ---- Past reads ----
   html += `<section><div class="section-title">Past reads</div>`;
   if (state.history.length === 0) {
@@ -1319,6 +1274,51 @@ function render() {
     html += `</div>`;
   }
   html += `</section>`;
+
+  // ---- Librarian tools (admin only, at the bottom) ----
+  if (admin) {
+    const lastPick = state.history[0];
+    const undoDesc = lastPick
+      ? `Reverses the pick of "${lastPick.book}" by ${lastPick.winner_username}.`
+      : `No picks yet to undo.`;
+    html += `
+      <section>
+        <div class="section-title">Librarian tools</div>
+        <div class="card no-rule">
+          <div class="tool-row">
+            <button class="btn-primary" id="undo-btn" ${state.history.length === 0 ? 'disabled' : ''}>Undo last spin</button>
+            <span class="tool-row-desc">${esc(undoDesc)}</span>
+          </div>
+        </div>
+        <div class="card no-rule" style="margin-top:10px;">
+          <div class="tools-label">Manage readers</div>
+    `;
+    if (users.length === 0) {
+      html += `<div class="empty-note">No signed-in readers yet.</div>`;
+    } else {
+      const sorted = [...users].sort((a, b) => (a.discord_username || '').localeCompare(b.discord_username || ''));
+      sorted.forEach(u => {
+        const eliminated = state.eliminated.includes(u.id);
+        const book = (u.book || '').trim();
+        html += `
+          <div class="user-row">
+            ${u.avatar_url
+              ? `<img class="leader-avatar" src="${attr(u.avatar_url)}" alt="">`
+              : `<span class="leader-avatar-placeholder"></span>`}
+            <div class="user-row-content">
+              <div class="user-row-name">${esc(u.discord_username || 'Reader')}${eliminated ? `<span class="user-row-tag">Picked</span>` : ''}</div>
+              <div class="user-row-book">${book ? esc(book) : 'no book set'}</div>
+            </div>
+            <div class="user-row-actions">
+              ${book ? `<button class="btn-mini remove" data-admin-clear="${attr(u.id)}">Clear book</button>` : ''}
+              <button class="btn-mini remove" data-admin-remove="${attr(u.id)}">Remove</button>
+            </div>
+          </div>
+        `;
+      });
+    }
+    html += `</div></section>`;
+  }
 
   // ---- Footer ----
   html += `<footer>`;
