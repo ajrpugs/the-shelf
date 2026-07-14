@@ -342,7 +342,51 @@
     margin: 14px auto 12px;
     box-shadow: 0 6px 16px rgba(0,0,0,0.28);
   }
+  .cover-slot.xl{
+    width: 150px; height: 225px; display: block;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.32);
+  }
   .cover-slot.no-cover{ display: none; }
+
+  /* Clickable past-read titles + book detail page */
+  .book-link{ color: inherit; text-decoration: none; border-bottom: 1px solid rgba(38,35,28,0.25); }
+  .book-link:hover{ color: var(--stamp); border-bottom-color: var(--stamp); }
+  .detail-back{
+    display: inline-block; margin: 4px 0 14px; font-size: 12.5px;
+    color: var(--muted); text-decoration: none; letter-spacing: 0.03em;
+  }
+  .detail-back:hover{ color: var(--brass); }
+  .book-detail{
+    background: var(--card); color: var(--ink); border-radius: 2px;
+    box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
+    padding: 20px 20px 22px;
+  }
+  .bd-top{ display: flex; gap: 18px; align-items: flex-start; }
+  @media (max-width: 480px){ .bd-top{ flex-direction: column; align-items: center; text-align: center; } }
+  .bd-head{ flex: 1; min-width: 0; }
+  .bd-title{ font-family: 'Fraunces', serif; font-weight: 700; font-size: 25px; line-height: 1.15; }
+  .bd-author{ font-style: italic; color: var(--ink-soft); margin-top: 5px; font-size: 14px; }
+  .bd-facts{ font-size: 12.5px; color: var(--ink-soft); margin-top: 10px; }
+  .bd-facts .dot{ margin: 0 7px; opacity: 0.5; }
+  .bd-pick{
+    font-size: 12.5px; color: var(--ink-soft); margin-top: 12px;
+    padding-top: 12px; border-top: 1px dotted rgba(38,35,28,0.2);
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  .bd-pick b{ color: var(--ink); }
+  .bd-desc{ font-size: 14px; line-height: 1.6; margin-top: 16px; color: var(--ink); white-space: pre-line; }
+  .bd-quote{
+    font-style: italic; color: var(--ink-soft); font-size: 14px; line-height: 1.5;
+    margin-top: 14px; padding-left: 12px; border-left: 3px solid var(--brass);
+  }
+  .bd-block{ margin-top: 18px; }
+  .bd-block-head{
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--stamp); margin-bottom: 8px;
+  }
+  .bd-extra{ font-size: 12.5px; color: var(--ink-soft); display: grid; gap: 5px; }
+  .bd-extra .bd-k{ text-transform: uppercase; font-size: 10px; letter-spacing: 0.12em; color: var(--muted); margin-right: 5px; }
+  .detail-muted{ color: var(--muted); font-style: italic; }
 
   /* Stats / dashboard */
   .stat-grid{
@@ -732,6 +776,109 @@ async function decorateGenres() {
   box.innerHTML = ranked
     .map(([s, c]) => `<span class="genre-tag">${esc(titleCase(s))}<b>${c}</b></span>`)
     .join("");
+}
+
+// ---------- Book detail (for the per-book page) ----------
+// A heavier, on-demand lookup (search + works endpoint) used only on the
+// #book=<round> page — one book at a time, so cost is trivial.
+const DETAIL_CACHE_KEY = "shelf-bookdetail-v1";
+let bookDetailCache = {};
+try { bookDetailCache = JSON.parse(localStorage.getItem(DETAIL_CACHE_KEY) || "{}") || {}; }
+catch { bookDetailCache = {}; }
+const pendingDetail = new Map();
+
+async function fetchWorkDescription(key) {
+  try {
+    const res = await fetch(`https://openlibrary.org${key}.json`);
+    if (!res.ok) return null;
+    const w = await res.json();
+    let d = w && w.description;
+    if (d && typeof d === "object") d = d.value;
+    if (typeof d !== "string") return null;
+    d = d.replace(/\r/g, "");
+    d = d.split(/\n\s*-{3,}\s*\n/)[0];              // drop trailing source block
+    d = d.replace(/\(\[source\]\[\d+\]\)/gi, "");   // "([source][1])"
+    d = d.replace(/^\s*\[\d+\]:\s*\S+.*$/gim, "");   // markdown link definitions
+    d = d.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1"); // emphasis
+    d = d.trim();
+    return d || null;
+  } catch { return null; }
+}
+
+async function fetchBookDetail(rawTitle) {
+  const { title, author } = parseTitleAuthor(rawTitle);
+  const empty = {
+    title: title || rawTitle, authors: [], year: null, pages: null,
+    coverLarge: null, subjects: [], persons: [], places: [], publishers: [],
+    languages: [], isbn: [], firstSentence: null, description: null,
+    editionCount: null, olKey: null,
+  };
+  if (!title) return empty;
+  const params = new URLSearchParams({
+    title, limit: "5",
+    fields: [
+      "title", "author_name", "cover_i", "first_publish_year",
+      "number_of_pages_median", "subject", "person", "place", "publisher",
+      "language", "isbn", "first_sentence", "edition_count", "key",
+    ].join(","),
+  });
+  if (author) params.set("author", author);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const res = await fetch(`https://openlibrary.org/search.json?${params.toString()}`, { signal: ctrl.signal });
+    if (!res.ok) return empty;
+    const body = await res.json();
+    const docs = body.docs || [];
+    const normTitle = normalizeForMatch(title);
+    let doc = null, coverId = null;
+    for (const d of docs) {
+      const resultNorm = normalizeForMatch(d.title || "");
+      if (!resultNorm) continue;
+      const matches = resultNorm === normTitle || resultNorm.includes(normTitle) || normTitle.includes(resultNorm);
+      if (!matches) continue;
+      if (!doc) doc = d;
+      if (coverId === null && d.cover_i) coverId = d.cover_i;
+      if (doc && coverId !== null) break;
+    }
+    if (!doc) return empty;
+    const first = Array.isArray(doc.first_sentence) ? doc.first_sentence[0] : doc.first_sentence;
+    const description = doc.key ? await fetchWorkDescription(doc.key) : null;
+    return {
+      title: doc.title || title,
+      authors: Array.isArray(doc.author_name) ? doc.author_name : (author ? [author] : []),
+      year: Number.isFinite(doc.first_publish_year) ? doc.first_publish_year : null,
+      pages: Number.isFinite(doc.number_of_pages_median) ? doc.number_of_pages_median : null,
+      coverLarge: coverId ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg` : null,
+      subjects: Array.isArray(doc.subject) ? doc.subject : [],
+      persons: Array.isArray(doc.person) ? doc.person.slice(0, 8) : [],
+      places: Array.isArray(doc.place) ? doc.place.slice(0, 8) : [],
+      publishers: Array.isArray(doc.publisher) ? doc.publisher.slice(0, 4) : [],
+      languages: Array.isArray(doc.language) ? doc.language : [],
+      isbn: Array.isArray(doc.isbn) ? doc.isbn.slice(0, 1) : [],
+      firstSentence: typeof first === "string" ? first : null,
+      description,
+      editionCount: Number.isFinite(doc.edition_count) ? doc.edition_count : null,
+      olKey: doc.key || null,
+    };
+  } catch { return empty; }
+  finally { clearTimeout(timer); }
+}
+
+async function resolveBookDetail(rawTitle) {
+  const key = normalizeForMatch(rawTitle);
+  if (!key) return fetchBookDetail(rawTitle);
+  if (key in bookDetailCache) return bookDetailCache[key];
+  if (pendingDetail.has(key)) return pendingDetail.get(key);
+  const promise = enqueueMeta(() => fetchBookDetail(rawTitle)).then(detail => {
+    if (detail && (detail.coverLarge || detail.year || detail.description || detail.subjects.length)) {
+      bookDetailCache[key] = detail;
+      try { localStorage.setItem(DETAIL_CACHE_KEY, JSON.stringify(bookDetailCache)); } catch {}
+    }
+    return detail;
+  }).finally(() => { pendingDetail.delete(key); });
+  pendingDetail.set(key, promise);
+  return promise;
 }
 
 // ---------- Admin session ----------
@@ -1307,6 +1454,12 @@ function render() {
     return;
   }
 
+  const route = parseRoute();
+  if (route.name === "book") {
+    renderBookDetail(app, route.round);
+    return;
+  }
+
   const stats = computeStats();
   const admin = isAdmin();
   const displayName = displayNameFromMeta(session.user);
@@ -1430,8 +1583,8 @@ function render() {
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
           <span class="h-content">
             ${h.winner_username
-              ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<span class="h-who">${esc(h.winner_username)}</span> — ${esc(h.book || '')}`
-              : esc(h.book || '')}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
+              ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<span class="h-who">${esc(h.winner_username)}</span> — <a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`
+              : `<a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
           </span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
         </div>
@@ -1577,6 +1730,102 @@ function render() {
   decorateGenres();
 }
 
+// ---------- Router + book detail page ----------
+function parseRoute() {
+  const m = (location.hash || "").match(/^#book=(\d+)$/);
+  return m ? { name: "book", round: parseInt(m[1], 10) } : { name: "main" };
+}
+
+function renderBookDetail(app, round) {
+  window.scrollTo(0, 0);
+  const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
+  const h = state.history.find(e => e.round === round);
+
+  if (!h) {
+    // History may simply not be loaded yet on a fresh deep-link.
+    const loading = state.history.length === 0;
+    app.innerHTML = `
+      <header><div class="eyebrow">The Guild</div><h1>The Shelf</h1><div class="rule"></div></header>
+      ${back}
+      <div class="setup">
+        <h2>${loading ? 'Loading…' : 'Book not found'}</h2>
+        <p>${loading ? 'Fetching the shelf.' : `There's no past read for round ${round}.`}</p>
+      </div>`;
+    return;
+  }
+
+  const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
+  const pickerHtml = h.winner_username
+    ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<b>${esc(h.winner_username)}</b>`
+    : `<span class="detail-muted">no picker recorded</span>`;
+
+  app.innerHTML = `
+    <header><div class="eyebrow">Past read · Round ${h.round}</div><h1>The Shelf</h1><div class="rule"></div></header>
+    ${back}
+    <div class="book-detail">
+      <div class="bd-top">
+        <div class="cover-slot xl" id="bd-cover"></div>
+        <div class="bd-head">
+          <div class="bd-title">${esc(h.book || '—')}</div>
+          <div class="bd-author" id="bd-author"></div>
+          <div class="bd-facts" id="bd-facts"><span class="detail-muted">Looking up…</span></div>
+          <div class="bd-pick">Picked by ${pickerHtml} · Round ${h.round} · ${fmtDate(h.ts)}</div>
+        </div>
+      </div>
+      <div id="bd-desc"></div>
+      <div id="bd-firstline"></div>
+      <div id="bd-subjects"></div>
+      <div id="bd-people"></div>
+      <div id="bd-extra"></div>
+    </div>`;
+
+  decorateBookDetail(h);
+}
+
+async function decorateBookDetail(h) {
+  const detail = await resolveBookDetail(h.book);
+  const r = parseRoute();
+  if (r.name !== "book" || r.round !== h.round) return; // navigated away
+
+  const cover = document.getElementById("bd-cover");
+  if (cover && !cover.dataset.done) {
+    cover.dataset.done = "1";
+    if (detail.coverLarge) insertCoverImg(cover, detail.coverLarge);
+    else cover.classList.add("no-cover");
+  }
+  const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+
+  set("bd-author", detail.authors.length ? `by ${esc(detail.authors.join(", "))}` : "");
+
+  const facts = [];
+  if (detail.year) facts.push(`First published ${detail.year}`);
+  if (detail.pages) facts.push(`${detail.pages} pages`);
+  if (detail.editionCount) facts.push(`${detail.editionCount} edition${detail.editionCount === 1 ? '' : 's'}`);
+  set("bd-facts", facts.length
+    ? facts.map(f => `<span>${esc(f)}</span>`).join(`<span class="dot">·</span>`)
+    : `<span class="detail-muted">No catalog data found on Open Library.</span>`);
+
+  set("bd-desc", detail.description ? `<div class="bd-desc">${esc(detail.description)}</div>` : "");
+  set("bd-firstline", detail.firstSentence ? `<div class="bd-quote">“${esc(detail.firstSentence)}”</div>` : "");
+
+  const subs = [...new Set(cleanSubjects(detail.subjects))].slice(0, 16);
+  set("bd-subjects", subs.length
+    ? `<div class="bd-block"><div class="bd-block-head">Subjects</div><div class="genre-tags">${subs.map(s => `<span class="genre-tag">${esc(titleCase(s))}</span>`).join("")}</div></div>`
+    : "");
+
+  const chip = (arr) => arr.map(s => `<span class="genre-tag">${esc(s)}</span>`).join("");
+  let people = "";
+  if (detail.persons.length) people += `<div class="bd-block"><div class="bd-block-head">Characters</div><div class="genre-tags">${chip(detail.persons)}</div></div>`;
+  if (detail.places.length) people += `<div class="bd-block"><div class="bd-block-head">Settings</div><div class="genre-tags">${chip(detail.places)}</div></div>`;
+  set("bd-people", people);
+
+  const extra = [];
+  if (detail.publishers.length) extra.push(`<div><span class="bd-k">Publisher</span> ${esc(detail.publishers.join(", "))}</div>`);
+  if (detail.isbn.length) extra.push(`<div><span class="bd-k">ISBN</span> ${esc(detail.isbn[0])}</div>`);
+  if (detail.olKey) extra.push(`<div><a class="footer-link" href="https://openlibrary.org${attr(detail.olKey)}" target="_blank" rel="noopener">View on Open Library ↗</a></div>`);
+  set("bd-extra", extra.length ? `<div class="bd-block bd-extra">${extra.join("")}</div>` : "");
+}
+
 function renderLoginGate() {
   return `
     <header>
@@ -1679,6 +1928,7 @@ window.addEventListener("resize", () => {
 
 // ---------- Boot ----------
 initAuth();
+window.addEventListener("hashchange", () => render());
 window.addEventListener("focus", () => { if (session) queueRefresh(); });
 </script>
 </body>
