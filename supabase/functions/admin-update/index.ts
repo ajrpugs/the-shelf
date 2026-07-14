@@ -32,6 +32,93 @@ type State = {
 
 const emptyState = (): State => ({ eliminated: [], history: [], roundNumber: 1 });
 
+// --- Open Library cover lookup + Discord webhook -----------------------------
+
+function normalizeForMatch(s: string): string {
+  return (s || "")
+    .replace(/\s+by\s+.+$/i, "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/^\s*(the|a|an)\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseTitleAuthor(raw: string): { title: string; author: string | null } {
+  const m = (raw || "").match(/^(.+?)\s+by\s+(.+)$/i);
+  return m
+    ? { title: m[1].trim(), author: m[2].trim() }
+    : { title: (raw || "").trim(), author: null };
+}
+
+async function fetchCover(rawTitle: string): Promise<string | null> {
+  const { title, author } = parseTitleAuthor(rawTitle);
+  if (!title) return null;
+  const params = new URLSearchParams({ title, limit: "5", fields: "title,cover_i" });
+  if (author) params.set("author", author);
+  const url = `https://openlibrary.org/search.json?${params.toString()}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const body = await res.json();
+    const docs = (body.docs ?? []) as Array<{ title?: string; cover_i?: number }>;
+    const normTitle = normalizeForMatch(title);
+    for (const doc of docs) {
+      if (!doc.cover_i) continue;
+      const resultNorm = normalizeForMatch(doc.title || "");
+      if (!resultNorm) continue;
+      const matches = resultNorm === normTitle
+        || resultNorm.includes(normTitle)
+        || normTitle.includes(resultNorm);
+      if (!matches) continue;
+      return `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`;
+    }
+    return null;
+  } catch { return null; }
+}
+
+type DiscordArgs = {
+  book: string;
+  cover: string | null;
+  username: string;
+  avatarUrl: string | null;
+  round: number;
+  roundAdvanced: boolean;
+};
+
+async function postToDiscord(webhookUrl: string, args: DiscordArgs): Promise<void> {
+  const embed: Record<string, unknown> = {
+    title: args.book || "—",
+    description: `Picked by **${args.username}** for round ${args.round}.`,
+    color: 0xc94a37,
+    footer: {
+      text: args.roundAdvanced
+        ? `Round ${args.round} complete — round ${args.round + 1} opens now`
+        : `Round ${args.round}`,
+    },
+    timestamp: new Date().toISOString(),
+  };
+  if (args.cover) embed.thumbnail = { url: args.cover };
+  if (args.avatarUrl) embed.author = { name: args.username, icon_url: args.avatarUrl };
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: "📖 A new read has been chosen.",
+        embeds: [embed],
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.error("Discord webhook non-2xx:", res.status, text);
+    }
+  } catch (err) {
+    console.error("Discord webhook error:", err);
+  }
+}
+
 function normalizeState(raw: any): State {
   const r = raw ?? {};
   return {
@@ -77,6 +164,7 @@ Deno.serve(async (req) => {
   const action = body.action;
   const payload = (body.payload ?? {}) as Record<string, unknown>;
   let winner: HistoryItem | null = null;
+  let winnerAvatarUrl: string | null = null;
   let roundAdvanced = false;
 
   try {
@@ -84,7 +172,7 @@ Deno.serve(async (req) => {
       case "draw": {
         const { data: readers, error: rErr } = await client
           .from("shelf_users")
-          .select("id, discord_username, book")
+          .select("id, discord_username, book, avatar_url")
           .not("book", "is", null)
           .neq("book", "");
         if (rErr) throw rErr;
@@ -102,6 +190,7 @@ Deno.serve(async (req) => {
         state.history.unshift(entry);
         state.eliminated.push(chosen.id);
         winner = entry;
+        winnerAvatarUrl = (chosen as { avatar_url?: string | null }).avatar_url ?? null;
 
         // If this pick emptied the eligible pool, roll to the next round.
         if (eligible.length - 1 === 0) {
@@ -164,6 +253,24 @@ Deno.serve(async (req) => {
     .from("shelf_state")
     .upsert({ id: 1, data: state, updated_at: new Date().toISOString() });
   if (writeErr) return json({ error: writeErr.message }, 500);
+
+  // Fire-and-await the Discord webhook after the pick is durable. Failures are
+  // logged but do not affect the response — a busted webhook shouldn't block
+  // the app.
+  if (action === "draw" && winner) {
+    const webhookUrl = Deno.env.get("DISCORD_WEBHOOK_URL");
+    if (webhookUrl) {
+      const cover = await fetchCover(winner.book);
+      await postToDiscord(webhookUrl, {
+        book: winner.book,
+        cover,
+        username: winner.winner_username,
+        avatarUrl: winnerAvatarUrl,
+        round: winner.round,
+        roundAdvanced,
+      });
+    }
+  }
 
   return json({ state, winner, roundAdvanced });
 });
