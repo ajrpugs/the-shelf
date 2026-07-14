@@ -722,6 +722,26 @@ function decorateCovers() {
   });
 }
 
+// On the shelf: only turn a title into a link once we know Open Library has a
+// match for it (otherwise the detail page would be empty), so unmatched books
+// stay as plain text.
+function decorateShelfLinks() {
+  document.querySelectorAll(".shelf-title[data-shelf-id]").forEach(el => {
+    if (el.dataset.linkDone === "1") return;
+    const raw = el.dataset.linkTitle;
+    const id = el.dataset.shelfId;
+    const key = normalizeForMatch(raw);
+    if (!key) return;
+    const apply = (meta) => {
+      if (!metaHasData(meta)) return; // no match — leave it plain
+      el.dataset.linkDone = "1";
+      el.innerHTML = `<a class="book-link" href="#shelf=${encodeURIComponent(id)}">${esc(raw)}</a>`;
+    };
+    if (key in bookMetaCache) apply(bookMetaCache[key]);
+    else resolveBookMeta(raw).then(apply);
+  });
+}
+
 // Fill "· 1984 · 317pp" spans once the metadata resolves.
 function decorateMeta() {
   document.querySelectorAll(".book-meta[data-meta-title]").forEach(el => {
@@ -1463,7 +1483,11 @@ function render() {
 
   const route = parseRoute();
   if (route.name === "book") {
-    renderBookDetail(app, route.round);
+    renderBookDetail(app, { kind: "past", round: route.round });
+    return;
+  }
+  if (route.name === "shelf") {
+    renderBookDetail(app, { kind: "shelf", userId: route.userId });
     return;
   }
 
@@ -1543,7 +1567,7 @@ function render() {
           <div class="card-row" style="align-items: flex-start;">
             <span class="cover-slot small" data-cover-title="${attr(entry.book)}"></span>
             <div style="flex:1; min-width:0;">
-              <div class="name">${esc(entry.book)}<span class="book-meta" data-meta-title="${attr(entry.book)}"></span></div>
+              <div class="name"><span class="shelf-title" data-shelf-id="${attr(entry.id)}" data-link-title="${attr(entry.book)}">${esc(entry.book)}</span><span class="book-meta" data-meta-title="${attr(entry.book)}"></span></div>
               <div class="submitted-book">
                 ${entry.avatar_url ? `<img class="avatar-mini" src="${attr(entry.avatar_url)}" alt="">` : ''}
                 submitted by ${esc(entry.name)}
@@ -1734,49 +1758,68 @@ function render() {
   requestAnimationFrame(paintWheel);
   decorateCovers();
   decorateMeta();
+  decorateShelfLinks();
   decorateGenres();
 }
 
 // ---------- Router + book detail page ----------
 function parseRoute() {
-  const m = (location.hash || "").match(/^#book=(\d+)$/);
-  return m ? { name: "book", round: parseInt(m[1], 10) } : { name: "main" };
+  const hash = location.hash || "";
+  const book = hash.match(/^#book=(\d+)$/);
+  if (book) return { name: "book", round: parseInt(book[1], 10) };
+  const shelf = hash.match(/^#shelf=(.+)$/);
+  if (shelf) return { name: "shelf", userId: decodeURIComponent(shelf[1]) };
+  return { name: "main" };
 }
 
-function renderBookDetail(app, round) {
+function renderDetailMissing(app, back, loading, msg) {
+  app.innerHTML = `
+    <header><div class="eyebrow">The Guild</div><h1>The Shelf</h1><div class="rule"></div></header>
+    ${back}
+    <div class="setup">
+      <h2>${loading ? 'Loading…' : 'Book not found'}</h2>
+      <p>${loading ? 'Fetching the shelf.' : esc(msg)}</p>
+    </div>`;
+}
+
+// ctx is { kind: "past", round } or { kind: "shelf", userId }. Past reads are
+// keyed by round and shelf books by the reader's id, so the same title picked
+// by several people still resolves to distinct pages.
+function renderBookDetail(app, ctx) {
   window.scrollTo(0, 0);
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
-  const h = state.history.find(e => e.round === round);
 
-  if (!h) {
-    // History may simply not be loaded yet on a fresh deep-link.
-    const loading = state.history.length === 0;
-    app.innerHTML = `
-      <header><div class="eyebrow">The Guild</div><h1>The Shelf</h1><div class="rule"></div></header>
-      ${back}
-      <div class="setup">
-        <h2>${loading ? 'Loading…' : 'Book not found'}</h2>
-        <p>${loading ? 'Fetching the shelf.' : `There's no past read for round ${round}.`}</p>
-      </div>`;
-    return;
+  let book, eyebrow, metaLine;
+  if (ctx.kind === "past") {
+    const h = state.history.find(e => e.round === ctx.round);
+    if (!h) return renderDetailMissing(app, back, state.history.length === 0, `There's no past read for round ${ctx.round}.`);
+    book = h.book;
+    eyebrow = `Past read · Round ${h.round}`;
+    const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
+    const who = h.winner_username
+      ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<b>${esc(h.winner_username)}</b>`
+      : `<span class="detail-muted">no picker recorded</span>`;
+    metaLine = `Picked by ${who} · Round ${h.round} · ${fmtDate(h.ts)}`;
+  } else {
+    const u = users.find(x => x.id === ctx.userId);
+    if (!u || !(u.book || "").trim()) return renderDetailMissing(app, back, users.length === 0, `That book isn't on the shelf anymore.`);
+    book = u.book;
+    eyebrow = `On the shelf`;
+    const avatar = u.avatar_url || null;
+    metaLine = `Added by ${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<b>${esc(u.discord_username || "Reader")}</b>`;
   }
 
-  const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
-  const pickerHtml = h.winner_username
-    ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<b>${esc(h.winner_username)}</b>`
-    : `<span class="detail-muted">no picker recorded</span>`;
-
   app.innerHTML = `
-    <header><div class="eyebrow">Past read · Round ${h.round}</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">${esc(eyebrow)}</div><h1>The Shelf</h1><div class="rule"></div></header>
     ${back}
     <div class="book-detail">
       <div class="bd-top">
         <div class="cover-slot xl" id="bd-cover"></div>
         <div class="bd-head">
-          <div class="bd-title">${esc(h.book || '—')}</div>
+          <div class="bd-title">${esc(book || '—')}</div>
           <div class="bd-author" id="bd-author"></div>
           <div class="bd-facts" id="bd-facts"><span class="detail-muted">Looking up…</span></div>
-          <div class="bd-pick">Picked by ${pickerHtml} · Round ${h.round} · ${fmtDate(h.ts)}</div>
+          <div class="bd-pick">${metaLine}</div>
         </div>
       </div>
       <div id="bd-desc"></div>
@@ -1786,13 +1829,13 @@ function renderBookDetail(app, round) {
       <div id="bd-extra"></div>
     </div>`;
 
-  decorateBookDetail(h);
+  decorateBookDetail(book);
 }
 
-async function decorateBookDetail(h) {
-  const detail = await resolveBookDetail(h.book);
-  const r = parseRoute();
-  if (r.name !== "book" || r.round !== h.round) return; // navigated away
+async function decorateBookDetail(book) {
+  const hashAtCall = location.hash;
+  const detail = await resolveBookDetail(book);
+  if (location.hash !== hashAtCall) return; // navigated away
 
   const cover = document.getElementById("bd-cover");
   if (cover && !cover.dataset.done) {
