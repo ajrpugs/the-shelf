@@ -395,6 +395,14 @@
   .band-good{ color: var(--muted); }
   .band-bad{ color: var(--stamp); }
   .history-item .score-pill{ background: rgba(236,227,207,0.05); }
+  button.score-pill{
+    background: rgba(236,227,207,0.05); color: inherit; cursor: pointer;
+    line-height: 1; -webkit-appearance: none; appearance: none;
+    transition: background 0.15s ease, transform 0.1s ease;
+  }
+  button.score-pill:hover{ background: rgba(236,227,207,0.14); }
+  button.score-pill:active{ transform: scale(0.94); }
+  .score-pill.score-pill-empty{ color: var(--muted); border-style: dashed; }
 
   .bd-review{ }
   .bd-review .bd-review-row{ display: flex; align-items: baseline; gap: 12px; }
@@ -1846,7 +1854,9 @@ function render() {
               : `<a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
           </span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
-          ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
+          ${admin
+            ? `<button class="score-pill ${band ? band.cls : 'score-pill-empty'}" data-admin-rate="${attr(h.ts || '')}" title="Set score (librarian)">${band ? total : '＋'}</button>`
+            : (band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`)}
         </div>
       `;
     });
@@ -2384,6 +2394,29 @@ function wireUp() {
       const u = users.find(x => x.id === uid);
       if (!confirm(`Remove ${u?.discord_username || 'this reader'} from the shelf? Their past reads stay in the ledger, but they'll need to sign in again to rejoin.`)) return;
       callAdmin("admin_remove_user", { user_id: uid });
+    });
+  });
+
+  document.querySelectorAll("[data-admin-rate]").forEach(el => {
+    el.addEventListener("click", () => {
+      const ts = el.dataset.adminRate;
+      const h = state.history.find(x => x.ts === ts);
+      const current = ratingTotal(h);
+      const next = prompt(
+        `Set the Guild score (0–100) for "${h?.book || 'this read'}". Leave blank to clear.`,
+        current == null ? "" : String(current),
+      );
+      if (next === null) return; // cancelled
+      const trimmed = next.trim();
+      if (trimmed === "") {
+        if (current == null) return; // already unrated
+        callAdmin("admin_set_rating", { ts, total: null });
+        return;
+      }
+      const n = Math.round(Number(trimmed));
+      if (!Number.isFinite(n) || n < 0 || n > 100) { alert("Enter a number from 0 to 100."); return; }
+      if (n === current) return; // unchanged
+      callAdmin("admin_set_rating", { ts, total: n });
     });
   });
 

@@ -296,6 +296,23 @@ Deno.serve(async (req) => {
         if (error) throw error;
         break;
       }
+      case "admin_set_rating": {
+        // Librarian sets/clears the Guild rating (score /100) on a past read,
+        // identified by its history timestamp. total === null clears it.
+        const ts = String(payload.ts ?? "");
+        if (!ts) throw new Error("ts required");
+        const entry = state.history.find(h => h.ts === ts);
+        if (!entry) throw new Error("history item not found");
+        const raw = payload.total;
+        if (raw === null || raw === "" || raw === undefined) {
+          entry.rating = null;
+        } else {
+          const n = Math.round(Number(raw));
+          if (!Number.isFinite(n)) throw new Error("total must be a number");
+          entry.rating = { total: Math.max(0, Math.min(100, n)) };
+        }
+        break;
+      }
       case "admin_remove_user": {
         const userId = String(payload.user_id ?? "");
         if (!userId) throw new Error("user_id required");
