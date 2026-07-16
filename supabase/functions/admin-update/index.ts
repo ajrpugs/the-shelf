@@ -16,7 +16,17 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-type Rating = { total: number };
+type Rating = {
+  total: number;
+  // Optional per-category breakdown (1..20 each) snapshotted from member
+  // reviews when the librarian locks in the Guild score.
+  plot?: number;
+  characters?: number;
+  pacing?: number;
+  language?: number;
+  themes?: number;
+  reviews?: number; // how many member reviews the snapshot averaged
+};
 type HistoryItem = {
   round: number;
   winner_id: string | null;
@@ -309,7 +319,20 @@ Deno.serve(async (req) => {
         } else {
           const n = Math.round(Number(raw));
           if (!Number.isFinite(n)) throw new Error("total must be a number");
-          entry.rating = { total: Math.max(0, Math.min(100, n)) };
+          const rating: Rating = { total: Math.max(0, Math.min(100, n)) };
+          // Optional per-category breakdown, sent when locking in an aggregate
+          // of member reviews. Each is clamped to 1..20; bad values are dropped.
+          const clampCat = (v: unknown) => {
+            const c = Math.round(Number(v));
+            return Number.isFinite(c) ? Math.max(1, Math.min(20, c)) : undefined;
+          };
+          for (const cat of ["plot", "characters", "pacing", "language", "themes"] as const) {
+            const c = clampCat((payload as Record<string, unknown>)[cat]);
+            if (c !== undefined) rating[cat] = c;
+          }
+          const rc = Math.round(Number((payload as Record<string, unknown>).reviews));
+          if (Number.isFinite(rc) && rc > 0) rating.reviews = rc;
+          entry.rating = rating;
         }
         break;
       }

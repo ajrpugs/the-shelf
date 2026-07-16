@@ -414,6 +414,45 @@
   .bd-review .bd-score-max{ font-size: 15px; color: var(--ink-soft); font-weight: 400; margin-left: 2px; }
   .bd-review .score-pill{ font-size: 13px; align-self: center; }
 
+  /* Live scorecard on the Currently reading banner */
+  .bn-review{ margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--panel-border); }
+  .bn-review-score{ display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .bn-review-score .bd-score{ font-family:'Fraunces',serif; font-weight:700; font-size:26px; line-height:1; color:var(--ink); }
+  .bn-review-score .bd-score-max{ font-size:13px; color:var(--ink-soft); font-weight:400; margin-left:2px; }
+  .bn-review-score .score-pill{ align-self:center; }
+  .bn-review-count{ font-size:12px; color:var(--ink-soft); font-style:italic; }
+  .bn-review-actions{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  .btn-mini.lock{ background: var(--brass); color: var(--card); }
+  @media (max-width: 480px){ .winner-banner .bn-review-score, .winner-banner .bn-review-actions{ justify-content:center; } }
+
+  /* Rubric review form + per-category breakdown */
+  .rubric-modal{ max-width: 440px; }
+  .rubric-row{ display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px 12px; padding:9px 0; border-bottom:1px solid var(--panel-border); }
+  .rubric-row:last-of-type{ border-bottom:none; }
+  .rubric-cat{ font-family:'Fraunces',serif; font-weight:700; font-size:14px; }
+  .rubric-cat small{ display:block; font-family:'Courier Prime',monospace; font-weight:400; font-size:11px; color:var(--muted); font-style:italic; margin-top:1px; }
+  .rubric-input{ display:flex; align-items:center; gap:8px; }
+  .rubric-input input[type=range]{ width:120px; accent-color: var(--stamp); }
+  .rubric-val{ font-family:'Fraunces',serif; font-weight:700; font-size:15px; min-width:2.2em; text-align:right; }
+  .rubric-note{ width:100%; margin-top:12px; padding:9px 11px; font-family:'Courier Prime',monospace; font-size:13px;
+    background:var(--panel-2); color:var(--ink); border:1px solid var(--panel-border); border-radius:2px; resize:vertical; min-height:56px; }
+  .rubric-total{ display:flex; align-items:baseline; gap:10px; margin-top:12px; }
+  .rubric-total .bd-score{ font-family:'Fraunces',serif; font-weight:700; font-size:24px; color:var(--ink); }
+  .rubric-clear{ margin-right:auto; }
+
+  .bd-rubric{ display:flex; flex-direction:column; gap:10px; }
+  .bd-rubric-row{ display:grid; grid-template-columns: 150px 1fr auto; align-items:center; gap:10px; }
+  .bd-rubric-label{ font-family:'Fraunces',serif; font-weight:700; font-size:13px; color:var(--ink); }
+  .bd-rubric-bar{ height:8px; border-radius:999px; background:var(--panel-border); overflow:hidden; }
+  .bd-rubric-bar > span{ display:block; height:100%; border-radius:999px; background:currentColor; }
+  .bd-rubric-num{ font-family:'Fraunces',serif; font-weight:700; font-size:13px; min-width:5.5em; text-align:right; }
+  .bd-reviewers{ margin-top:14px; display:flex; flex-direction:column; gap:10px; }
+  .bd-reviewer{ font-size:13px; }
+  .bd-reviewer-head{ display:flex; align-items:center; gap:7px; }
+  .bd-reviewer-scores{ color:var(--ink-soft); font-family:'Courier Prime',monospace; font-size:11.5px; }
+  .bd-reviewer-note{ color:var(--ink-soft); font-style:italic; margin-top:2px; }
+  @media (max-width: 480px){ .bd-rubric-row{ grid-template-columns: 110px 1fr auto; } }
+
   /* Reader profile */
   .reader-link{ color: inherit; text-decoration: none; cursor: pointer; }
   .reader-link:hover{ color: var(--brass); text-decoration: underline; }
@@ -657,6 +696,7 @@ const supabase = CONFIGURED ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : nu
 const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
 let state = emptyState();
 let users = [];              // shelf_users rows
+let reviews = [];            // shelf_reviews rows (member rubric reviews)
 let session = null;          // Supabase auth session
 let myUserRow = null;        // Current user's shelf_users row
 let spinning = false;
@@ -1282,14 +1322,19 @@ async function signOut() {
 async function loadAll() {
   if (!CONFIGURED) { render(); return; }
   try {
-    const [{ data: sData, error: sErr }, { data: uData, error: uErr }] = await Promise.all([
+    const [{ data: sData, error: sErr }, { data: uData, error: uErr }, { data: rData, error: rErr }] = await Promise.all([
       supabase.from("shelf_state").select("data").eq("id", 1).single(),
       supabase.from("shelf_users").select("*"),
+      supabase.from("shelf_reviews").select("*"),
     ]);
     if (sErr && sErr.code !== "PGRST116") throw sErr;
     if (uErr) throw uErr;
     state = normalizeState(sData?.data);
     users = uData || [];
+    // Reviews are non-critical: if the table isn't there yet (migration not
+    // applied), degrade to no reviews instead of breaking the whole load.
+    if (rErr) console.warn("shelf_reviews unavailable:", rErr.message);
+    reviews = (!rErr && rData) ? rData : [];
     if (session) myUserRow = users.find(u => u.id === session.user.id) || myUserRow;
   } catch (err) {
     setFlash("err", `Couldn't load: ${err.message}`);
@@ -1302,6 +1347,7 @@ function subscribeRealtime() {
   supabase.channel("shelf-live")
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_state" }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_users" }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_reviews" }, () => queueRefresh())
     .subscribe();
 }
 let refreshTimer = null;
@@ -1337,6 +1383,109 @@ async function setMyBook(book) {
   } catch (err) {
     setFlash("err", `Couldn't save: ${err.message}`);
   }
+}
+
+// ---------- Member reviews ----------
+// Post (or clear, when scores is null) the signed-in reader's rubric review for
+// a read, then refresh the local cache and re-render.
+async function saveMyReview(bookTs, scores, note) {
+  if (!session || !bookTs) return;
+  const payload = scores === null
+    ? { book_ts: bookTs, clear: true }
+    : { book_ts: bookTs, ...scores, note: note || "" };
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/set-review`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      throw new Error(t || res.statusText);
+    }
+    const body = await res.json();
+    reviews = reviews.filter(r => !(r.book_ts === bookTs && r.user_id === session.user.id));
+    if (body.review) reviews.push(body.review);
+    setFlash("info", scores === null ? "Cleared your review." : "Your review is in.");
+    render();
+  } catch (err) {
+    setFlash("err", `Couldn't save review: ${err.message}`);
+  }
+}
+
+// Librarian snapshots the current member average into the committed Guild score,
+// which drops the read onto the leaderboard (and promotes the next-up read).
+function lockInScore(bookTs) {
+  const agg = aggregateRubric(bookTs);
+  if (!agg) { setFlash("err", "No member reviews to lock in yet."); render(); return; }
+  const h = state.history.find(x => x.ts === bookTs);
+  const title = h?.book || "this read";
+  if (!confirm(`Lock in the Guild score for "${title}" at ${agg.total}/100 (${agg.band.label}), averaged from ${agg.count} review${agg.count === 1 ? '' : 's'}? It moves to the leaderboard.`)) return;
+  const cats = {};
+  for (const { key } of RUBRIC) cats[key] = Math.round(agg.cats[key]);
+  callAdmin("admin_set_rating", { ts: bookTs, total: agg.total, ...cats, reviews: agg.count });
+}
+
+// Modal: fill in the five rubric categories (1..20) + an optional note. Sliders
+// default to the reader's prior review, or a neutral 12 (upper "Great").
+function openRubricModal(bookTs, bookTitle) {
+  const mine = myReviewFor(bookTs);
+  const start = k => (mine && Number.isFinite(Number(mine[k])) ? Number(mine[k]) : 12);
+  const back = document.createElement("div");
+  back.className = "modal-back";
+  back.innerHTML = `
+    <div class="modal rubric-modal">
+      <h3>Rate ${esc(bookTitle || "this read")}</h3>
+      <p>The Bibliomancer's Guild Rubric — score each 1–20. Bad 1–5 · Good 6–10 · Great 11–15 · Excellent 16–20.</p>
+      ${RUBRIC.map(({ key, label }) => `
+        <div class="rubric-row">
+          <div class="rubric-cat">${esc(label)}</div>
+          <div class="rubric-input">
+            <input type="range" min="1" max="20" step="1" value="${start(key)}" data-cat="${attr(key)}" id="rub-${attr(key)}">
+            <span class="rubric-val" id="rubval-${attr(key)}">${start(key)}</span>
+          </div>
+        </div>`).join("")}
+      <textarea class="rubric-note" id="rub-note" maxlength="500" placeholder="Optional — a sentence on what you thought">${esc(mine?.note || "")}</textarea>
+      <div class="rubric-total">Total <span class="bd-score" id="rub-total">0</span><span class="score-pill" id="rub-band"></span></div>
+      <div class="modal-actions">
+        ${mine ? `<button class="btn-ghost rubric-clear" id="rub-clear">Delete my review</button>` : ''}
+        <button class="btn-ghost" id="rub-cancel">Cancel</button>
+        <button class="btn-primary" id="rub-save">Submit review</button>
+      </div>
+    </div>`;
+  document.body.appendChild(back);
+  const close = () => { if (back.parentNode) document.body.removeChild(back); };
+  const ranges = [...back.querySelectorAll('input[type=range]')];
+  const totalEl = back.querySelector("#rub-total");
+  const bandEl = back.querySelector("#rub-band");
+  const recalc = () => {
+    let total = 0;
+    ranges.forEach(r => {
+      total += Number(r.value);
+      back.querySelector(`#rubval-${r.dataset.cat}`).textContent = r.value;
+    });
+    totalEl.textContent = total;
+    const band = ratingBand(total);
+    bandEl.textContent = band ? band.label : "";
+    bandEl.className = `score-pill ${band ? band.cls : ''}`;
+  };
+  ranges.forEach(r => r.addEventListener("input", recalc));
+  recalc();
+  back.querySelector("#rub-cancel").addEventListener("click", close);
+  back.addEventListener("click", (e) => { if (e.target === back) close(); });
+  const clearBtn = back.querySelector("#rub-clear");
+  if (clearBtn) clearBtn.addEventListener("click", () => { close(); saveMyReview(bookTs, null); });
+  back.querySelector("#rub-save").addEventListener("click", () => {
+    const scores = {};
+    ranges.forEach(r => { scores[r.dataset.cat] = Number(r.value); });
+    const note = back.querySelector("#rub-note").value.trim();
+    close();
+    saveMyReview(bookTs, scores, note);
+  });
 }
 
 // ---------- Wheel ----------
@@ -1677,6 +1826,46 @@ function ratingTotal(h) {
   return Number.isFinite(t) ? t : null;
 }
 
+// ---------- Member rubric reviews ----------
+// The five rubric categories, in the order they appear on the Guild scorecard.
+const RUBRIC = [
+  { key: "plot", label: "Plot" },
+  { key: "characters", label: "Characters" },
+  { key: "pacing", label: "Organization / Pacing" },
+  { key: "language", label: "Use of Language" },
+  { key: "themes", label: "Themes / Ideas" },
+];
+// Per-category band on the 1..20 scale (same cutoffs as the /100 bands ÷ 5).
+function categoryBand(score) {
+  if (score == null || !Number.isFinite(score)) return null;
+  if (score >= 16) return { label: "Excellent", cls: "band-exc" };
+  if (score >= 11) return { label: "Great", cls: "band-great" };
+  if (score >= 6) return { label: "Good", cls: "band-good" };
+  return { label: "Bad", cls: "band-bad" };
+}
+function reviewsFor(bookTs) {
+  return bookTs ? reviews.filter(r => r.book_ts === bookTs) : [];
+}
+function myReviewFor(bookTs) {
+  if (!session || !bookTs) return null;
+  return reviews.find(r => r.book_ts === bookTs && r.user_id === session.user.id) || null;
+}
+// Average the members' rubric reviews for one read into a live scorecard.
+// Returns null when nobody has reviewed yet.
+function aggregateRubric(bookTs) {
+  const rs = reviewsFor(bookTs);
+  if (!rs.length) return null;
+  const cats = {};
+  let total = 0;
+  for (const { key } of RUBRIC) {
+    const avg = rs.reduce((s, r) => s + (Number(r[key]) || 0), 0) / rs.length;
+    cats[key] = avg;
+    total += avg;
+  }
+  const roundedTotal = Math.round(total);
+  return { count: rs.length, cats, total: roundedTotal, band: ratingBand(roundedTotal) };
+}
+
 // A reader's stable identity: their Discord id when linked, else name-based
 // (so unlinked pickers like "Hunter" still aggregate and get a profile).
 function readerKey(id, name) {
@@ -1689,16 +1878,27 @@ function readerHref(id, name) {
 // A hero banner for a single pick. Used for both "Next up" (history[0]) and
 // "Currently reading" (older, still-unrated picks). The author/description/tag
 // slots are left empty and filled in later by decorateBanners. When `showRate`
-// is set and the viewer is the librarian, a score pill is shown so an
-// in-progress book can be rated straight from its banner (there's no leaderboard
-// row for it until it's scored).
+// is set (the Currently reading banner) the live member scorecard and the
+// "Rate this read" / librarian "Lock in" controls are shown.
 function bannerHtml(pick, { stamp, admin, showRate }) {
   const avatar = pick?.winner_id ? userAvatar(pick.winner_id) : null;
-  const total = ratingTotal(pick);
-  const band = ratingBand(total);
-  const ratePill = (admin && showRate && pick.book)
-    ? `<button class="score-pill ${band ? band.cls : 'score-pill-empty'}" data-admin-rate="${attr(pick.ts || '')}" title="Set score (librarian)">${band ? total : '＋'}</button>`
-    : '';
+  let reviewBlock = "";
+  if (showRate && pick.book) {
+    const agg = aggregateRubric(pick.ts);
+    const mine = myReviewFor(pick.ts);
+    reviewBlock = `
+      <div class="bn-review">
+        <div class="bn-review-score">
+          ${agg
+            ? `<span class="bd-score">${agg.total}<span class="bd-score-max">/100</span></span><span class="score-pill ${agg.band.cls}">${agg.band.label}</span><span class="bn-review-count">${agg.count} review${agg.count === 1 ? '' : 's'} so far</span>`
+            : `<span class="bn-review-count">No reviews yet — score it together on the call.</span>`}
+        </div>
+        <div class="bn-review-actions">
+          <button class="btn-mini" data-rate-ts="${attr(pick.ts || '')}">${mine ? 'Edit my review' : 'Rate this read'}</button>
+          ${(admin && agg) ? `<button class="btn-mini lock" data-lock-ts="${attr(pick.ts || '')}">Lock in Guild score</button>` : ''}
+        </div>
+      </div>`;
+  }
   return `
     <div class="winner-banner" data-banner-book="${attr(pick.book || '')}">
       <div class="stampbig">${esc(stamp)}</div>
@@ -1712,12 +1912,12 @@ function bannerHtml(pick, { stamp, admin, showRate }) {
             picked by
             ${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}
             <a class="reader-link" href="${readerHref(pick.winner_id, pick.winner_username)}"><b>${esc(pick.winner_username)}</b></a>
-            ${ratePill}
           </div>
         </div>
       </div>
       ${pick.book ? `<div class="wdesc bn-desc"></div>` : ''}
       ${pick.book ? `<div class="wtags genre-tags bn-tags"></div>` : ''}
+      ${reviewBlock}
       ${pick.book ? `<a class="wmore" href="#book=${pick.round}">Full details →</a>` : ''}
     </div>
   `;
@@ -2088,6 +2288,74 @@ function renderDetailMissing(app, back, loading, msg) {
 // ctx is { kind: "past", round } or { kind: "shelf", userId }. Past reads are
 // keyed by round and shelf books by the reader's id, so the same title picked
 // by several people still resolves to distinct pages.
+// The Guild review block for a past read: the committed (or live) /100 score,
+// the per-category breakdown, each member's scores + notes, and a rate button.
+function guildReviewHtml(h) {
+  const agg = aggregateRubric(h.ts);
+  const committed = ratingTotal(h);
+  // Per-category source: live member reviews first, else a locked-in breakdown.
+  let cats = null;
+  if (agg) cats = agg.cats;
+  else if (h.rating && RUBRIC.some(({ key }) => Number.isFinite(Number(h.rating[key])))) {
+    cats = {};
+    RUBRIC.forEach(({ key }) => { cats[key] = Number(h.rating[key]); });
+  }
+  const headTotal = committed != null ? committed : (agg ? agg.total : null);
+  const headBand = committed != null ? ratingBand(committed) : (agg ? agg.band : null);
+
+  let html = `<div class="bd-block bd-review ${headBand ? headBand.cls : ''}"><div class="bd-block-head">Guild review</div>`;
+  if (headTotal != null) {
+    html += `<div class="bd-review-row"><span class="bd-score">${headTotal}<span class="bd-score-max">/100</span></span>`;
+    html += `<span class="score-pill ${headBand.cls}">${headBand.label}</span>`;
+    html += committed != null
+      ? `<span class="bn-review-count">Locked in${agg ? ` · ${agg.count} review${agg.count === 1 ? '' : 's'}` : ''}</span>`
+      : `<span class="bn-review-count">Live · ${agg.count} review${agg.count === 1 ? '' : 's'} so far</span>`;
+    html += `</div>`;
+  } else {
+    html += `<div class="bn-review-count">No reviews yet.</div>`;
+  }
+
+  if (cats) {
+    html += `<div class="bd-rubric" style="margin-top:14px;">`;
+    for (const { key, label } of RUBRIC) {
+      const v = cats[key];
+      const b = categoryBand(v);
+      const pct = Math.max(0, Math.min(100, (v / 20) * 100));
+      html += `<div class="bd-rubric-row ${b ? b.cls : ''}">
+        <span class="bd-rubric-label">${esc(label)}</span>
+        <span class="bd-rubric-bar"><span style="width:${pct}%"></span></span>
+        <span class="bd-rubric-num">${v.toFixed(1)} · ${b ? b.label : '—'}</span>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  const rs = reviewsFor(h.ts);
+  if (rs.length) {
+    html += `<div class="bd-reviewers">`;
+    for (const r of rs) {
+      const u = users.find(x => x.id === r.user_id);
+      const name = u?.discord_username || "Reader";
+      const av = u?.avatar_url;
+      const t = RUBRIC.reduce((s, { key }) => s + (Number(r[key]) || 0), 0);
+      const b = ratingBand(t);
+      html += `<div class="bd-reviewer">
+        <div class="bd-reviewer-head">${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<b>${esc(name)}</b> · ${t}/100 <span class="score-pill ${b.cls}">${b.label}</span></div>
+        <div class="bd-reviewer-scores">${RUBRIC.map(({ key, label }) => `${esc(label.split(" ")[0])} ${r[key]}`).join(" · ")}</div>
+        ${r.note ? `<div class="bd-reviewer-note">“${esc(r.note)}”</div>` : ""}
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (session) {
+    const mine = myReviewFor(h.ts);
+    html += `<div class="bn-review-actions" style="margin-top:14px;"><button class="btn-mini" data-rate-ts="${attr(h.ts || "")}">${mine ? "Edit my review" : "Rate this read"}</button></div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
 function renderBookDetail(app, ctx) {
   window.scrollTo(0, 0);
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
@@ -2103,18 +2371,7 @@ function renderBookDetail(app, ctx) {
       ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="reader-link" href="${readerHref(h.winner_id, h.winner_username)}"><b>${esc(h.winner_username)}</b></a>`
       : `<span class="detail-muted">no picker recorded</span>`;
     metaLine = `Picked by ${who} · Round ${h.round} · ${fmtDate(h.ts)}`;
-    const total = ratingTotal(h);
-    const band = ratingBand(total);
-    if (band) {
-      reviewHtml = `
-        <div class="bd-block bd-review ${band.cls}">
-          <div class="bd-block-head">Guild review</div>
-          <div class="bd-review-row">
-            <span class="bd-score">${total}<span class="bd-score-max">/100</span></span>
-            <span class="score-pill ${band.cls}">${band.label}</span>
-          </div>
-        </div>`;
-    }
+    reviewHtml = guildReviewHtml(h);
   } else {
     const u = users.find(x => x.id === ctx.userId);
     if (!u || !(u.book || "").trim()) return renderDetailMissing(app, back, users.length === 0, `That book isn't on the shelf anymore.`);
@@ -2486,6 +2743,20 @@ window.addEventListener("resize", () => {
 
 // ---------- Boot ----------
 initAuth();
+// Review buttons live on both the Currently reading banner and book pages, so
+// handle them by delegation instead of per-render wiring.
+document.addEventListener("click", (e) => {
+  const rate = e.target.closest("[data-rate-ts]");
+  if (rate) {
+    const ts = rate.dataset.rateTs;
+    const h = state.history.find(x => x.ts === ts);
+    openRubricModal(ts, h?.book || "");
+    return;
+  }
+  const lock = e.target.closest("[data-lock-ts]");
+  if (lock) lockInScore(lock.dataset.lockTs);
+});
+
 window.addEventListener("hashchange", () => render());
 window.addEventListener("focus", () => { if (session) queueRefresh(); });
 </script>
