@@ -2837,7 +2837,7 @@ async function decorateBookDetail(book) {
   if (detail.publishers.length) extra.push(`<div><span class="bd-k">Publisher</span> ${esc(detail.publishers.join(", "))}</div>`);
   if (detail.isbn.length) extra.push(`<div><span class="bd-k">ISBN</span> ${esc(detail.isbn[0])}</div>`);
   if (detail.goodreadsId) extra.push(`<div><a class="footer-link" href="https://www.goodreads.com/book/show/${attr(detail.goodreadsId)}" target="_blank" rel="noopener">View on Goodreads ↗</a></div>`);
-  if (detail.amazonId) extra.push(`<div><a class="footer-link" href="https://www.amazon.com/dp/${attr(detail.amazonId)}" target="_blank" rel="noopener">View on Amazon ↗</a></div>`);
+  if (detail.amazonId) extra.push(`<div><a class="footer-link" href="https://www.amazon.ca/dp/${attr(detail.amazonId)}" target="_blank" rel="noopener">View on Amazon ↗</a></div>`);
   if (detail.olKey) extra.push(`<div><a class="footer-link" href="https://openlibrary.org${attr(detail.olKey)}" target="_blank" rel="noopener">View on Open Library ↗</a></div>`);
   set("bd-extra", extra.length ? `<div class="bd-block bd-extra">${extra.join("")}</div>` : "");
 }
