@@ -16,6 +16,9 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// Base URL of the live app, so Discord embeds can link back to a book's page.
+const SITE_URL = "https://ajrpugs.github.io/the-shelf/";
+
 type Rating = {
   total: number;
   // Optional per-category breakdown (1..20 each) snapshotted from member
@@ -145,6 +148,7 @@ async function postToDiscord(webhookUrl: string, args: DiscordArgs): Promise<voi
 
   const embed: Record<string, unknown> = {
     title: args.book || "—",
+    url: `${SITE_URL}#book=${args.round}`,
     description,
     color: 0xc94a37,
     footer: {

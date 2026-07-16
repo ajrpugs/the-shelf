@@ -15,6 +15,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const PUBLIC_KEY = Deno.env.get("DISCORD_PUBLIC_KEY") ?? "";
 
+// Base URL of the live app, so Discord embeds can link back to the book's page.
+const SITE_URL = "https://ajrpugs.github.io/the-shelf/";
+
 // --- Open Library cover + Discord post ---------------------------------------
 
 function normalizeForMatch(s: string): string {
@@ -55,7 +58,7 @@ async function fetchCover(rawTitle: string): Promise<string | null> {
 }
 async function postBookSet(webhookUrl: string, args: {
   book: string; cover: string | null; username: string;
-  avatarUrl: string | null; previousBook: string | null;
+  avatarUrl: string | null; previousBook: string | null; link: string | null;
 }): Promise<void> {
   const embed: Record<string, unknown> = {
     title: args.book,
@@ -64,6 +67,7 @@ async function postBookSet(webhookUrl: string, args: {
     footer: { text: "The Shelf · book updated" },
     timestamp: new Date().toISOString(),
   };
+  if (args.link) embed.url = args.link;
   if (args.cover) embed.thumbnail = { url: args.cover };
   if (args.avatarUrl) embed.author = { name: args.username, icon_url: args.avatarUrl };
   const content = args.previousBook
@@ -197,6 +201,7 @@ async function handleMyBook(interaction: any) {
         username: user.discord_username || discordUsername,
         avatarUrl: user.avatar_url ?? null,
         previousBook: prevBook || null,
+        link: `${SITE_URL}#shelf=${user.id}`,
       });
     }
   }

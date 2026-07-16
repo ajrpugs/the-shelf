@@ -20,6 +20,9 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// Base URL of the live app, so Discord embeds can link back to the book's page.
+const SITE_URL = "https://ajrpugs.github.io/the-shelf/";
+
 // --- Open Library cover lookup -----------------------------------------------
 
 function normalizeForMatch(s: string): string {
@@ -69,6 +72,7 @@ async function postBookSet(webhookUrl: string, args: {
   username: string;
   avatarUrl: string | null;
   previousBook: string | null;
+  link: string | null;
 }): Promise<void> {
   const embed: Record<string, unknown> = {
     title: args.book,
@@ -79,6 +83,7 @@ async function postBookSet(webhookUrl: string, args: {
     footer: { text: "The Shelf · book updated" },
     timestamp: new Date().toISOString(),
   };
+  if (args.link) embed.url = args.link;
   if (args.cover) embed.thumbnail = { url: args.cover };
   if (args.avatarUrl) embed.author = { name: args.username, icon_url: args.avatarUrl };
   const content = args.previousBook
@@ -156,6 +161,7 @@ Deno.serve(async (req) => {
         username: current.discord_username || "Reader",
         avatarUrl: current.avatar_url ?? null,
         previousBook: prev || null,
+        link: `${SITE_URL}#shelf=${userId}`,
       });
     }
   }
