@@ -998,7 +998,7 @@ async function decorateBanners() {
 // ---------- Book detail (for the per-book page) ----------
 // A heavier, on-demand lookup (search + works endpoint) used only on the
 // #book=<round> page — one book at a time, so cost is trivial.
-const DETAIL_CACHE_KEY = "shelf-bookdetail-v2";
+const DETAIL_CACHE_KEY = "shelf-bookdetail-v3";
 let bookDetailCache = {};
 try { bookDetailCache = JSON.parse(localStorage.getItem(DETAIL_CACHE_KEY) || "{}") || {}; }
 catch { bookDetailCache = {}; }
@@ -1020,6 +1020,14 @@ async function fetchWorkDescription(key) {
     d = d.trim();
     return d || null;
   } catch { return null; }
+}
+
+// Open Library's id_* arrays can lead with blank entries ("" placeholders),
+// so take the first non-empty value rather than blindly [0].
+function firstId(arr) {
+  if (!Array.isArray(arr)) return null;
+  const v = arr.find(x => x != null && String(x).trim() !== "");
+  return v != null ? String(v).trim() : null;
 }
 
 async function fetchBookDetail(rawTitle) {
@@ -1078,8 +1086,8 @@ async function fetchBookDetail(rawTitle) {
       description,
       editionCount: Number.isFinite(doc.edition_count) ? doc.edition_count : null,
       olKey: doc.key || null,
-      goodreadsId: Array.isArray(doc.id_goodreads) && doc.id_goodreads.length ? String(doc.id_goodreads[0]) : null,
-      amazonId: Array.isArray(doc.id_amazon) && doc.id_amazon.length ? String(doc.id_amazon[0]) : null,
+      goodreadsId: firstId(doc.id_goodreads),
+      amazonId: firstId(doc.id_amazon),
     };
   } catch { return empty; }
   finally { clearTimeout(timer); }
