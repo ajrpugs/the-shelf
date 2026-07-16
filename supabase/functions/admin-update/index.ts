@@ -134,6 +134,7 @@ type DiscordArgs = {
   description: string | null;
   username: string;
   avatarUrl: string | null;
+  discordId: string | null;
   round: number;
   roundAdvanced: boolean;
 };
@@ -160,14 +161,19 @@ async function postToDiscord(webhookUrl: string, args: DiscordArgs): Promise<voi
   if (args.cover) embed.thumbnail = { url: args.cover };
   if (args.avatarUrl) embed.author = { name: args.username, icon_url: args.avatarUrl };
 
+  // Personally ping the winner when their web account is linked to Discord;
+  // otherwise fall back to a plain announcement.
+  const content = args.discordId
+    ? `📖 <@${args.discordId}>, the wheel picked you — your book is the next read!`
+    : "📖 A new read has been chosen.";
+  const payload: Record<string, unknown> = { content, embeds: [embed] };
+  if (args.discordId) payload.allowed_mentions = { users: [args.discordId] };
+
   try {
     const res = await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        content: "📖 A new read has been chosen.",
-        embeds: [embed],
-      }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -225,6 +231,7 @@ Deno.serve(async (req) => {
   const payload = (body.payload ?? {}) as Record<string, unknown>;
   let winner: HistoryItem | null = null;
   let winnerAvatarUrl: string | null = null;
+  let winnerDiscordId: string | null = null;
   let roundAdvanced = false;
 
   try {
@@ -232,7 +239,7 @@ Deno.serve(async (req) => {
       case "draw": {
         const { data: readers, error: rErr } = await client
           .from("shelf_users")
-          .select("id, discord_username, book, avatar_url")
+          .select("id, discord_username, book, avatar_url, discord_id")
           .not("book", "is", null)
           .neq("book", "");
         if (rErr) throw rErr;
@@ -251,6 +258,7 @@ Deno.serve(async (req) => {
         state.eliminated.push(chosen.id);
         winner = entry;
         winnerAvatarUrl = (chosen as { avatar_url?: string | null }).avatar_url ?? null;
+        winnerDiscordId = (chosen as { discord_id?: string | null }).discord_id ?? null;
 
         // If this pick emptied the eligible pool, roll to the next round.
         if (eligible.length - 1 === 0) {
@@ -384,6 +392,7 @@ Deno.serve(async (req) => {
         description: meta.description,
         username: winner.winner_username,
         avatarUrl: winnerAvatarUrl,
+        discordId: winnerDiscordId,
         round: winner.round,
         roundAdvanced,
       });

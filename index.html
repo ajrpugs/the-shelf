@@ -483,6 +483,39 @@
   .bd-reviewer-head{ display:flex; align-items:center; gap:7px; }
   .bd-reviewer-scores{ color:var(--ink-soft); font-family:'Courier Prime',monospace; font-size:11.5px; }
   .bd-reviewer-note{ color:var(--ink-soft); font-style:italic; margin-top:2px; }
+
+  /* Discussion thread */
+  .bd-comments{ display:flex; flex-direction:column; gap:12px; margin-bottom:14px; }
+  .bd-comment-head{ display:flex; align-items:center; gap:7px; font-size:12.5px; }
+  .bd-comment-time{ color:var(--muted); font-size:11px; font-style:italic; }
+  .comment-del{ margin-left:auto; background:transparent; border:none; color:var(--muted); cursor:pointer; font-size:16px; line-height:1; padding:0 4px; }
+  .comment-del:hover{ color:var(--stamp); }
+  .bd-comment-body{ font-size:13.5px; line-height:1.4; margin-top:3px; white-space:pre-wrap; word-break:break-word; }
+  .bd-comment-form{ display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
+  .bd-comment-form textarea{ min-height:48px; }
+  .bd-comment-form button{ align-self:flex-end; }
+
+  /* Reviewers' corner superlatives */
+  .sup-list{ display:flex; flex-direction:column; }
+  .sup-item{ display:flex; align-items:baseline; gap:10px; padding:7px 0; border-bottom:1px solid var(--panel-border); flex-wrap:wrap; }
+  .sup-item:last-child{ border-bottom:none; }
+  .sup-item-label{ font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:var(--ink-soft); min-width:96px; }
+
+  /* Leaderboard search */
+  .lb-search{ width:100%; padding:9px 12px; margin-bottom:10px; font-size:13px;
+    font-family:'Courier Prime',monospace; background:var(--panel-2); color:var(--ink);
+    border:1px solid var(--panel-border); border-radius:2px; }
+
+  /* Year in books recap */
+  .recap-years{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  .recap-year{ font-family:'Fraunces',serif; font-weight:700; font-size:14px; color:var(--ink-soft);
+    text-decoration:none; padding:3px 10px; border:1px solid var(--panel-border); border-radius:999px; }
+  .recap-year:hover{ color:var(--ink); }
+  .recap-year.on{ color:var(--card); background:var(--stamp); border-color:var(--stamp); }
+  .recap-hero{ font-family:'Fraunces',serif; font-size:20px; margin-bottom:14px; }
+  .recap-big{ font-size:40px; font-weight:700; color:var(--stamp); }
+  .recap-picker{ color:var(--ink-soft); font-style:italic; }
+  .recap-reader{ display:flex; align-items:center; gap:8px; font-size:14px; }
   @media (max-width: 480px){ .bd-rubric-row{ grid-template-columns: 110px 1fr auto; } }
 
   /* Reader profile */
@@ -729,6 +762,8 @@ const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
 let state = emptyState();
 let users = [];              // shelf_users rows
 let reviews = [];            // shelf_reviews rows (member rubric reviews)
+let comments = [];           // shelf_comments rows (per-book discussion)
+let leaderboardQuery = "";    // live filter text for the leaderboard
 let session = null;          // Supabase auth session
 let myUserRow = null;        // Current user's shelf_users row
 let spinning = false;
@@ -1355,19 +1390,22 @@ async function signOut() {
 async function loadAll() {
   if (!CONFIGURED) { render(); return; }
   try {
-    const [{ data: sData, error: sErr }, { data: uData, error: uErr }, { data: rData, error: rErr }] = await Promise.all([
+    const [{ data: sData, error: sErr }, { data: uData, error: uErr }, { data: rData, error: rErr }, { data: cData, error: cErr }] = await Promise.all([
       supabase.from("shelf_state").select("data").eq("id", 1).single(),
       supabase.from("shelf_users").select("*"),
       supabase.from("shelf_reviews").select("*"),
+      supabase.from("shelf_comments").select("*"),
     ]);
     if (sErr && sErr.code !== "PGRST116") throw sErr;
     if (uErr) throw uErr;
     state = normalizeState(sData?.data);
     users = uData || [];
-    // Reviews are non-critical: if the table isn't there yet (migration not
-    // applied), degrade to no reviews instead of breaking the whole load.
+    // Reviews/comments are non-critical: if a table isn't there yet (migration
+    // not applied), degrade to empty instead of breaking the whole load.
     if (rErr) console.warn("shelf_reviews unavailable:", rErr.message);
     reviews = (!rErr && rData) ? rData : [];
+    if (cErr) console.warn("shelf_comments unavailable:", cErr.message);
+    comments = (!cErr && cData) ? cData : [];
     if (session) myUserRow = users.find(u => u.id === session.user.id) || myUserRow;
   } catch (err) {
     setFlash("err", `Couldn't load: ${err.message}`);
@@ -1381,6 +1419,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_state" }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_users" }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_reviews" }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_comments" }, () => queueRefresh())
     .subscribe();
 }
 let refreshTimer = null;
@@ -1448,6 +1487,41 @@ async function saveMyReview(bookTs, scores, note) {
   } catch (err) {
     setFlash("err", `Couldn't save review: ${err.message}`);
   }
+}
+
+// ---------- Discussion threads ----------
+function commentsFor(bookTs) {
+  return comments
+    .filter(c => c.book_ts === bookTs)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+}
+async function postComment(bookTs, text) {
+  text = (text || "").trim();
+  if (!session || !bookTs || !text) return;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/post-comment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${session.access_token}` },
+      body: JSON.stringify({ book_ts: bookTs, body: text }),
+    });
+    if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error(t || res.statusText); }
+    const body = await res.json();
+    if (body.comment) comments.push(body.comment);
+    render();
+  } catch (err) { setFlash("err", `Couldn't post: ${err.message}`); render(); }
+}
+async function deleteComment(id) {
+  if (!session || !id) return;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/post-comment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${session.access_token}` },
+      body: JSON.stringify({ delete_id: id }),
+    });
+    if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error(t || res.statusText); }
+    comments = comments.filter(c => c.id !== id);
+    render();
+  } catch (err) { setFlash("err", `Couldn't delete: ${err.message}`); render(); }
 }
 
 // Librarian opens or closes member reviews for a read.
@@ -1976,6 +2050,39 @@ function categoryBand(score) {
 function reviewsFor(bookTs) {
   return bookTs ? reviews.filter(r => r.book_ts === bookTs) : [];
 }
+function reviewTotal(r) {
+  return RUBRIC.reduce((s, { key }) => s + (Number(r[key]) || 0), 0);
+}
+// Superlatives drawn from the member-review data: the read the club disagreed
+// on most (highest spread of totals), and the harshest / most generous
+// reviewers (lowest / highest average score given). Each needs ≥2 data points.
+function reviewSuperlatives() {
+  const byBook = {}, byUser = {};
+  for (const r of reviews) {
+    const t = reviewTotal(r);
+    (byBook[r.book_ts] ||= []).push(t);
+    (byUser[r.user_id] ||= []).push(t);
+  }
+  let controversial = null;
+  for (const [ts, totals] of Object.entries(byBook)) {
+    if (totals.length < 2) continue;
+    const mean = totals.reduce((a, b) => a + b, 0) / totals.length;
+    const sd = Math.sqrt(totals.reduce((a, b) => a + (b - mean) ** 2, 0) / totals.length);
+    const h = state.history.find(x => x.ts === ts);
+    if (!h) continue;
+    if (!controversial || sd > controversial.sd) controversial = { sd, round: h.round, book: h.book, count: totals.length };
+  }
+  let harsh = null, generous = null;
+  for (const [uid, totals] of Object.entries(byUser)) {
+    if (totals.length < 2) continue;
+    const avg = totals.reduce((a, b) => a + b, 0) / totals.length;
+    const u = users.find(x => x.id === uid);
+    const name = u?.discord_username || "Reader";
+    if (!harsh || avg < harsh.avg) harsh = { avg, name, count: totals.length };
+    if (!generous || avg > generous.avg) generous = { avg, name, count: totals.length };
+  }
+  return { controversial, harsh, generous };
+}
 function myReviewFor(bookTs) {
   if (!session || !bookTs) return null;
   return reviews.find(r => r.book_ts === bookTs && r.user_id === session.user.id) || null;
@@ -2067,7 +2174,7 @@ function bannerHtml(pick, { stamp, admin, showRate }) {
 
 function render() {
   if (spinning) { pendingRender = true; return; }
-  if (document.activeElement && document.activeElement.tagName === "INPUT") {
+  if (document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
     pendingRender = true;
     return;
   }
@@ -2101,6 +2208,10 @@ function render() {
   }
   if (route.name === "reader") {
     renderReaderPage(app, route.key);
+    return;
+  }
+  if (route.name === "recap") {
+    renderRecap(app, route.year);
     return;
   }
 
@@ -2226,18 +2337,22 @@ function render() {
   if (rated.length === 0) {
     html += `<div class="empty-note">No books rated yet.</div>`;
   } else {
-    html += `<div class="card no-rule">`;
+    if (rated.length > 6) {
+      html += `<input type="text" id="lb-search" class="lb-search" placeholder="Search past reads by title or reader…" autocomplete="off" value="${attr(leaderboardQuery)}">`;
+    }
+    html += `<div class="card no-rule" id="leaderboard-list">`;
     const ranked = rated.sort((a, b) => {
       const ra = ratingTotal(a), rb = ratingTotal(b);
       if (rb !== ra) return rb - ra; // higher rating first
       return b.round - a.round;   // tie-break: newest first
     });
-    ranked.slice(0, 25).forEach(h => {
+    ranked.forEach(h => {
       const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
       const total = ratingTotal(h);
       const band = ratingBand(total);
+      const hay = `${h.book || ''} ${h.winner_username || ''}`.toLowerCase();
       html += `
-        <div class="history-item">
+        <div class="history-item" data-search="${attr(hay)}">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
           <span class="h-content">
             ${h.winner_username
@@ -2251,6 +2366,7 @@ function render() {
         </div>
       `;
     });
+    html += `<div class="empty-note" id="lb-none" style="display:none;">No past reads match that.</div>`;
     html += `</div>`;
   }
   html += `</section>`;
@@ -2337,6 +2453,23 @@ function render() {
     html += `<div class="mini-head">Reads by decade</div>`;
     html += `<div id="decade-chart"><span class="genre-loading">Sorting by era…</span></div>`;
     html += `</div>`;
+
+    const sup = reviewSuperlatives();
+    if (sup.controversial || sup.harsh || sup.generous) {
+      html += `<div class="card no-rule" style="margin-top: 12px;">`;
+      html += `<div class="mini-head">Reviewers' corner</div>`;
+      html += `<div class="sup-list">`;
+      if (sup.controversial) {
+        html += `<div class="sup-item"><div class="sup-item-label">Most divisive</div><a class="book-link sup-title" href="#book=${sup.controversial.round}">${esc(sup.controversial.book)}</a><span class="sup-val">±${sup.controversial.sd.toFixed(0)} spread · ${sup.controversial.count} reviews</span></div>`;
+      }
+      if (sup.harsh) {
+        html += `<div class="sup-item"><div class="sup-item-label">Harshest critic</div><span class="sup-title">${esc(sup.harsh.name)}</span><span class="sup-val">${sup.harsh.avg.toFixed(0)}/100 avg given</span></div>`;
+      }
+      if (sup.generous) {
+        html += `<div class="sup-item"><div class="sup-item-label">Most generous</div><span class="sup-title">${esc(sup.generous.name)}</span><span class="sup-val">${sup.generous.avg.toFixed(0)}/100 avg given</span></div>`;
+      }
+      html += `</div></div>`;
+    }
   }
   html += `</section>`;
 
@@ -2388,7 +2521,7 @@ function render() {
 
   // ---- Footer ----
   html += `<footer>`;
-  html += `Shared with everyone in the guild · <a href="https://discord.gg/4YeGJgs8u" target="_blank" rel="noopener" class="footer-link">Join the Discord</a><br/>`;
+  html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="https://discord.gg/4YeGJgs8u" target="_blank" rel="noopener" class="footer-link">Join the Discord</a><br/>`;
   if (admin) {
     html += `<button class="btn-danger" id="reset-btn">Reset the shelf</button>`;
   }
@@ -2405,6 +2538,81 @@ function render() {
 }
 
 // ---------- Router + book detail page ----------
+// ---------- Year in books recap ----------
+function availableRecapYears() {
+  const years = new Set();
+  for (const h of state.history) {
+    const y = h.ts ? new Date(h.ts).getFullYear() : NaN;
+    if (Number.isFinite(y)) years.add(y);
+  }
+  return [...years].sort((a, b) => b - a);
+}
+function recapReadRow(h) {
+  const total = ratingTotal(h);
+  const band = ratingBand(total);
+  return `<div class="history-item">
+    <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
+    <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>${h.winner_username ? ` <span class="recap-picker">— ${esc(h.winner_username)}</span>` : ''}</span>
+    <span class="h-meta">${fmtDate(h.ts)}</span>
+    ${band ? `<span class="score-pill ${band.cls}">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
+  </div>`;
+}
+function renderRecap(app, year) {
+  window.scrollTo(0, 0);
+  const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
+  const years = availableRecapYears();
+  if (!years.length) {
+    app.innerHTML = `<header><div class="eyebrow">Year in books</div><h1>The Shelf</h1><div class="rule"></div></header>${back}<div class="setup"><h2>Nothing to recap yet</h2><p>Once the club has read a few books, the year in books shows up here.</p></div>`;
+    return;
+  }
+  const y = years.includes(year) ? year : years[0];
+  const reads = state.history.filter(h => h.ts && new Date(h.ts).getFullYear() === y);
+  const ratedReads = reads.filter(h => ratingTotal(h) != null).sort((a, b) => ratingTotal(b) - ratingTotal(a));
+  const top = ratedReads[0] || null;
+  const low = ratedReads.length > 1 ? ratedReads[ratedReads.length - 1] : null;
+  const avg = ratedReads.length ? Math.round(ratedReads.reduce((s, h) => s + ratingTotal(h), 0) / ratedReads.length) : null;
+  const avgBand = avg != null ? ratingBand(avg) : null;
+  const reviewCount = reads.reduce((s, h) => s + reviewsFor(h.ts).length, 0);
+  const pickCounts = {};
+  reads.forEach(h => {
+    const k = readerKey(h.winner_id, h.winner_username);
+    (pickCounts[k] ||= { count: 0, name: h.winner_username, id: h.winner_id });
+    pickCounts[k].count++;
+  });
+  const topReader = Object.values(pickCounts).sort((a, b) => b.count - a.count)[0] || null;
+  const yearNav = years.map(yy => `<a class="recap-year ${yy === y ? 'on' : ''}" href="#recap=${yy}">${yy}</a>`).join("");
+
+  app.innerHTML = `
+    <header><div class="eyebrow">Year in books</div><h1>The Shelf</h1><div class="rule"></div></header>
+    ${back}
+    <div class="recap">
+      ${years.length > 1 ? `<div class="recap-years">${yearNav}</div>` : ''}
+      <div class="recap-hero"><span class="recap-big">${reads.length}</span> book${reads.length === 1 ? '' : 's'} read in <b>${y}</b></div>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-label">Pages</div><div class="stat-number" id="recap-pages">—</div><div class="stat-suffix">turned</div></div>
+        <div class="stat-card"><div class="stat-label">Reading time</div><div class="stat-number" id="recap-hours">—</div><div class="stat-suffix">hours, roughly</div></div>
+        <div class="stat-card"><div class="stat-label">Avg score</div><div class="stat-number ${avgBand ? avgBand.cls : ''}">${avg != null ? avg : '—'}</div><div class="stat-suffix">${avgBand ? avgBand.label : 'unrated'}</div></div>
+        <div class="stat-card"><div class="stat-label">Reviews</div><div class="stat-number">${reviewCount}</div><div class="stat-suffix">member ratings</div></div>
+      </div>
+      ${top ? `<div class="card no-rule" style="margin-top:12px;"><div class="mini-head">Best of ${y}</div>${recapReadRow(top)}</div>` : ''}
+      ${low ? `<div class="card no-rule" style="margin-top:12px;"><div class="mini-head">Lowest rated</div>${recapReadRow(low)}</div>` : ''}
+      ${topReader ? `<div class="card no-rule" style="margin-top:12px;"><div class="mini-head">Most picked</div><div class="recap-reader">${topReader.id && userAvatar(topReader.id) ? `<img class="avatar-mini" src="${attr(userAvatar(topReader.id))}" alt="">` : ''}<a class="reader-link" href="${readerHref(topReader.id, topReader.name)}"><b>${esc(topReader.name || 'Reader')}</b></a> — ${topReader.count} pick${topReader.count === 1 ? '' : 's'}</div></div>` : ''}
+      <div class="card no-rule" style="margin-top:12px;"><div class="mini-head">Every read in ${y}</div>${reads.map(recapReadRow).join("")}</div>
+    </div>`;
+  decorateCovers();
+  decorateRecapMeta(reads);
+}
+async function decorateRecapMeta(reads) {
+  const metas = await Promise.all(reads.map(h => resolveBookMeta(h.book)));
+  if (parseRoute().name !== "recap") return; // navigated away
+  let totalPages = 0;
+  metas.forEach(m => { if (m && m.pages) totalPages += m.pages; });
+  const p = document.getElementById("recap-pages");
+  const hh = document.getElementById("recap-hours");
+  if (p) p.textContent = totalPages ? totalPages.toLocaleString() : "—";
+  if (hh) hh.textContent = totalPages ? Math.max(1, Math.round(totalPages * 1.6 / 60)).toLocaleString() : "—";
+}
+
 function parseRoute() {
   const hash = location.hash || "";
   const book = hash.match(/^#book=(\d+)$/);
@@ -2415,6 +2623,8 @@ function parseRoute() {
   if (tag) return { name: "tag", tag: decodeURIComponent(tag[1]) };
   const reader = hash.match(/^#reader=(.+)$/);
   if (reader) return { name: "reader", key: decodeURIComponent(reader[1]) };
+  const recap = hash.match(/^#recap(?:=(\d{4}))?$/);
+  if (recap) return { name: "recap", year: recap[1] ? parseInt(recap[1], 10) : null };
   return { name: "main" };
 }
 
@@ -2501,11 +2711,45 @@ function guildReviewHtml(h) {
   return html;
 }
 
+// The per-book discussion thread: existing comments + a compose box.
+function discussionHtml(bookTs) {
+  const cs = commentsFor(bookTs);
+  let html = `<div class="bd-block bd-discussion"><div class="bd-block-head">Discussion</div>`;
+  if (cs.length) {
+    html += `<div class="bd-comments">`;
+    for (const c of cs) {
+      const u = users.find(x => x.id === c.user_id);
+      const name = u?.discord_username || "Reader";
+      const av = u?.avatar_url;
+      const mine = session && c.user_id === session.user.id;
+      html += `<div class="bd-comment">
+        <div class="bd-comment-head">
+          ${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<b>${esc(name)}</b>
+          <span class="bd-comment-time">${fmtDate(c.created_at)}</span>
+          ${mine ? `<button class="comment-del" data-comment-delete="${attr(c.id)}" title="Delete">×</button>` : ''}
+        </div>
+        <div class="bd-comment-body">${esc(c.body)}</div>
+      </div>`;
+    }
+    html += `</div>`;
+  } else {
+    html += `<div class="empty-note">No comments yet — start the discussion.</div>`;
+  }
+  if (session) {
+    html += `<div class="bd-comment-form">
+      <textarea id="comment-input" class="rubric-note" maxlength="2000" placeholder="Add to the discussion…"></textarea>
+      <button class="btn-mini" data-comment-post="${attr(bookTs)}">Post</button>
+    </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
 function renderBookDetail(app, ctx) {
   window.scrollTo(0, 0);
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
 
-  let book, eyebrow, metaLine, reviewHtml = "";
+  let book, eyebrow, metaLine, reviewHtml = "", discussionBlock = "";
   if (ctx.kind === "past") {
     const h = state.history.find(e => e.round === ctx.round);
     if (!h) return renderDetailMissing(app, back, state.history.length === 0, `There's no past read for round ${ctx.round}.`);
@@ -2517,6 +2761,7 @@ function renderBookDetail(app, ctx) {
       : `<span class="detail-muted">no picker recorded</span>`;
     metaLine = `Picked by ${who} · Round ${h.round} · ${fmtDate(h.ts)}`;
     reviewHtml = guildReviewHtml(h);
+    discussionBlock = discussionHtml(h.ts);
   } else {
     const u = users.find(x => x.id === ctx.userId);
     if (!u || !(u.book || "").trim()) return renderDetailMissing(app, back, users.length === 0, `That book isn't on the shelf anymore.`);
@@ -2545,6 +2790,7 @@ function renderBookDetail(app, ctx) {
       <div id="bd-subjects"></div>
       <div id="bd-people"></div>
       <div id="bd-extra"></div>
+      ${discussionBlock}
     </div>`;
 
   decorateBookDetail(book);
@@ -2792,6 +3038,23 @@ function wireLoginGate() {
 }
 
 function wireUp() {
+  const lbSearch = document.getElementById("lb-search");
+  if (lbSearch) {
+    const applyLb = () => {
+      leaderboardQuery = lbSearch.value.trim().toLowerCase();
+      let shown = 0;
+      document.querySelectorAll("#leaderboard-list .history-item").forEach(row => {
+        const match = !leaderboardQuery || (row.dataset.search || "").includes(leaderboardQuery);
+        row.style.display = match ? "" : "none";
+        if (match) shown++;
+      });
+      const none = document.getElementById("lb-none");
+      if (none) none.style.display = shown === 0 ? "" : "none";
+    };
+    lbSearch.addEventListener("input", applyLb);
+    applyLb();
+  }
+
   const save = document.getElementById("save-book");
   if (save) save.addEventListener("click", () => {
     const val = document.getElementById("my-book").value;
@@ -2901,7 +3164,15 @@ document.addEventListener("click", (e) => {
   const lock = e.target.closest("[data-lock-ts]");
   if (lock) { lockInScore(lock.dataset.lockTs); return; }
   const openBtn = e.target.closest("[data-openratings-ts]");
-  if (openBtn) setRatingsOpen(openBtn.dataset.openratingsTs, openBtn.dataset.open === "1");
+  if (openBtn) { setRatingsOpen(openBtn.dataset.openratingsTs, openBtn.dataset.open === "1"); return; }
+  const cPost = e.target.closest("[data-comment-post]");
+  if (cPost) {
+    const ta = document.getElementById("comment-input");
+    if (ta && ta.value.trim()) postComment(cPost.dataset.commentPost, ta.value);
+    return;
+  }
+  const cDel = e.target.closest("[data-comment-delete]");
+  if (cDel && confirm("Delete this comment?")) deleteComment(cDel.dataset.commentDelete);
 });
 
 window.addEventListener("hashchange", () => render());
