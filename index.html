@@ -1770,12 +1770,15 @@ function render() {
   const iAmEliminated = state.eliminated.includes(session.user.id);
   const eligibleSubs = eligibleEntries();
   const eligibleCount = eligibleSubs.length;
-  // Split the ledger by role: the newest pick is "Next up"; any older pick that
-  // hasn't been rated yet is a book the club is "Currently reading"; everything
-  // rated belongs on the leaderboard. This partitions history[1..] cleanly, so
-  // no book is ever both a hero and a leaderboard row.
-  const currentPick = state.history[0];
-  const nowReading = state.history.slice(1).filter(h => ratingTotal(h) == null);
+  // Books split by role from rating status alone. Unrated picks are in flight:
+  // the *oldest* unrated is what the club is reading now ("Currently reading"),
+  // and any newer unrated picks are queued ("Next up"). Rated picks are done and
+  // belong on the leaderboard. So scoring the current read drops it to the
+  // leaderboard and the next-up automatically becomes the new oldest-unrated —
+  // i.e. it promotes to Currently reading on the very next render.
+  const unrated = state.history.filter(h => ratingTotal(h) == null); // newest-first
+  const currentlyReading = unrated.length ? unrated[unrated.length - 1] : null;
+  const nextUp = unrated.slice(0, -1).reverse(); // newer picks, soonest-to-read first
 
   let html = `
     <header>
@@ -1796,13 +1799,14 @@ function render() {
     html += `<div class="flash ${flashMsg.kind === 'info' ? 'info' : ''}">${esc(flashMsg.text)}</div>`;
   }
 
-  // Currently reading first (chronologically "now"), then Next up.
-  nowReading.forEach(pick => {
-    html += bannerHtml(pick, { stamp: "Currently reading", admin, showRate: true });
-  });
-  if (currentPick) {
-    html += bannerHtml(currentPick, { stamp: "Next up", admin, showRate: false });
+  // Currently reading first (what we're on now), then the Next up queue. The
+  // rate pill lives on Currently reading — that's the book you finish and score.
+  if (currentlyReading) {
+    html += bannerHtml(currentlyReading, { stamp: "Currently reading", admin, showRate: true });
   }
+  nextUp.forEach(pick => {
+    html += bannerHtml(pick, { stamp: "Next up", admin, showRate: false });
+  });
 
   // ---- My book ----
   html += `
@@ -1869,10 +1873,10 @@ function render() {
   html += `</div></section>`;
 
   // ---- Leaderboard (finished reads, ranked by Guild rating) ----
-  // Only rated books that aren't the Next up pick — in-progress reads live in
-  // their own banners above, so nothing unrated clutters the ranking.
+  // Rated books only — in-progress reads live in the hero banners above, so
+  // nothing unrated clutters the ranking.
   html += `<section><div class="section-title">Leaderboard</div>`;
-  const rated = state.history.slice(1).filter(h => ratingTotal(h) != null);
+  const rated = state.history.filter(h => ratingTotal(h) != null);
   if (rated.length === 0) {
     html += `<div class="empty-note">No books rated yet.</div>`;
   } else {
