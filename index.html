@@ -751,6 +751,7 @@ function normalizeState(raw) {
       book: h.book ?? "",
       ts: h.ts,
       rating: h.rating ?? null,
+      ratingsOpen: !!h.ratingsOpen,
     })) : [],
     roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
   };
