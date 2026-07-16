@@ -436,9 +436,40 @@
   .rubric-val{ font-family:'Fraunces',serif; font-weight:700; font-size:15px; min-width:2.2em; text-align:right; }
   .rubric-note{ width:100%; margin-top:12px; padding:9px 11px; font-family:'Courier Prime',monospace; font-size:13px;
     background:var(--panel-2); color:var(--ink); border:1px solid var(--panel-border); border-radius:2px; resize:vertical; min-height:56px; }
-  .rubric-total{ display:flex; align-items:baseline; gap:10px; margin-top:12px; }
+  .rubric-total{ display:flex; align-items:baseline; gap:8px; margin-top:12px; }
   .rubric-total .bd-score{ font-family:'Fraunces',serif; font-weight:700; font-size:24px; color:var(--ink); }
+  .rubric-total .bd-score-max{ font-size:13px; color:var(--ink-soft); margin-right:6px; }
   .rubric-clear{ margin-right:auto; }
+
+  /* Review wizard (one category per page) */
+  .rubric-progress{ display:flex; align-items:baseline; justify-content:space-between; }
+  .rubric-step-label{ font-family:'Fraunces',serif; font-weight:700; font-size:19px; }
+  .rubric-step-count{ font-size:11.5px; color:var(--muted); font-style:italic; letter-spacing:0.05em; }
+  .rubric-dots{ display:flex; gap:6px; margin:9px 0 2px; }
+  .rubric-dots span{ flex:1; height:4px; border-radius:999px; background:var(--panel-border); }
+  .rubric-dots span.on{ background:var(--stamp); }
+  .rubric-dots span.done{ background:var(--brass); }
+  .rubric-sub{ font-size:12.5px; color:var(--ink-soft); margin:10px 0 12px; }
+  .band-cards{ display:flex; flex-direction:column; gap:7px; }
+  .band-card{ display:block; width:100%; text-align:left; cursor:pointer; padding:9px 11px;
+    background:var(--panel-2); border:1px solid var(--panel-border); border-radius:3px;
+    color:var(--muted); transition:border-color 0.12s ease, background 0.12s ease; }
+  .band-card:hover{ background:rgba(236,227,207,0.06); }
+  .band-card.active{ border-color:currentColor; border-width:1px; background:rgba(236,227,207,0.05); box-shadow: inset 0 0 0 1px currentColor; }
+  .band-card-head{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+  .band-card-head b{ font-family:'Fraunces',serif; font-size:14px; color:var(--ink); }
+  .band-range{ font-family:'Courier Prime',monospace; font-size:11px; }
+  .band-desc{ display:block; font-size:11.5px; line-height:1.35; color:var(--ink-soft); margin-top:3px; }
+  .rubric-slider{ display:flex; align-items:center; gap:12px; margin-top:12px; }
+  .rubric-slider input[type=range]{ flex:1; accent-color:var(--stamp); }
+  .rubric-summary{ display:flex; flex-direction:column; gap:2px; margin:6px 0 4px; }
+  .rubric-sum-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%;
+    background:transparent; border:none; border-bottom:1px solid var(--panel-border); padding:8px 2px; cursor:pointer; color:var(--ink); text-align:left; }
+  .rubric-sum-row:last-child{ border-bottom:none; }
+  .rubric-sum-row:hover{ background:rgba(236,227,207,0.05); }
+  .rubric-sum-row > span:first-child{ font-family:'Fraunces',serif; font-weight:700; font-size:13px; }
+  .rubric-sum-score{ font-family:'Fraunces',serif; font-weight:700; font-size:13px; }
+  .btn-mini.ghost{ background:transparent; color:var(--ink-soft); border:1px solid var(--ink-soft); }
 
   .bd-rubric{ display:flex; flex-direction:column; gap:10px; }
   .bd-rubric-row{ display:grid; grid-template-columns: 150px 1fr auto; align-items:center; gap:10px; }
@@ -1417,6 +1448,11 @@ async function saveMyReview(bookTs, scores, note) {
   }
 }
 
+// Librarian opens or closes member reviews for a read.
+function setRatingsOpen(bookTs, open) {
+  callAdmin("admin_set_ratings_open", { ts: bookTs, open: !!open });
+}
+
 // Librarian snapshots the current member average into the committed Guild score,
 // which drops the read onto the leaderboard (and promotes the next-up read).
 function lockInScore(bookTs) {
@@ -1430,62 +1466,107 @@ function lockInScore(bookTs) {
   callAdmin("admin_set_rating", { ts: bookTs, total: agg.total, ...cats, reviews: agg.count });
 }
 
-// Modal: fill in the five rubric categories (1..20) + an optional note. Sliders
-// default to the reader's prior review, or a neutral 12 (upper "Great").
+// Review wizard: one rubric category per page (so the club can score them one
+// at a time on the call), each showing the four band descriptions, then a final
+// summary + note page. Values default to the reader's prior review, or 12.
+function bandKeyOf(v) { return v >= 16 ? "exc" : v >= 11 ? "great" : v >= 6 ? "good" : "bad"; }
+
 function openRubricModal(bookTs, bookTitle) {
   const mine = myReviewFor(bookTs);
-  const start = k => (mine && Number.isFinite(Number(mine[k])) ? Number(mine[k]) : 12);
+  const vals = {};
+  RUBRIC.forEach(({ key }) => { vals[key] = (mine && Number.isFinite(Number(mine[key]))) ? Number(mine[key]) : 12; });
+  let note = mine?.note || "";
+  let step = 0; // 0..4 = categories, then the summary page
+
   const back = document.createElement("div");
   back.className = "modal-back";
-  back.innerHTML = `
-    <div class="modal rubric-modal">
-      <h3>Rate ${esc(bookTitle || "this read")}</h3>
-      <p>The Bibliomancer's Guild Rubric — score each 1–20. Bad 1–5 · Good 6–10 · Great 11–15 · Excellent 16–20.</p>
-      ${RUBRIC.map(({ key, label }) => `
-        <div class="rubric-row">
-          <div class="rubric-cat">${esc(label)}</div>
-          <div class="rubric-input">
-            <input type="range" min="1" max="20" step="1" value="${start(key)}" data-cat="${attr(key)}" id="rub-${attr(key)}">
-            <span class="rubric-val" id="rubval-${attr(key)}">${start(key)}</span>
-          </div>
-        </div>`).join("")}
-      <textarea class="rubric-note" id="rub-note" maxlength="500" placeholder="Optional — a sentence on what you thought">${esc(mine?.note || "")}</textarea>
-      <div class="rubric-total">Total <span class="bd-score" id="rub-total">0</span><span class="score-pill" id="rub-band"></span></div>
-      <div class="modal-actions">
-        ${mine ? `<button class="btn-ghost rubric-clear" id="rub-clear">Delete my review</button>` : ''}
-        <button class="btn-ghost" id="rub-cancel">Cancel</button>
-        <button class="btn-primary" id="rub-save">Submit review</button>
-      </div>
-    </div>`;
   document.body.appendChild(back);
   const close = () => { if (back.parentNode) document.body.removeChild(back); };
-  const ranges = [...back.querySelectorAll('input[type=range]')];
-  const totalEl = back.querySelector("#rub-total");
-  const bandEl = back.querySelector("#rub-band");
-  const recalc = () => {
-    let total = 0;
-    ranges.forEach(r => {
-      total += Number(r.value);
-      back.querySelector(`#rubval-${r.dataset.cat}`).textContent = r.value;
-    });
-    totalEl.textContent = total;
-    const band = ratingBand(total);
-    bandEl.textContent = band ? band.label : "";
-    bandEl.className = `score-pill ${band ? band.cls : ''}`;
-  };
-  ranges.forEach(r => r.addEventListener("input", recalc));
-  recalc();
-  back.querySelector("#rub-cancel").addEventListener("click", close);
   back.addEventListener("click", (e) => { if (e.target === back) close(); });
-  const clearBtn = back.querySelector("#rub-clear");
-  if (clearBtn) clearBtn.addEventListener("click", () => { close(); saveMyReview(bookTs, null); });
-  back.querySelector("#rub-save").addEventListener("click", () => {
-    const scores = {};
-    ranges.forEach(r => { scores[r.dataset.cat] = Number(r.value); });
-    const note = back.querySelector("#rub-note").value.trim();
-    close();
-    saveMyReview(bookTs, scores, note);
-  });
+
+  const title = esc(bookTitle || "this read");
+
+  function renderCategory() {
+    const { key, label, bands } = RUBRIC[step];
+    const v = vals[key];
+    const activeKey = bandKeyOf(v);
+    back.innerHTML = `
+      <div class="modal rubric-modal">
+        <div class="rubric-progress">
+          <span class="rubric-step-label">${esc(label)}</span>
+          <span class="rubric-step-count">${step + 1} of ${RUBRIC.length}</span>
+        </div>
+        <div class="rubric-dots">${RUBRIC.map((_, i) => `<span class="${i === step ? 'on' : (i < step ? 'done' : '')}"></span>`).join("")}</div>
+        <p class="rubric-sub">Scoring <b>${title}</b> — tap the band you agree on, then fine-tune.</p>
+        <div class="band-cards">
+          ${RUBRIC_BANDS.map(b => `
+            <button type="button" class="band-card ${b.cls} ${b.band === activeKey ? 'active' : ''}" data-band="${b.band}" data-mid="${b.mid}">
+              <span class="band-card-head"><b>${b.label}</b><span class="band-range">${b.range}</span></span>
+              <span class="band-desc">${esc(bands[b.band])}</span>
+            </button>`).join("")}
+        </div>
+        <div class="rubric-slider">
+          <input type="range" min="1" max="20" step="1" value="${v}" id="rub-slider">
+          <span class="rubric-val" id="rub-slval">${v}</span>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-ghost" id="rub-back">${step === 0 ? 'Cancel' : 'Back'}</button>
+          <button class="btn-primary" id="rub-next">${step === RUBRIC.length - 1 ? 'Review & submit' : 'Next →'}</button>
+        </div>
+      </div>`;
+    const slider = back.querySelector("#rub-slider");
+    const slval = back.querySelector("#rub-slval");
+    const refreshActive = () => {
+      const ak = bandKeyOf(Number(slider.value));
+      back.querySelectorAll(".band-card").forEach(c => c.classList.toggle("active", c.dataset.band === ak));
+    };
+    slider.addEventListener("input", () => { vals[key] = Number(slider.value); slval.textContent = slider.value; refreshActive(); });
+    back.querySelectorAll(".band-card").forEach(c => c.addEventListener("click", () => {
+      vals[key] = Number(c.dataset.mid); slider.value = vals[key]; slval.textContent = vals[key]; refreshActive();
+    }));
+    back.querySelector("#rub-back").addEventListener("click", () => { if (step === 0) close(); else { step--; renderStep(); } });
+    back.querySelector("#rub-next").addEventListener("click", () => { step++; renderStep(); });
+  }
+
+  function renderSummary() {
+    let total = 0;
+    RUBRIC.forEach(({ key }) => { total += vals[key]; });
+    const band = ratingBand(total);
+    back.innerHTML = `
+      <div class="modal rubric-modal">
+        <h3>Your review</h3>
+        <p class="rubric-sub"><b>${title}</b></p>
+        <div class="rubric-summary">
+          ${RUBRIC.map(({ key, label }, i) => {
+            const b = categoryBand(vals[key]);
+            return `<button type="button" class="rubric-sum-row" data-step="${i}"><span>${esc(label)}</span><span class="rubric-sum-score ${b ? b.cls : ''}">${vals[key]} · ${b ? b.label : ''}</span></button>`;
+          }).join("")}
+        </div>
+        <div class="rubric-total">Total <span class="bd-score">${total}</span><span class="bd-score-max">/100</span><span class="score-pill ${band.cls}">${band.label}</span></div>
+        <textarea class="rubric-note" id="rub-note" maxlength="500" placeholder="Optional — a sentence on what you thought">${esc(note)}</textarea>
+        <div class="modal-actions">
+          ${mine ? `<button class="btn-ghost rubric-clear" id="rub-clear">Delete my review</button>` : ''}
+          <button class="btn-ghost" id="rub-back">Back</button>
+          <button class="btn-primary" id="rub-save">Submit review</button>
+        </div>
+      </div>`;
+    const noteEl = back.querySelector("#rub-note");
+    noteEl.addEventListener("input", () => { note = noteEl.value; });
+    // Tap any summary row to jump back to that category.
+    back.querySelectorAll(".rubric-sum-row").forEach(r => r.addEventListener("click", () => { step = Number(r.dataset.step); renderStep(); }));
+    back.querySelector("#rub-back").addEventListener("click", () => { step = RUBRIC.length - 1; renderStep(); });
+    const clearBtn = back.querySelector("#rub-clear");
+    if (clearBtn) clearBtn.addEventListener("click", () => { close(); saveMyReview(bookTs, null); });
+    back.querySelector("#rub-save").addEventListener("click", () => {
+      const scores = {};
+      RUBRIC.forEach(({ key }) => { scores[key] = vals[key]; });
+      close();
+      saveMyReview(bookTs, scores, note.trim());
+    });
+  }
+
+  function renderStep() { if (step < RUBRIC.length) renderCategory(); else renderSummary(); }
+  renderStep();
 }
 
 // ---------- Wheel ----------
@@ -1827,14 +1908,61 @@ function ratingTotal(h) {
 }
 
 // ---------- Member rubric reviews ----------
-// The five rubric categories, in the order they appear on the Guild scorecard.
+// The five rubric categories, in the order they appear on the Guild scorecard,
+// each with the descriptions for the four bands (from the Guild rubric) shown
+// as scoring guidance in the review wizard.
 const RUBRIC = [
-  { key: "plot", label: "Plot" },
-  { key: "characters", label: "Characters" },
-  { key: "pacing", label: "Organization / Pacing" },
-  { key: "language", label: "Use of Language" },
-  { key: "themes", label: "Themes / Ideas" },
+  { key: "plot", label: "Plot", bands: {
+    exc: "An exceptional, original, or deeply engaging story is consistently developed throughout the novel.",
+    great: "An engaging story is developed throughout the novel. May contain exceptional or original moments.",
+    good: "A sometimes engaging story is told. Plot may be underdeveloped or unoriginal.",
+    bad: "The story is unengaging, plot points are nonsensical or uninteresting.",
+  } },
+  { key: "characters", label: "Characters", bands: {
+    exc: "Characters are extraordinarily well written and well developed.",
+    great: "Overall, characters are well written and well developed.",
+    good: "Some characters are well written and well developed. Some may lack depth or are otherwise poorly written.",
+    bad: "Characters are uninspired or one dimensional.",
+  } },
+  { key: "pacing", label: "Organization / Pacing", bands: {
+    exc: "Pacing feels appropriate throughout. Plot points come together in a very satisfying way, and do not feel forced.",
+    great: "Pacing feels largely appropriate throughout. Plot points come together.",
+    good: "Pacing feels somewhat appropriate. May feel rushed or dragged at times. Most plot points come together, but may be hard to follow or unsatisfying.",
+    bad: "Lack of appropriate pacing. Often feels rushed or dragged out. Plot points are disconnected, hard to follow, or uninspired.",
+  } },
+  { key: "language", label: "Use of Language", bands: {
+    exc: "Prose is spectacular, extraordinarily beautiful, or otherwise deeply satisfying.",
+    great: "Prose is engaging, beautiful, or otherwise satisfying.",
+    good: "Prose is largely engaging, and may have memorable moments.",
+    bad: "Prose takes away from the enjoyment of the novel. May be needlessly complex or simplistic.",
+  } },
+  { key: "themes", label: "Themes / Ideas", bands: {
+    exc: "Themes or ideas are original, profound, or masterfully interwoven into the story. They invoked reflection or a strong emotional response.",
+    great: "Themes or ideas have been thoughtfully interwoven into the story. They invoked reflection or an emotional response.",
+    good: "Themes or ideas are at times effectively interwoven. They invoked some reflection and minimal emotional response.",
+    bad: "Themes or ideas are explored clumsily. Any reflection or emotional response results from their frustrating or poor quality.",
+  } },
 ];
+// Band metadata (1..20 scale), best first. `mid` is the value a band card sets.
+const RUBRIC_BANDS = [
+  { band: "exc", cls: "band-exc", label: "Excellent", range: "16–20", mid: 18 },
+  { band: "great", cls: "band-great", label: "Great", range: "11–15", mid: 13 },
+  { band: "good", cls: "band-good", label: "Good", range: "6–10", mid: 8 },
+  { band: "bad", cls: "band-bad", label: "Bad", range: "1–5", mid: 3 },
+];
+// Whether the librarian has opened member reviews on a read.
+function ratingsOpen(h) {
+  return !!(h && h.ratingsOpen);
+}
+// The current read = the oldest pick without a committed score. Reviews are
+// only ever accepted here (never retroactively on past reads).
+function currentReadTs() {
+  const unrated = state.history.filter(h => ratingTotal(h) == null);
+  return unrated.length ? unrated[unrated.length - 1].ts : null;
+}
+function isCurrentRead(h) {
+  return !!h && h.ts === currentReadTs();
+}
 // Per-category band on the 1..20 scale (same cutoffs as the /100 bands ÷ 5).
 function categoryBand(score) {
   if (score == null || !Number.isFinite(score)) return null;
@@ -1884,19 +2012,31 @@ function bannerHtml(pick, { stamp, admin, showRate }) {
   const avatar = pick?.winner_id ? userAvatar(pick.winner_id) : null;
   let reviewBlock = "";
   if (showRate && pick.book) {
+    const open = ratingsOpen(pick);
     const agg = aggregateRubric(pick.ts);
     const mine = myReviewFor(pick.ts);
+    let scoreLine, actions;
+    if (!open) {
+      // Ratings closed: members wait; the librarian can open them.
+      scoreLine = admin
+        ? `<span class="bn-review-count">Ratings are closed. Open them when the club is ready to score.</span>`
+        : `<span class="bn-review-count">Ratings open on the call — hang tight.</span>`;
+      actions = admin
+        ? `<button class="btn-mini" data-openratings-ts="${attr(pick.ts || '')}" data-open="1">Open ratings</button>`
+        : '';
+    } else {
+      scoreLine = agg
+        ? `<span class="bd-score">${agg.total}<span class="bd-score-max">/100</span></span><span class="score-pill ${agg.band.cls}">${agg.band.label}</span><span class="bn-review-count">${agg.count} review${agg.count === 1 ? '' : 's'} so far</span>`
+        : `<span class="bn-review-count">Ratings are open — score it together on the call.</span>`;
+      actions = `
+        <button class="btn-mini" data-rate-ts="${attr(pick.ts || '')}">${mine ? 'Edit my review' : 'Rate this read'}</button>
+        ${(admin && agg) ? `<button class="btn-mini lock" data-lock-ts="${attr(pick.ts || '')}">Lock in Guild score</button>` : ''}
+        ${admin ? `<button class="btn-mini ghost" data-openratings-ts="${attr(pick.ts || '')}" data-open="0">Close ratings</button>` : ''}`;
+    }
     reviewBlock = `
       <div class="bn-review">
-        <div class="bn-review-score">
-          ${agg
-            ? `<span class="bd-score">${agg.total}<span class="bd-score-max">/100</span></span><span class="score-pill ${agg.band.cls}">${agg.band.label}</span><span class="bn-review-count">${agg.count} review${agg.count === 1 ? '' : 's'} so far</span>`
-            : `<span class="bn-review-count">No reviews yet — score it together on the call.</span>`}
-        </div>
-        <div class="bn-review-actions">
-          <button class="btn-mini" data-rate-ts="${attr(pick.ts || '')}">${mine ? 'Edit my review' : 'Rate this read'}</button>
-          ${(admin && agg) ? `<button class="btn-mini lock" data-lock-ts="${attr(pick.ts || '')}">Lock in Guild score</button>` : ''}
-        </div>
+        <div class="bn-review-score">${scoreLine}</div>
+        <div class="bn-review-actions">${actions}</div>
       </div>`;
   }
   return `
@@ -2348,7 +2488,9 @@ function guildReviewHtml(h) {
     html += `</div>`;
   }
 
-  if (session) {
+  // Rating is only possible on the current read while ratings are open — never
+  // retroactively on a past read.
+  if (session && isCurrentRead(h) && ratingsOpen(h)) {
     const mine = myReviewFor(h.ts);
     html += `<div class="bn-review-actions" style="margin-top:14px;"><button class="btn-mini" data-rate-ts="${attr(h.ts || "")}">${mine ? "Edit my review" : "Rate this read"}</button></div>`;
   }
@@ -2754,7 +2896,9 @@ document.addEventListener("click", (e) => {
     return;
   }
   const lock = e.target.closest("[data-lock-ts]");
-  if (lock) lockInScore(lock.dataset.lockTs);
+  if (lock) { lockInScore(lock.dataset.lockTs); return; }
+  const openBtn = e.target.closest("[data-openratings-ts]");
+  if (openBtn) setRatingsOpen(openBtn.dataset.openratingsTs, openBtn.dataset.open === "1");
 });
 
 window.addEventListener("hashchange", () => render());

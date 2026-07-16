@@ -34,6 +34,7 @@ type HistoryItem = {
   book: string;
   ts: string;
   rating?: Rating | null;
+  ratingsOpen?: boolean; // librarian has opened member reviews for this read
 };
 
 type State = {
@@ -334,6 +335,18 @@ Deno.serve(async (req) => {
           if (Number.isFinite(rc) && rc > 0) rating.reviews = rc;
           entry.rating = rating;
         }
+        break;
+      }
+      case "admin_set_ratings_open": {
+        // Librarian opens/closes member reviews for one read. Members can only
+        // submit a review while it's open (also enforced in set-review).
+        const ts = String(payload.ts ?? "");
+        if (!ts) throw new Error("ts required");
+        const entry = state.history.find(h => h.ts === ts);
+        if (!entry) throw new Error("history item not found");
+        entry.ratingsOpen = payload.open === true
+          ? true
+          : payload.open === false ? false : !entry.ratingsOpen;
         break;
       }
       case "admin_remove_user": {

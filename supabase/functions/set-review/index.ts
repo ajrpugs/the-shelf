@@ -72,11 +72,12 @@ Deno.serve(async (req) => {
     .eq("id", 1)
     .maybeSingle();
   if (stateErr) return json({ error: stateErr.message }, 500);
-  const history = Array.isArray(stateRow?.data?.history) ? stateRow!.data.history : [];
-  const entry = history.find((h: { ts?: string }) => h?.ts === bookTs);
+  type Read = { ts?: string; rating?: { total?: number } | null; ratingsOpen?: boolean };
+  const history: Read[] = Array.isArray(stateRow?.data?.history) ? stateRow!.data.history : [];
+  const entry = history.find(h => h?.ts === bookTs);
   if (!entry) return json({ error: "no such read" }, 404);
 
-  // Clear = delete this reader's review for the read.
+  // Clear = delete this reader's review. Allowed anytime (removes only own row).
   if (body.clear === true) {
     const { error: delErr } = await admin
       .from("shelf_reviews")
@@ -85,6 +86,19 @@ Deno.serve(async (req) => {
       .eq("user_id", userId);
     if (delErr) return json({ error: delErr.message }, 500);
     return json({ ok: true, cleared: true });
+  }
+
+  // Reviews are only accepted on the *current* read — the oldest pick that
+  // hasn't been given a committed score yet — and only while the librarian has
+  // opened ratings. This blocks retroactive scoring of past reads.
+  const isRated = (h: Read) => !!(h?.rating && Number.isFinite(Number(h.rating.total)));
+  const unrated = history.filter(h => !isRated(h));
+  const current = unrated.length ? unrated[unrated.length - 1] : null;
+  if (!current || current.ts !== bookTs) {
+    return json({ error: "reviews are only open on the current read" }, 403);
+  }
+  if (current.ratingsOpen !== true) {
+    return json({ error: "ratings aren't open for this read yet" }, 403);
   }
 
   let scores: Record<string, number>;
