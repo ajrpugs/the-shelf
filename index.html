@@ -993,7 +993,7 @@ async function decorateNextUp() {
 // ---------- Book detail (for the per-book page) ----------
 // A heavier, on-demand lookup (search + works endpoint) used only on the
 // #book=<round> page — one book at a time, so cost is trivial.
-const DETAIL_CACHE_KEY = "shelf-bookdetail-v1";
+const DETAIL_CACHE_KEY = "shelf-bookdetail-v2";
 let bookDetailCache = {};
 try { bookDetailCache = JSON.parse(localStorage.getItem(DETAIL_CACHE_KEY) || "{}") || {}; }
 catch { bookDetailCache = {}; }
@@ -1023,7 +1023,7 @@ async function fetchBookDetail(rawTitle) {
     title: title || rawTitle, authors: [], year: null, pages: null,
     coverLarge: null, subjects: [], persons: [], places: [], publishers: [],
     languages: [], isbn: [], firstSentence: null, description: null,
-    editionCount: null, olKey: null,
+    editionCount: null, olKey: null, goodreadsId: null, amazonId: null,
   };
   if (!title) return empty;
   const params = new URLSearchParams({
@@ -1032,6 +1032,7 @@ async function fetchBookDetail(rawTitle) {
       "title", "author_name", "cover_i", "first_publish_year",
       "number_of_pages_median", "subject", "person", "place", "publisher",
       "language", "isbn", "first_sentence", "edition_count", "key",
+      "id_goodreads", "id_amazon",
     ].join(","),
   });
   if (author) params.set("author", author);
@@ -1072,6 +1073,8 @@ async function fetchBookDetail(rawTitle) {
       description,
       editionCount: Number.isFinite(doc.edition_count) ? doc.edition_count : null,
       olKey: doc.key || null,
+      goodreadsId: Array.isArray(doc.id_goodreads) && doc.id_goodreads.length ? String(doc.id_goodreads[0]) : null,
+      amazonId: Array.isArray(doc.id_amazon) && doc.id_amazon.length ? String(doc.id_amazon[0]) : null,
     };
   } catch { return empty; }
   finally { clearTimeout(timer); }
@@ -2143,6 +2146,8 @@ async function decorateBookDetail(book) {
   const extra = [];
   if (detail.publishers.length) extra.push(`<div><span class="bd-k">Publisher</span> ${esc(detail.publishers.join(", "))}</div>`);
   if (detail.isbn.length) extra.push(`<div><span class="bd-k">ISBN</span> ${esc(detail.isbn[0])}</div>`);
+  if (detail.goodreadsId) extra.push(`<div><a class="footer-link" href="https://www.goodreads.com/book/show/${attr(detail.goodreadsId)}" target="_blank" rel="noopener">View on Goodreads ↗</a></div>`);
+  if (detail.amazonId) extra.push(`<div><a class="footer-link" href="https://www.amazon.com/dp/${attr(detail.amazonId)}" target="_blank" rel="noopener">View on Amazon ↗</a></div>`);
   if (detail.olKey) extra.push(`<div><a class="footer-link" href="https://openlibrary.org${attr(detail.olKey)}" target="_blank" rel="noopener">View on Open Library ↗</a></div>`);
   set("bd-extra", extra.length ? `<div class="bd-block bd-extra">${extra.join("")}</div>` : "");
 }
