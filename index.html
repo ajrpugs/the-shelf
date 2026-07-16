@@ -297,6 +297,7 @@
   }
   .winner-banner .wname{ font-size: 13px; color: var(--ink-soft); margin-top: 10px; font-style: italic; letter-spacing: 0.04em; }
   .winner-banner .wname b{ color: var(--ink); font-weight: 700; font-style: normal; }
+  .winner-banner .wname .score-pill{ margin-left: 10px; font-style: normal; vertical-align: middle; }
   .winner-banner .wauthor{ font-size: 14px; color: var(--ink-soft); font-style: italic; margin-top: 4px; }
   .winner-banner .wdesc{
     margin: 16px 0 0;
@@ -965,28 +966,32 @@ async function decorateStats() {
     : `<span class="genre-loading">Not enough shelf data yet.</span>`);
 }
 
-// Enrich the "Next up" hero with book-page details (author, a description
-// blurb, and clickable subject tags), fetched via the rich detail lookup.
-async function decorateNextUp() {
-  if (!document.getElementById("nextup-desc")) return;
-  const pick = state.history[0];
-  if (!pick || !pick.book) return;
-  const detail = await resolveBookDetail(pick.book);
-  if (parseRoute().name !== "main") return; // navigated away
-  const a = document.getElementById("nextup-author");
-  const d = document.getElementById("nextup-desc");
-  const t = document.getElementById("nextup-tags");
-  if (a && detail.authors.length) a.textContent = `by ${detail.authors.join(", ")}`;
-  if (d && detail.description) {
-    let text = detail.description;
-    if (text.length > 340) text = text.slice(0, 337).trimEnd() + "…";
-    d.textContent = text;
-  }
-  if (t) {
-    const subs = [...new Set(cleanSubjects(detail.subjects))].slice(0, 6);
-    t.innerHTML = subs
-      .map(s => `<a class="genre-tag genre-tag-link" href="#tag=${encodeURIComponent(s)}">${esc(titleCase(s))}</a>`)
-      .join("");
+// Enrich every hero banner ("Next up" and any "Currently reading") with
+// book-page details (author, a description blurb, and clickable subject tags),
+// fetched via the rich detail lookup.
+async function decorateBanners() {
+  const banners = [...document.querySelectorAll(".winner-banner[data-banner-book]")];
+  for (const el of banners) {
+    const book = el.getAttribute("data-banner-book");
+    if (!book || el.dataset.decorated) continue;
+    el.dataset.decorated = "1";
+    const detail = await resolveBookDetail(book);
+    if (parseRoute().name !== "main") return; // navigated away
+    const a = el.querySelector(".bn-author");
+    const d = el.querySelector(".bn-desc");
+    const t = el.querySelector(".bn-tags");
+    if (a && detail.authors.length) a.textContent = `by ${detail.authors.join(", ")}`;
+    if (d && detail.description) {
+      let text = detail.description;
+      if (text.length > 340) text = text.slice(0, 337).trimEnd() + "…";
+      d.textContent = text;
+    }
+    if (t) {
+      const subs = [...new Set(cleanSubjects(detail.subjects))].slice(0, 6);
+      t.innerHTML = subs
+        .map(s => `<a class="genre-tag genre-tag-link" href="#tag=${encodeURIComponent(s)}">${esc(titleCase(s))}</a>`)
+        .join("");
+    }
   }
 }
 
@@ -1673,6 +1678,43 @@ function readerHref(id, name) {
   return `#reader=${encodeURIComponent(readerKey(id, name))}`;
 }
 
+// A hero banner for a single pick. Used for both "Next up" (history[0]) and
+// "Currently reading" (older, still-unrated picks). The author/description/tag
+// slots are left empty and filled in later by decorateBanners. When `showRate`
+// is set and the viewer is the librarian, a score pill is shown so an
+// in-progress book can be rated straight from its banner (there's no leaderboard
+// row for it until it's scored).
+function bannerHtml(pick, { stamp, admin, showRate }) {
+  const avatar = pick?.winner_id ? userAvatar(pick.winner_id) : null;
+  const total = ratingTotal(pick);
+  const band = ratingBand(total);
+  const ratePill = (admin && showRate && pick.book)
+    ? `<button class="score-pill ${band ? band.cls : 'score-pill-empty'}" data-admin-rate="${attr(pick.ts || '')}" title="Set score (librarian)">${band ? total : '＋'}</button>`
+    : '';
+  return `
+    <div class="winner-banner" data-banner-book="${attr(pick.book || '')}">
+      <div class="stampbig">${esc(stamp)}</div>
+      <div class="wn-top">
+        <div class="cover-slot large" data-cover-title="${attr(pick.book || '')}"></div>
+        <div class="wn-head">
+          <div class="wbook">${pick.book ? `<a class="book-link" href="#book=${pick.round}">${esc(pick.book)}</a>` : '—'}</div>
+          ${pick.book ? `<div class="wauthor bn-author"></div>` : ''}
+          ${pick.book ? `<div class="wmeta book-meta" data-meta-title="${attr(pick.book)}"></div>` : ''}
+          <div class="wname">
+            picked by
+            ${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}
+            <a class="reader-link" href="${readerHref(pick.winner_id, pick.winner_username)}"><b>${esc(pick.winner_username)}</b></a>
+            ${ratePill}
+          </div>
+        </div>
+      </div>
+      ${pick.book ? `<div class="wdesc bn-desc"></div>` : ''}
+      ${pick.book ? `<div class="wtags genre-tags bn-tags"></div>` : ''}
+      ${pick.book ? `<a class="wmore" href="#book=${pick.round}">Full details →</a>` : ''}
+    </div>
+  `;
+}
+
 function render() {
   if (spinning) { pendingRender = true; return; }
   if (document.activeElement && document.activeElement.tagName === "INPUT") {
@@ -1720,8 +1762,12 @@ function render() {
   const iAmEliminated = state.eliminated.includes(session.user.id);
   const eligibleSubs = eligibleEntries();
   const eligibleCount = eligibleSubs.length;
+  // Split the ledger by role: the newest pick is "Next up"; any older pick that
+  // hasn't been rated yet is a book the club is "Currently reading"; everything
+  // rated belongs on the leaderboard. This partitions history[1..] cleanly, so
+  // no book is ever both a hero and a leaderboard row.
   const currentPick = state.history[0];
-  const currentPickAvatar = currentPick?.winner_id ? userAvatar(currentPick.winner_id) : null;
+  const nowReading = state.history.slice(1).filter(h => ratingTotal(h) == null);
 
   let html = `
     <header>
@@ -1742,28 +1788,12 @@ function render() {
     html += `<div class="flash ${flashMsg.kind === 'info' ? 'info' : ''}">${esc(flashMsg.text)}</div>`;
   }
 
+  // Currently reading first (chronologically "now"), then Next up.
+  nowReading.forEach(pick => {
+    html += bannerHtml(pick, { stamp: "Currently reading", admin, showRate: true });
+  });
   if (currentPick) {
-    html += `
-      <div class="winner-banner">
-        <div class="stampbig">Next up</div>
-        <div class="wn-top">
-          <div class="cover-slot large" data-cover-title="${attr(currentPick.book || '')}"></div>
-          <div class="wn-head">
-            <div class="wbook">${currentPick.book ? `<a class="book-link" href="#book=${currentPick.round}">${esc(currentPick.book)}</a>` : '—'}</div>
-            ${currentPick.book ? `<div class="wauthor" id="nextup-author"></div>` : ''}
-            ${currentPick.book ? `<div class="wmeta book-meta" data-meta-title="${attr(currentPick.book)}"></div>` : ''}
-            <div class="wname">
-              picked by
-              ${currentPickAvatar ? `<img class="avatar-mini" src="${attr(currentPickAvatar)}" alt="">` : ''}
-              <a class="reader-link" href="${readerHref(currentPick.winner_id, currentPick.winner_username)}"><b>${esc(currentPick.winner_username)}</b></a>
-            </div>
-          </div>
-        </div>
-        ${currentPick.book ? `<div class="wdesc" id="nextup-desc"></div>` : ''}
-        ${currentPick.book ? `<div class="wtags genre-tags" id="nextup-tags"></div>` : ''}
-        ${currentPick.book ? `<a class="wmore" href="#book=${currentPick.round}">Full details →</a>` : ''}
-      </div>
-    `;
+    html += bannerHtml(currentPick, { stamp: "Next up", admin, showRate: false });
   }
 
   // ---- My book ----
@@ -1830,17 +1860,17 @@ function render() {
   }
   html += `</div></section>`;
 
-  // ---- Leaderboard (past reads, ranked by Guild rating) ----
+  // ---- Leaderboard (finished reads, ranked by Guild rating) ----
+  // Only rated books that aren't the Next up pick — in-progress reads live in
+  // their own banners above, so nothing unrated clutters the ranking.
   html += `<section><div class="section-title">Leaderboard</div>`;
-  if (state.history.length === 0) {
-    html += `<div class="empty-note">No picks recorded yet.</div>`;
+  const rated = state.history.slice(1).filter(h => ratingTotal(h) != null);
+  if (rated.length === 0) {
+    html += `<div class="empty-note">No books rated yet.</div>`;
   } else {
     html += `<div class="card no-rule">`;
-    const ranked = [...state.history].sort((a, b) => {
+    const ranked = rated.sort((a, b) => {
       const ra = ratingTotal(a), rb = ratingTotal(b);
-      if (ra == null && rb == null) return b.round - a.round; // both unrated: newest first
-      if (ra == null) return 1;   // unrated sinks to the bottom
-      if (rb == null) return -1;
       if (rb !== ra) return rb - ra; // higher rating first
       return b.round - a.round;   // tie-break: newest first
     });
@@ -2015,7 +2045,7 @@ function render() {
   decorateCovers();
   decorateMeta();
   decorateShelfLinks();
-  decorateNextUp();
+  decorateBanners();
   decorateStats();
 }
 
