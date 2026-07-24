@@ -667,6 +667,7 @@
     font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700;
     margin-left: 4px;
   }
+  .user-row-tag.lib{ background: var(--brass); color: var(--felt); }
   .user-row-actions{ display: flex; gap: 6px; flex-wrap: wrap; }
   .tools-label{
     font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
@@ -1357,7 +1358,9 @@ async function resolveBookDetail(rawTitle) {
 // gates the Admin tab + controls. The server re-checks on every admin-update
 // call from the caller's JWT; this flag is only the UI gate.
 let amLibrarian = false;
+let librarianIds = new Set();       // all librarian user ids (for the Admin UI)
 const isAdmin = () => amLibrarian;
+const isLibrarianId = (id) => librarianIds.has(id);
 
 async function callAdmin(action, payload = {}) {
   if (!session) { setFlash("err", "Sign in first."); return; }
@@ -1435,7 +1438,7 @@ async function initAuth() {
     session = s;
     if (event === "SIGNED_IN") await onSignedIn();
     else if (event === "SIGNED_OUT") {
-      users = []; myUserRow = null; state = emptyState(); amLibrarian = false;
+      users = []; myUserRow = null; state = emptyState(); amLibrarian = false; librarianIds = new Set();
       render();
     } else if (event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
       render();
@@ -1450,17 +1453,17 @@ async function onSignedIn() {
   subscribeRealtime();
 }
 
-// Am I a librarian? Presence of my own row in shelf_librarians (RLS lets a
-// signed-in user read only their own row). Drives the UI gate; the server
+// Load the librarian set. `amLibrarian` (do I have a row?) drives the UI gate;
+// `librarianIds` powers the Admin tab's grant/revoke controls. The server
 // independently re-checks the caller's JWT on every admin-update call.
 async function loadLibrarianStatus() {
   try {
-    const { data } = await supabase
-      .from("shelf_librarians").select("user_id").eq("user_id", session.user.id).maybeSingle();
-    amLibrarian = !!data;
+    const { data } = await supabase.from("shelf_librarians").select("user_id");
+    librarianIds = new Set((data || []).map(r => r.user_id));
   } catch {
-    amLibrarian = false;
+    librarianIds = new Set();
   }
+  amLibrarian = !!(session && librarianIds.has(session.user.id));
 }
 
 function displayNameFromMeta(user) {
@@ -2994,12 +2997,15 @@ function render() {
               ? `<img class="leader-avatar" src="${attr(u.avatar_url)}" alt="">`
               : `<span class="leader-avatar-placeholder"></span>`}
             <div class="user-row-content">
-              <div class="user-row-name"><a class="reader-link" href="${readerHref(u.id, u.discord_username)}">${esc(u.discord_username || 'Reader')}</a>${eliminated ? `<span class="user-row-tag">Picked</span>` : ''}</div>
+              <div class="user-row-name"><a class="reader-link" href="${readerHref(u.id, u.discord_username)}">${esc(u.discord_username || 'Reader')}</a>${isLibrarianId(u.id) ? `<span class="user-row-tag lib">Librarian</span>` : ''}${eliminated ? `<span class="user-row-tag">Picked</span>` : ''}</div>
               <div class="user-row-book">${book ? esc(book) : 'no book set'}</div>
             </div>
             <div class="user-row-actions">
               <button class="btn-mini" data-admin-editbook="${attr(u.id)}">Edit book</button>
               ${book ? `<button class="btn-mini remove" data-admin-clear="${attr(u.id)}">Clear book</button>` : ''}
+              ${isLibrarianId(u.id)
+                ? (u.id === session.user.id ? '' : `<button class="btn-mini remove" data-admin-revoke-lib="${attr(u.id)}">Revoke librarian</button>`)
+                : `<button class="btn-mini" data-admin-grant-lib="${attr(u.id)}">Make librarian</button>`}
               <button class="btn-mini remove" data-admin-remove="${attr(u.id)}">Remove</button>
             </div>
           </div>
@@ -3714,6 +3720,26 @@ function wireUp() {
       const u = users.find(x => x.id === uid);
       if (!confirm(`Remove ${u?.discord_username || 'this reader'} from the shelf? Their past reads stay in the ledger, but they'll need to sign in again to rejoin.`)) return;
       callAdmin("admin_remove_user", { user_id: uid });
+    });
+  });
+  document.querySelectorAll("[data-admin-grant-lib]").forEach(el => {
+    el.addEventListener("click", async () => {
+      const uid = el.dataset.adminGrantLib;
+      const u = users.find(x => x.id === uid);
+      if (!confirm(`Make ${u?.discord_username || 'this reader'} a librarian? They'll get full admin controls.`)) return;
+      await callAdmin("admin_grant_librarian", { user_id: uid });
+      await loadLibrarianStatus();
+      render();
+    });
+  });
+  document.querySelectorAll("[data-admin-revoke-lib]").forEach(el => {
+    el.addEventListener("click", async () => {
+      const uid = el.dataset.adminRevokeLib;
+      const u = users.find(x => x.id === uid);
+      if (!confirm(`Revoke librarian from ${u?.discord_username || 'this reader'}? They'll lose admin controls.`)) return;
+      await callAdmin("admin_revoke_librarian", { user_id: uid });
+      await loadLibrarianStatus();
+      render();
     });
   });
 

@@ -152,7 +152,8 @@ create policy "shelf_comments delete self"
 -- that table has an "update self" policy, so a member could self-promote by
 -- patching their own row. This table has NO write policy at all, so grants and
 -- revokes are service-role only (unspoofable from the anon/authenticated API).
--- Signed-in users may read only their own row — enough to gate the UI.
+-- Any signed-in user may read the librarian list (the Admin grant/revoke UI
+-- needs it, and who the librarians are isn't sensitive).
 
 create table if not exists public.shelf_librarians (
   user_id    uuid primary key references auth.users(id) on delete cascade,
@@ -161,11 +162,11 @@ create table if not exists public.shelf_librarians (
 
 alter table public.shelf_librarians enable row level security;
 
-drop policy if exists "shelf_librarians read own" on public.shelf_librarians;
-create policy "shelf_librarians read own"
+drop policy if exists "shelf_librarians read for authenticated" on public.shelf_librarians;
+create policy "shelf_librarians read for authenticated"
   on public.shelf_librarians for select
   to authenticated
-  using (auth.uid() = user_id);
+  using (true);
 
 -- 8. Realtime --------------------------------------------------------------
 

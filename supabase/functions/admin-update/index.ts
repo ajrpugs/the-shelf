@@ -610,6 +610,26 @@ Deno.serve(async (req) => {
         if (error) throw error;
         return json({ ok: true, imported: rows.length });
       }
+      case "admin_grant_librarian": {
+        // Promote a reader to librarian (insert their row). Idempotent.
+        const uid = String(payload.user_id ?? "");
+        if (!uid) throw new Error("user_id required");
+        const { error } = await client
+          .from("shelf_librarians").upsert({ user_id: uid }, { onConflict: "user_id" });
+        if (error) throw error;
+        return json({ ok: true });
+      }
+      case "admin_revoke_librarian": {
+        // Demote a librarian (delete their row). A librarian can't revoke
+        // themselves — that avoids orphaning the club with zero librarians;
+        // another librarian must do it.
+        const uid = String(payload.user_id ?? "");
+        if (!uid) throw new Error("user_id required");
+        if (uid === callerId) throw new Error("you can't revoke your own librarian role");
+        const { error } = await client.from("shelf_librarians").delete().eq("user_id", uid);
+        if (error) throw error;
+        return json({ ok: true });
+      }
       default:
         throw new Error(`unknown action: ${action}`);
     }
