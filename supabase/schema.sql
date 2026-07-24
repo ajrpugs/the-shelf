@@ -265,7 +265,43 @@ alter table public.shelf_reviews
 alter table public.shelf_comments
   add column if not exists club_id uuid not null default '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8' references public.clubs(id);
 
--- 11. Realtime --------------------------------------------------------------
+-- 11. club_members -----------------------------------------------------
+-- Phase 1 of docs/multi-tenant-plan.md, slice 2: backing table for the
+-- is_member()/is_librarian() RLS policy functions a later slice will add.
+-- Additive only -- no RLS policy elsewhere reads this table yet, and nothing
+-- writes to it yet (shelf_users/shelf_librarians stay the live source of
+-- truth). This backfill is a one-time snapshot, not a live mirror -- see the
+-- migration file for why, and what must happen before anything relies on it.
+
+create table if not exists public.club_members (
+  club_id    uuid not null references public.clubs(id),
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  role       text not null default 'member' check (role in ('librarian', 'member')),
+  book       text,
+  joined_at  timestamptz default now(),
+  primary key (club_id, user_id)
+);
+
+insert into public.club_members (club_id, user_id, role, book, joined_at)
+select
+  '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8',
+  su.id,
+  case when sl.user_id is not null then 'librarian' else 'member' end,
+  su.book,
+  su.updated_at
+from public.shelf_users su
+left join public.shelf_librarians sl on sl.user_id = su.id
+on conflict (club_id, user_id) do nothing;
+
+alter table public.club_members enable row level security;
+
+drop policy if exists "club_members read for all" on public.club_members;
+create policy "club_members read for all"
+  on public.club_members for select
+  to anon, authenticated
+  using (true);
+
+-- 12. Realtime --------------------------------------------------------------
 
 alter publication supabase_realtime add table public.shelf_state;
 alter publication supabase_realtime add table public.shelf_users;
