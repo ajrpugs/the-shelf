@@ -2557,8 +2557,8 @@ function reviewSuperlatives() {
     const avg = totals.reduce((a, b) => a + b, 0) / totals.length;
     const u = users.find(x => x.id === uid);
     const name = u?.discord_username || "Reader";
-    if (!harsh || avg < harsh.avg) harsh = { avg, name, count: totals.length };
-    if (!generous || avg > generous.avg) generous = { avg, name, count: totals.length };
+    if (!harsh || avg < harsh.avg) harsh = { avg, name, id: uid, count: totals.length };
+    if (!generous || avg > generous.avg) generous = { avg, name, id: uid, count: totals.length };
   }
   return { controversial, harsh, generous };
 }
@@ -2984,10 +2984,10 @@ function render() {
         html += `<div class="sup-item"><div class="sup-item-label">Most divisive</div><a class="book-link sup-title" href="#book=${sup.controversial.round}">${esc(sup.controversial.book)}</a><span class="sup-val">±${sup.controversial.sd.toFixed(0)} spread · ${sup.controversial.count} reviews</span></div>`;
       }
       if (sup.harsh) {
-        html += `<div class="sup-item"><div class="sup-item-label">Harshest critic</div><span class="sup-title">${esc(sup.harsh.name)}</span><span class="sup-val">${sup.harsh.avg.toFixed(0)}/100 avg given</span></div>`;
+        html += `<div class="sup-item"><div class="sup-item-label">Harshest critic</div><a class="reader-link sup-title" href="${readerHref(sup.harsh.id, sup.harsh.name)}">${esc(sup.harsh.name)}</a><span class="sup-val">${sup.harsh.avg.toFixed(0)}/100 avg given</span></div>`;
       }
       if (sup.generous) {
-        html += `<div class="sup-item"><div class="sup-item-label">Most generous</div><span class="sup-title">${esc(sup.generous.name)}</span><span class="sup-val">${sup.generous.avg.toFixed(0)}/100 avg given</span></div>`;
+        html += `<div class="sup-item"><div class="sup-item-label">Most generous</div><a class="reader-link sup-title" href="${readerHref(sup.generous.id, sup.generous.name)}">${esc(sup.generous.name)}</a><span class="sup-val">${sup.generous.avg.toFixed(0)}/100 avg given</span></div>`;
       }
       html += `</div></div>`;
     }
@@ -3046,7 +3046,7 @@ function render() {
               ? `<img class="leader-avatar" src="${attr(u.avatar_url)}" alt="">`
               : `<span class="leader-avatar-placeholder"></span>`}
             <div class="user-row-content">
-              <div class="user-row-name">${esc(u.discord_username || 'Reader')}${eliminated ? `<span class="user-row-tag">Picked</span>` : ''}</div>
+              <div class="user-row-name"><a class="reader-link" href="${readerHref(u.id, u.discord_username)}">${esc(u.discord_username || 'Reader')}</a>${eliminated ? `<span class="user-row-tag">Picked</span>` : ''}</div>
               <div class="user-row-book">${book ? esc(book) : 'no book set'}</div>
             </div>
             <div class="user-row-actions">
@@ -3099,7 +3099,7 @@ function recapReadRow(h) {
   const band = ratingBand(total);
   return `<div class="history-item">
     <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-    <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>${h.winner_username ? ` <span class="recap-picker">— ${esc(h.winner_username)}</span>` : ''}</span>
+    <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>${h.winner_username ? ` <span class="recap-picker">— <a class="reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a></span>` : ''}</span>
     <span class="h-meta">${fmtDate(h.ts)}</span>
     ${band ? `<span class="score-pill ${band.cls}">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
   </div>`;
@@ -3240,7 +3240,7 @@ function guildReviewHtml(h) {
       const t = RUBRIC.reduce((s, { key }) => s + (Number(r[key]) || 0), 0);
       const b = ratingBand(t);
       html += `<div class="bd-reviewer">
-        <div class="bd-reviewer-head">${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<b>${esc(name)}</b> · ${t}/100 <span class="score-pill ${b.cls}">${b.label}</span></div>
+        <div class="bd-reviewer-head">${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<a class="reader-link" href="${readerHref(r.user_id, name)}"><b>${esc(name)}</b></a> · ${t}/100 <span class="score-pill ${b.cls}">${b.label}</span></div>
         <div class="bd-reviewer-scores">${RUBRIC.map(({ key, label }) => `${esc(label.split(" ")[0])} ${r[key]}`).join(" · ")}</div>
         ${r.note ? `<div class="bd-reviewer-note">“${esc(r.note)}”</div>` : ""}
       </div>`;
@@ -3271,7 +3271,7 @@ function discussionHtml(bookTs) {
       const mine = session && c.user_id === session.user.id;
       html += `<div class="bd-comment">
         <div class="bd-comment-head">
-          ${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<b>${esc(name)}</b>
+          ${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<a class="reader-link" href="${readerHref(c.user_id, name)}"><b>${esc(name)}</b></a>
           <span class="bd-comment-time">${fmtDate(c.created_at)}</span>
           ${mine ? `<button class="comment-del" data-comment-delete="${attr(c.id)}" title="Delete">×</button>` : ''}
         </div>
@@ -3455,8 +3455,11 @@ function renderReaderPage(app, key) {
   const picks = state.history.filter(h => readerKey(h.winner_id, h.winner_username) === key);
   const shelfUser = userId ? users.find(x => x.id === userId) : null;
   const shelfBook = shelfUser && (shelfUser.book || "").trim() ? shelfUser.book.trim() : null;
+  // A reader may be reachable purely as a reviewer (their name is clickable in
+  // review/comment lists) without ever having picked a book — still show them.
+  const hasReviews = userId ? reviews.some(r => r.user_id === userId) : false;
 
-  if (picks.length === 0 && !shelfBook) {
+  if (picks.length === 0 && !shelfBook && !hasReviews) {
     return renderDetailMissing(app, back, state.history.length === 0 && users.length === 0, `No reads recorded for ${name}.`);
   }
 
