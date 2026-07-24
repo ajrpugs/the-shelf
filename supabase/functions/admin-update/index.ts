@@ -472,6 +472,20 @@ Deno.serve(async (req) => {
         }
         break;
       }
+      case "admin_announce_meeting": {
+        // Re-announce a read's existing schedule without changing it — for dates
+        // set before the Discord hook existed, or any time the club needs a
+        // second nudge. Posts as a fresh "dates are set" message (prev: null).
+        const ts = String(payload.ts ?? "");
+        if (!ts) throw new Error("ts required");
+        const entry = state.history.find(h => h.ts === ts);
+        if (!entry) throw new Error("history item not found");
+        if (!entry.meetings || (!entry.meetings.half && !entry.meetings.full)) {
+          throw new Error("no meetings scheduled for this read");
+        }
+        meetingChange = { book: entry.book, round: entry.round, prev: null, next: entry.meetings };
+        break;
+      }
       case "admin_remove_user": {
         const userId = String(payload.user_id ?? "");
         if (!userId) throw new Error("user_id required");

@@ -2253,6 +2253,7 @@ function calendarTabHtml(admin, currentlyReading, nextUp) {
           <div class="me-row">
             <label>100% meeting (Toronto)<input type="datetime-local" data-me-field="full_at" value="${attr(fullVal)}"></label>
             <button class="btn-mini" data-me-save="${attr(h.ts || '')}">Save meetings</button>
+            ${(half.at || full.at) ? `<button class="btn-mini ghost" data-me-announce="${attr(h.ts || '')}">Announce in Discord</button>` : ''}
           </div>
         </div>`;
       });
@@ -3497,6 +3498,17 @@ function wireUp() {
       };
       document.activeElement?.blur?.(); // let the post-save render through
       callAdmin("admin_set_meeting", payload);
+    });
+  });
+
+  // Re-post a read's already-saved dates to Discord (doesn't change them).
+  document.querySelectorAll("[data-me-announce]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const ts = btn.dataset.meAnnounce;
+      const h = state.history.find(x => x.ts === ts);
+      if (!confirm(`Post the discussion dates for "${h?.book || 'this read'}" to Discord now?`)) return;
+      document.activeElement?.blur?.();
+      callAdmin("admin_announce_meeting", { ts });
     });
   });
 
