@@ -195,6 +195,67 @@ async function postToDiscord(webhookUrl: string, args: DiscordArgs): Promise<voi
   }
 }
 
+// Announce a change to a read's discussion schedule. Times go out as Discord
+// timestamp markup (<t:unix:F>) so every member sees them rendered in their own
+// timezone, with a relative countdown alongside.
+async function postMeetingsToDiscord(
+  webhookUrl: string,
+  args: { book: string; round: number; cover: string | null; prev: Meetings | null; next: Meetings | null },
+): Promise<void> {
+  const stamp = (iso: string) => {
+    const t = Math.floor(new Date(iso).getTime() / 1000);
+    return `<t:${t}:F> · <t:${t}:R>`;
+  };
+  const cleared = !args.next || (!args.next.half && !args.next.full);
+  const hadAny = !!(args.prev && (args.prev.half || args.prev.full));
+
+  const embed: Record<string, unknown> = {
+    title: args.book || "—",
+    url: `${SITE_URL}#book=${args.round}`,
+    color: 0xe0b45a,
+    footer: { text: `Round ${args.round}` },
+    timestamp: new Date().toISOString(),
+  };
+  if (args.cover) embed.thumbnail = { url: args.cover };
+
+  if (cleared) {
+    embed.description = "The discussion dates for this read were cleared.";
+  } else {
+    const fields: Array<Record<string, unknown>> = [];
+    if (args.next!.half?.at) {
+      const upTo = args.next!.half!.upTo;
+      fields.push({
+        name: "50% · halfway",
+        value: stamp(args.next!.half!.at) + (upTo ? `\nRead up to **${upTo}**` : ""),
+      });
+    }
+    if (args.next!.full?.at) {
+      fields.push({ name: "100% · finish the book", value: stamp(args.next!.full!.at) });
+    }
+    embed.fields = fields;
+  }
+
+  const content = cleared
+    ? "🗓️ Discussion dates cleared."
+    : hadAny
+      ? "🗓️ The discussion schedule has been updated."
+      : "🗓️ Discussion dates are set — add them to your calendar.";
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, embeds: [embed], allowed_mentions: { parse: [] } }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.error("Discord meetings webhook non-2xx:", res.status, text);
+    }
+  } catch (err) {
+    console.error("Discord meetings webhook error:", err);
+  }
+}
+
 function normalizeState(raw: any): State {
   const r = raw ?? {};
   return {
@@ -250,6 +311,9 @@ Deno.serve(async (req) => {
   let winnerAvatarUrl: string | null = null;
   let winnerDiscordId: string | null = null;
   let roundAdvanced = false;
+  // Set when admin_set_meeting actually changes the schedule, so we only ping
+  // Discord on a real edit (not on a no-op Save).
+  let meetingChange: { book: string; round: number; prev: Meetings | null; next: Meetings | null } | null = null;
 
   try {
     switch (action) {
@@ -394,13 +458,17 @@ Deno.serve(async (req) => {
         };
         const half = mk(payload.half_at, payload.half_upto);
         const full = mk(payload.full_at);
+        const prev = entry.meetings ?? null;
+        let next: Meetings | null = null;
         if (half || full) {
-          const meetings: Meetings = {};
-          if (half) meetings.half = half;
-          if (full) meetings.full = full;
-          entry.meetings = meetings;
-        } else {
-          entry.meetings = null;
+          next = {};
+          if (half) next.half = half;
+          if (full) next.full = full;
+        }
+        entry.meetings = next;
+        // Only worth announcing if something actually moved.
+        if (JSON.stringify(prev) !== JSON.stringify(next)) {
+          meetingChange = { book: entry.book, round: entry.round, prev, next };
         }
         break;
       }
@@ -442,6 +510,22 @@ Deno.serve(async (req) => {
         discordId: winnerDiscordId,
         round: winner.round,
         roundAdvanced,
+      });
+    }
+  }
+
+  // Same treatment for a schedule change: announced only after it's durable,
+  // and a busted webhook must never fail the librarian's save.
+  if (meetingChange) {
+    const webhookUrl = Deno.env.get("DISCORD_WEBHOOK_URL");
+    if (webhookUrl) {
+      const meta = await fetchBookMeta(meetingChange.book);
+      await postMeetingsToDiscord(webhookUrl, {
+        book: meetingChange.book,
+        round: meetingChange.round,
+        cover: meta.cover,
+        prev: meetingChange.prev,
+        next: meetingChange.next,
       });
     }
   }
