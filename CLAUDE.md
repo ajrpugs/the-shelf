@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-"The Shelf" is a tiny book-club picker. Signed-in readers (Discord OAuth) each set one book; a password-holding librarian spins a wheel that randomly picks an eligible reader. Picked readers sit out until the round turns over.
+"The Shelf" is a tiny book-club picker. Signed-in readers (Discord OAuth) each set one book; a librarian (a reader holding the librarian role) spins a wheel that randomly picks an eligible reader. Picked readers sit out until the round turns over.
 
 There is **no build step and no framework**. The entire frontend is a single `index.html` (~1500 lines) — a vanilla JS ES module that pulls `@supabase/supabase-js` straight from esm.sh and renders everything by hand (including a `<canvas>` spinning wheel). All persistence is Supabase (Postgres + Realtime + Edge Functions).
 
@@ -28,7 +28,7 @@ There is **no build step and no framework**. The entire frontend is a single `in
 - RLS: anyone (anon) can **read** both tables; a reader may insert/update only their own `shelf_users` row. State mutations happen only via service-role Edge Functions.
 
 **Edge Functions (`supabase/functions/`)** — Deno, deployed individually:
-- `admin-update` — password-gated writes to `shelf_state`. Checks `body.password === ADMIN_PASSWORD` (that's why it deploys `--no-verify-jwt`), then uses the **service role key**. Actions: `verify` (password check only — no DB touch, used to gate entering librarian mode), `draw`, `new_round`, `reset`, `undo_last_spin`, `admin_clear_book`, `admin_set_book`, `admin_set_rating`, `admin_set_ratings_open`, `admin_set_meeting`, `admin_announce_meeting` (re-posts a read's existing dates to Discord without changing them — the no-op guard on `admin_set_meeting` means an identical re-save stays silent, so this is the way to (re)announce), `admin_remove_user`. `draw` picks a random reader with a book set who isn't in `eliminated`, and **auto-advances the round** when that pick empties the eligible pool. Fires a Discord webhook after a durable `draw`, and again after `admin_set_meeting` when the schedule actually changed (a no-op Save stays silent). Meeting times are posted as Discord `<t:unix:F>` markup so each member sees them in their own timezone. Both posts happen **after** the state write and swallow their own errors — a dead webhook must never fail the librarian's action.
+- `admin-update` — librarian-gated writes to `shelf_state`. Verifies the caller's JWT itself (that's why it deploys `--no-verify-jwt`, same as `set-book`), requires the caller's id to be present in `shelf_librarians` (else 401 no token / 403 not a librarian), then uses the **service role key**. Actions: `draw`, `new_round`, `reset`, `undo_last_spin`, `admin_clear_book`, `admin_set_book`, `admin_set_rating`, `admin_set_ratings_open`, `admin_set_meeting`, `admin_announce_meeting` (re-posts a read's existing dates to Discord without changing them — the no-op guard on `admin_set_meeting` means an identical re-save stays silent, so this is the way to (re)announce), `admin_import_reviews` (bulk-upsert member rubric reviews into `shelf_reviews`, keyed by `book_ts` + `user_id`), `admin_remove_user`. `draw` picks a random reader with a book set who isn't in `eliminated`, and **auto-advances the round** when that pick empties the eligible pool. Fires a Discord webhook after a durable `draw`, and again after `admin_set_meeting` when the schedule actually changed (a no-op Save stays silent). Meeting times are posted as Discord `<t:unix:F>` markup so each member sees them in their own timezone. Both posts happen **after** the state write and swallow their own errors — a dead webhook must never fail the librarian's action.
 - `set-book` — a signed-in reader sets/clears their own book. Verifies the JWT itself (pulls the user id out), then writes with the service role and posts to Discord. Deployed `--no-verify-jwt` for its own error handling.
 - `discord-interactions` — receives Discord slash-command webhooks (`/mybook`). **Must** verify Discord's Ed25519 signature (`DISCORD_PUBLIC_KEY`) or Discord rejects the endpoint. Looks the reader up by `discord_id`.
 
@@ -59,7 +59,6 @@ supabase functions deploy discord-interactions --no-verify-jwt
 supabase functions deploy calendar-feed --no-verify-jwt
 
 # Manage server-side secrets (never in the HTML)
-supabase secrets set ADMIN_PASSWORD='...'
 supabase secrets set DISCORD_WEBHOOK_URL='...'
 supabase secrets set DISCORD_PUBLIC_KEY='...'      # from the Discord app portal
 
@@ -74,5 +73,5 @@ This repo is linked to Supabase project ref `yoobgxxyvcmsianfczam` (`supabase/.t
 ## Secrets & config
 
 - **Public / in the HTML:** `SUPABASE_URL`, `SUPABASE_ANON_KEY` — safe to commit.
-- **Server-side only (Supabase secrets):** `ADMIN_PASSWORD`, `DISCORD_WEBHOOK_URL`, `DISCORD_PUBLIC_KEY`. `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are injected into functions automatically.
-- The librarian password lives only in `ADMIN_PASSWORD`; the browser holds it in `sessionStorage` while unlocked and sends it with each admin call. Rotate by re-setting the secret (no redeploy of the function needed).
+- **Server-side only (Supabase secrets):** `DISCORD_WEBHOOK_URL`, `DISCORD_PUBLIC_KEY`. `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are injected into functions automatically.
+- **Librarian is a role, not a password.** A librarian is any reader whose id has a row in `shelf_librarians` (presence = librarian). `admin-update` verifies the caller's JWT and checks that table; the client mirrors it via `amLibrarian` (own-row read of `shelf_librarians`, set on sign-in) to gate the Admin tab + controls. Roles deliberately do **not** live on `shelf_users` (its "update self" policy would let a member self-promote) — `shelf_librarians` has no write policy, so grants/revokes are service-role only. Grant a librarian with an `insert into shelf_librarians (user_id) values ('<auth user id>')`.

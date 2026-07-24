@@ -146,7 +146,28 @@ create policy "shelf_comments delete self"
   to authenticated
   using (auth.uid() = user_id);
 
--- 7. Realtime --------------------------------------------------------------
+-- 7. shelf_librarians ------------------------------------------------------
+-- Who may perform admin actions. Presence of a row = librarian; this replaces
+-- the old shared ADMIN_PASSWORD. Roles deliberately do NOT live on shelf_users:
+-- that table has an "update self" policy, so a member could self-promote by
+-- patching their own row. This table has NO write policy at all, so grants and
+-- revokes are service-role only (unspoofable from the anon/authenticated API).
+-- Signed-in users may read only their own row — enough to gate the UI.
+
+create table if not exists public.shelf_librarians (
+  user_id    uuid primary key references auth.users(id) on delete cascade,
+  granted_at timestamptz default now()
+);
+
+alter table public.shelf_librarians enable row level security;
+
+drop policy if exists "shelf_librarians read own" on public.shelf_librarians;
+create policy "shelf_librarians read own"
+  on public.shelf_librarians for select
+  to authenticated
+  using (auth.uid() = user_id);
+
+-- 8. Realtime --------------------------------------------------------------
 
 alter publication supabase_realtime add table public.shelf_state;
 alter publication supabase_realtime add table public.shelf_users;

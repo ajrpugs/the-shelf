@@ -1351,49 +1351,28 @@ async function resolveBookDetail(rawTitle) {
   return promise;
 }
 
-// ---------- Admin session ----------
-const ADMIN_KEY = "shelf-admin-pw";
-const isAdmin = () => !!sessionStorage.getItem(ADMIN_KEY);
-const getAdminPw = () => sessionStorage.getItem(ADMIN_KEY) || "";
-const setAdminPw = (pw) => sessionStorage.setItem(ADMIN_KEY, pw);
-const clearAdminPw = () => sessionStorage.removeItem(ADMIN_KEY);
-
-// Confirm a password against the server before granting librarian mode, so the
-// admin UI can't be entered locally with any typed string. Returns true only
-// when the edge function accepts the password.
-async function verifyAdminPw(pw) {
-  try {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-update`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-      },
-      body: JSON.stringify({ password: pw, action: "verify", payload: {} }),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
+// ---------- Librarian mode ----------
+// Librarian rights are a per-user role — a row in shelf_librarians — not a
+// shared password. `amLibrarian` is set once on sign-in (see onSignedIn) and
+// gates the Admin tab + controls. The server re-checks on every admin-update
+// call from the caller's JWT; this flag is only the UI gate.
+let amLibrarian = false;
+const isAdmin = () => amLibrarian;
 
 async function callAdmin(action, payload = {}) {
-  const pw = getAdminPw();
-  if (!pw) { promptLibrarianPassword(action, payload); return; }
+  if (!session) { setFlash("err", "Sign in first."); return; }
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-update`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "apikey": SUPABASE_ANON_KEY,
-        "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+        "Authorization": `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ password: pw, action, payload }),
+      body: JSON.stringify({ action, payload }),
     });
-    if (res.status === 401) {
-      clearAdminPw();
-      setFlash("err", "Wrong password. Locked back out.");
+    if (res.status === 401 || res.status === 403) {
+      setFlash("err", "Not authorized — librarian only.");
       render();
       return;
     }
@@ -1412,50 +1391,6 @@ async function callAdmin(action, payload = {}) {
   } catch (err) {
     setFlash("err", `Network error: ${err.message}`);
   }
-}
-
-function promptLibrarianPassword(retryAction, retryPayload) {
-  const back = document.createElement("div");
-  back.className = "modal-back";
-  back.innerHTML = `
-    <div class="modal">
-      <h3>Librarian mode</h3>
-      <p>Enter the admin password to unlock spinning the wheel and resetting the shelf.</p>
-      <input type="password" id="pw-input" autocomplete="current-password" placeholder="Password" />
-      <div class="modal-actions">
-        <button class="btn-ghost" id="pw-cancel">Cancel</button>
-        <button class="btn-primary" id="pw-ok">Unlock</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(back);
-  const input = back.querySelector("#pw-input");
-  input.focus();
-  const close = () => document.body.removeChild(back);
-  back.querySelector("#pw-cancel").addEventListener("click", close);
-  const okBtn = back.querySelector("#pw-ok");
-  const submit = async () => {
-    const pw = input.value.trim();
-    if (!pw) return;
-    okBtn.disabled = true;
-    okBtn.textContent = "Checking…";
-    const ok = await verifyAdminPw(pw);
-    if (!ok) {
-      okBtn.disabled = false;
-      okBtn.textContent = "Unlock";
-      input.value = "";
-      input.focus();
-      setFlash("err", "Wrong password.");
-      render();
-      return;
-    }
-    setAdminPw(pw);
-    close();
-    if (retryAction) callAdmin(retryAction, retryPayload);
-    else render();
-  };
-  okBtn.addEventListener("click", submit);
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
 }
 
 function promptResetConfirmation() {
@@ -1500,7 +1435,7 @@ async function initAuth() {
     session = s;
     if (event === "SIGNED_IN") await onSignedIn();
     else if (event === "SIGNED_OUT") {
-      users = []; myUserRow = null; state = emptyState();
+      users = []; myUserRow = null; state = emptyState(); amLibrarian = false;
       render();
     } else if (event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
       render();
@@ -1510,8 +1445,22 @@ async function initAuth() {
 
 async function onSignedIn() {
   await ensureUserRow(session.user);
+  await loadLibrarianStatus();
   await loadAll();
   subscribeRealtime();
+}
+
+// Am I a librarian? Presence of my own row in shelf_librarians (RLS lets a
+// signed-in user read only their own row). Drives the UI gate; the server
+// independently re-checks the caller's JWT on every admin-update call.
+async function loadLibrarianStatus() {
+  try {
+    const { data } = await supabase
+      .from("shelf_librarians").select("user_id").eq("user_id", session.user.id).maybeSingle();
+    amLibrarian = !!data;
+  } catch {
+    amLibrarian = false;
+  }
 }
 
 function displayNameFromMeta(user) {
@@ -2021,8 +1970,7 @@ async function runDraw() {
   const entries = eligibleEntries();
   if (entries.length === 0) { setFlash("err", "No eligible readers — everyone needs a book set."); return; }
   preloadWheelCovers(entries);
-  const pw = getAdminPw();
-  if (!pw) { promptLibrarianPassword("draw", {}); return; }
+  if (!session) { setFlash("err", "Sign in first."); return; }
 
   const canvas = document.getElementById("wheel-canvas");
   const btn = document.getElementById("spin-btn");
@@ -2036,14 +1984,13 @@ async function runDraw() {
       headers: {
         "Content-Type": "application/json",
         "apikey": SUPABASE_ANON_KEY,
-        "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+        "Authorization": `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ password: pw, action: "draw", payload: {} }),
+      body: JSON.stringify({ action: "draw", payload: {} }),
     });
-    if (res.status === 401) {
+    if (res.status === 401 || res.status === 403) {
       spinning = false;
-      clearAdminPw();
-      setFlash("err", "Wrong password. Locked back out.");
+      setFlash("err", "Not authorized — librarian only.");
       render();
       return;
     }
@@ -2729,10 +2676,6 @@ function render() {
         <span>Signed in as <b>${esc(displayName)}</b></span>
         <span class="sep">·</span>
         <button id="sign-out-btn">Sign out</button>
-        <span class="sep">·</span>
-        ${admin
-          ? `<button id="lock-btn">Lock librarian mode</button>`
-          : `<button id="unlock-btn">Librarian mode</button>`}
       </div>
     </header>
   `;
@@ -3797,10 +3740,6 @@ function wireUp() {
     });
   });
 
-  const unlock = document.getElementById("unlock-btn");
-  if (unlock) unlock.addEventListener("click", () => promptLibrarianPassword());
-  const lock = document.getElementById("lock-btn");
-  if (lock) lock.addEventListener("click", () => { clearAdminPw(); render(); });
   const reset = document.getElementById("reset-btn");
   if (reset) reset.addEventListener("click", () => {
     if (!confirm("Wipe the entire ledger — history, every reader's book, everything. This cannot be undone. Continue?")) return;

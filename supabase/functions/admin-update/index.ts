@@ -1,12 +1,13 @@
 // Supabase Edge Function: admin-update
 //
-// Password-gated writes for shelf_state. Draw picks a random eligible reader
-// (from shelf_users where a book is set and their id isn't already in
-// eliminated). Round auto-advances when a pick empties the eligible pool.
+// Librarian-gated writes for shelf_state. The caller's JWT is verified here
+// (deployed --no-verify-jwt so we can pull the user id out, same as set-book)
+// and must belong to a user present in shelf_librarians. Draw picks a random
+// eligible reader (from shelf_users where a book is set and their id isn't
+// already in eliminated). Round auto-advances when a pick empties the pool.
 //
 // Deploy:
 //   supabase functions deploy admin-update --no-verify-jwt
-//   supabase secrets set ADMIN_PASSWORD='your-password-here'
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -344,25 +345,35 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
 
-  const adminPw = Deno.env.get("ADMIN_PASSWORD");
-  if (!adminPw) return json({ error: "ADMIN_PASSWORD not configured on the server" }, 500);
+  const url = Deno.env.get("SUPABASE_URL")!;
 
-  let body: { password?: string; action?: string; payload?: Record<string, unknown> };
-  try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+  // Verify the caller's JWT ourselves (same pattern as set-book), then confirm
+  // they're a librarian. Replaces the old shared ADMIN_PASSWORD gate: who did an
+  // admin action is now a real identity, and rights are per-user and revocable.
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  if (!token) return json({ error: "no auth token" }, 401);
 
-  if (!body.password || body.password !== adminPw) {
-    return json({ error: "unauthorized" }, 401);
-  }
-
-  // Password-only check used by the client to gate entering librarian mode.
-  // The password was already validated above; nothing to mutate.
-  if (body.action === "verify") return json({ ok: true });
+  const userClient = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { persistSession: false },
+  });
+  const { data: userData, error: authErr } = await userClient.auth.getUser();
+  if (authErr || !userData?.user) return json({ error: "invalid auth" }, 401);
+  const callerId = userData.user.id;
 
   const client = createClient(
-    Deno.env.get("SUPABASE_URL")!,
+    url,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     { auth: { persistSession: false } },
   );
+
+  const { data: lib } = await client
+    .from("shelf_librarians").select("user_id").eq("user_id", callerId).maybeSingle();
+  if (!lib) return json({ error: "not a librarian" }, 403);
+
+  let body: { action?: string; payload?: Record<string, unknown> };
+  try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
 
   const { data: row, error: readErr } = await client
     .from("shelf_state").select("data").eq("id", 1).single();
