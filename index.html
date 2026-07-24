@@ -793,6 +793,56 @@
   .me-book-title{ font-family:'Fraunces',serif; font-weight: 700; color: var(--ink); margin-bottom: 8px; }
   .me-hint{ font-size: 11.5px; color: var(--ink-soft); font-style: italic; }
 
+  /* ---- Month grid ---- */
+  .cal-wrap{
+    background: var(--panel); border-radius: 3px; padding: 14px 14px 12px;
+    box-shadow: 0 5px 0 var(--card-shadow), 0 12px 22px rgba(0,0,0,0.32);
+  }
+  .cal-head{ display:flex; align-items:center; gap: 8px; margin-bottom: 12px; }
+  .cal-title{
+    flex: 1; font-family:'Fraunces',serif; font-weight: 700; font-size: 17px;
+    color: var(--ink); letter-spacing: 0.01em;
+  }
+  .cal-nav{
+    background: transparent; border: 1px solid var(--panel-border); color: var(--ink);
+    width: 28px; height: 28px; border-radius: 2px; cursor: pointer;
+    font-size: 17px; line-height: 1; padding: 0;
+  }
+  .cal-nav:hover{ border-color: var(--stamp); color: var(--stamp); }
+  .cal-grid{ display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+  .cal-dow{
+    text-align: center; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-soft); font-weight: 700; padding-bottom: 4px;
+  }
+  .cal-cell{
+    min-height: 62px; padding: 4px; border-radius: 2px;
+    background: rgba(236,227,207,0.035); border: 1px solid transparent;
+    display: flex; flex-direction: column; gap: 2px; overflow: hidden;
+  }
+  .cal-cell.empty{ background: transparent; }
+  .cal-cell.today{ border-color: var(--brass); background: rgba(224,180,90,0.10); }
+  .cal-cell.has-meeting{ background: rgba(213,87,63,0.10); }
+  .cal-daynum{ font-size: 11px; color: var(--ink-soft); font-family:'Courier Prime',monospace; }
+  .cal-cell.today .cal-daynum{ color: var(--brass); font-weight: 700; }
+  .cal-ev{
+    display: block; text-decoration: none; border-radius: 2px;
+    padding: 2px 4px; background: var(--stamp); color: var(--card);
+    font-size: 9.5px; line-height: 1.25; overflow: hidden;
+  }
+  .cal-ev.full{ background: var(--brass); color: var(--felt); }
+  .cal-ev.past{ opacity: 0.42; }
+  .cal-ev:hover{ filter: brightness(1.12); }
+  .cal-ev-pct{ display:block; font-weight: 700; }
+  .cal-ev-book{
+    display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 9px; opacity: 0.9;
+  }
+  @media (max-width: 560px){
+    .cal-cell{ min-height: 42px; padding: 3px 2px; }
+    .cal-ev{ padding: 1px 3px; font-size: 8.5px; }
+    .cal-ev-book{ display: none; }   /* dates stay legible; detail lives in the list below */
+  }
+
   /* Per-book meeting strip (Reading banners + book pages) */
   .book-meetings{
     margin-top: 10px; padding: 9px 11px;
@@ -836,6 +886,7 @@ let reviews = [];            // shelf_reviews rows (member rubric reviews)
 let comments = [];           // shelf_comments rows (per-book discussion)
 let leaderboardQuery = "";    // live filter text for the leaderboard
 let currentTab = "reading";  // active top-level tab in the main view
+let calendarMonth = null;    // { y, m } shown in the calendar grid; null = auto
 let session = null;          // Supabase auth session
 let myUserRow = null;        // Current user's shelf_users row
 let spinning = false;
@@ -2171,6 +2222,75 @@ function bookMeetingsHtml(h) {
   return `<div class="book-meetings"><div class="bm-label">Discussion</div>${rows.join("")}</div>`;
 }
 
+// ---- Month grid ----
+const MONTH_NAMES = ["January","February","March","April","May","June",
+  "July","August","September","October","November","December"];
+const DOW_LABELS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+// Open on the month holding the next upcoming meeting, else the current month.
+function defaultCalendarMonth() {
+  const next = allMeetings().find(m => !m.past);
+  const p = clubParts(next ? next.at : new Date());
+  return { y: p.year, m: p.month };
+}
+function shiftMonth(view, delta) {
+  const i = view.y * 12 + (view.m - 1) + delta;
+  return { y: Math.floor(i / 12), m: (i % 12) + 1 };
+}
+
+// A real month grid. Day cells are bucketed by the meeting's *Toronto* calendar
+// date — an 8pm ET meeting is 00:00Z the next day, so bucketing by the viewer's
+// own timezone would land it on the wrong square. Grid geometry uses UTC-based
+// Date math purely as calendar arithmetic on abstract y/m/d, never as instants.
+function calendarGridHtml() {
+  const view = calendarMonth || defaultCalendarMonth();
+  const { y, m } = view;
+  const firstDow = new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+  const byDay = {};
+  for (const mt of allMeetings()) {
+    const p = clubParts(mt.at);
+    if (p.year !== y || p.month !== m) continue;
+    (byDay[p.day] ||= []).push(mt);
+  }
+
+  const today = clubParts(new Date());
+  const isThisMonth = today.year === y && today.month === m;
+
+  let cells = "";
+  for (let i = 0; i < firstDow; i++) cells += `<div class="cal-cell empty"></div>`;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const evs = byDay[d] || [];
+    const cls = ["cal-cell"];
+    if (isThisMonth && today.day === d) cls.push("today");
+    if (evs.length) cls.push("has-meeting");
+    const chips = evs.map(e => {
+      const pct = e.phase === "half" ? "50%" : "100%";
+      const tip = `${pct} · ${e.book}${e.upTo ? ` · read to ${e.upTo}` : ""} · ${fmtMeetingWhen(e.at)}`;
+      return `<a class="cal-ev ${e.phase}${e.past ? ' past' : ''}" href="#book=${e.round}" title="${attr(tip)}">
+        <span class="cal-ev-pct">${pct}</span><span class="cal-ev-book">${esc(e.book)}</span>
+      </a>`;
+    }).join("");
+    cells += `<div class="${cls.join(" ")}"><div class="cal-daynum">${d}</div>${chips}</div>`;
+  }
+  const trail = (7 - ((firstDow + daysInMonth) % 7)) % 7;
+  for (let i = 0; i < trail; i++) cells += `<div class="cal-cell empty"></div>`;
+
+  return `<div class="cal-wrap">
+    <div class="cal-head">
+      <button class="cal-nav" data-cal-nav="-1" title="Previous month">‹</button>
+      <div class="cal-title">${MONTH_NAMES[m - 1]} ${y}</div>
+      <button class="cal-nav" data-cal-nav="1" title="Next month">›</button>
+      <button class="btn-mini ghost" data-cal-nav="0">Today</button>
+    </div>
+    <div class="cal-grid">
+      ${DOW_LABELS.map(d => `<div class="cal-dow">${d}</div>`).join("")}
+      ${cells}
+    </div>
+  </div>`;
+}
+
 function meetingRowHtml(m) {
   const pct = m.phase === "half" ? "50%" : "100%";
   return `<div class="meeting-card">
@@ -2191,10 +2311,13 @@ function calendarTabHtml(admin, currentlyReading, nextUp) {
   const webcal = feed.replace(/^https?:\/\//, "webcal://");
   let html = `<section><div class="section-title">Meeting calendar</div>`;
 
-  // What's coming up leads the tab — the subscribe plumbing sits below it.
+  // The month grid is the headline; the lists under it carry the detail the
+  // grid can't (checkpoint text, full zone-labelled times).
+  html += calendarGridHtml();
+
   const meetings = allMeetings();
   const upcoming = meetings.filter(m => !m.past);
-  html += `<div class="card no-rule"><div class="mini-head">Upcoming meetings</div>`;
+  html += `<div class="card no-rule" style="margin-top:14px;"><div class="mini-head">Upcoming meetings</div>`;
   if (upcoming.length === 0) {
     html += `<div class="empty-note">No meetings scheduled yet.${admin ? ' Set dates below.' : ''}</div>`;
   } else {
@@ -3463,6 +3586,21 @@ function wireUp() {
       // buttons on click), so drop focus before switching.
       document.activeElement?.blur?.();
       currentTab = id;
+      render();
+    });
+  });
+
+  // Month grid navigation (0 = jump back to the current month).
+  document.querySelectorAll("[data-cal-nav]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const delta = Number(btn.dataset.calNav);
+      document.activeElement?.blur?.();
+      if (delta === 0) {
+        const p = clubParts(new Date());
+        calendarMonth = { y: p.year, m: p.month };
+      } else {
+        calendarMonth = shiftMonth(calendarMonth || defaultCalendarMonth(), delta);
+      }
       render();
     });
   });
