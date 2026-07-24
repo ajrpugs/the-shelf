@@ -17,7 +17,7 @@ const cors = {
 };
 
 // Base URL of the live app, so Discord embeds can link back to a book's page.
-const SITE_URL = "https://ajrpugs.github.io/the-shelf/";
+const SITE_URL = "https://sh3lf.net/";
 
 type Rating = {
   total: number;
@@ -256,6 +256,70 @@ async function postMeetingsToDiscord(
   }
 }
 
+// Band for a /100 total, mirroring ratingBand() in index.html (bands come from
+// the average category score, total/5): Excellent ≥80, Great ≥55, Good ≥30,
+// else Bad. `color` tints the Discord embed to match.
+function ratingBand(total: number): { label: string; color: number } {
+  if (total >= 80) return { label: "Excellent", color: 0x3a9d5a };
+  if (total >= 55) return { label: "Great", color: 0x6fae3a };
+  if (total >= 30) return { label: "Good", color: 0xe0b45a };
+  return { label: "Bad", color: 0xc94a37 };
+}
+
+// Announce that a read has been scored and moved onto the leaderboard. Posts the
+// committed /100 Guild score, its band, the per-category breakdown when present,
+// and how many member reviews it averaged.
+async function postRatingToDiscord(
+  webhookUrl: string,
+  args: { book: string; round: number; cover: string | null; rating: Rating },
+): Promise<void> {
+  const { total } = args.rating;
+  const band = ratingBand(total);
+
+  const embed: Record<string, unknown> = {
+    title: args.book || "—",
+    url: `${SITE_URL}#book=${args.round}`,
+    description: `**${total}/100** · ${band.label}`,
+    color: band.color,
+    footer: { text: `Round ${args.round}` },
+    timestamp: new Date().toISOString(),
+  };
+  if (args.cover) embed.thumbnail = { url: args.cover };
+
+  const catLabels: Record<string, string> = {
+    plot: "Plot",
+    characters: "Characters",
+    pacing: "Organization / Pacing",
+    language: "Use of Language",
+    themes: "Themes / Ideas",
+  };
+  const fields: Array<Record<string, unknown>> = [];
+  for (const key of ["plot", "characters", "pacing", "language", "themes"] as const) {
+    const v = args.rating[key];
+    if (Number.isFinite(v)) fields.push({ name: catLabels[key], value: `${v}/20`, inline: true });
+  }
+  if (fields.length) embed.fields = fields;
+  if (Number.isFinite(args.rating.reviews)) {
+    const n = args.rating.reviews!;
+    embed.footer = { text: `Round ${args.round} · averaged from ${n} review${n === 1 ? "" : "s"}` };
+  }
+
+  const content = "🏅 A read has been scored — it's on the leaderboard.";
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, embeds: [embed], allowed_mentions: { parse: [] } }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.error("Discord rating webhook non-2xx:", res.status, text);
+    }
+  } catch (err) {
+    console.error("Discord rating webhook error:", err);
+  }
+}
+
 function normalizeState(raw: any): State {
   const r = raw ?? {};
   return {
@@ -314,6 +378,7 @@ Deno.serve(async (req) => {
   // Set when admin_set_meeting actually changes the schedule, so we only ping
   // Discord on a real edit (not on a no-op Save).
   let meetingChange: { book: string; round: number; prev: Meetings | null; next: Meetings | null } | null = null;
+  let ratingChange: { book: string; round: number; rating: Rating } | null = null;
 
   try {
     switch (action) {
@@ -404,6 +469,7 @@ Deno.serve(async (req) => {
         const entry = state.history.find(h => h.ts === ts);
         if (!entry) throw new Error("history item not found");
         const raw = payload.total;
+        const prevRating = entry.rating ?? null;
         if (raw === null || raw === "" || raw === undefined) {
           entry.rating = null;
         } else {
@@ -423,6 +489,11 @@ Deno.serve(async (req) => {
           const rc = Math.round(Number((payload as Record<string, unknown>).reviews));
           if (Number.isFinite(rc) && rc > 0) rating.reviews = rc;
           entry.rating = rating;
+          // Announce the score only when it actually changed (a re-lock of the
+          // same total stays silent, matching the meeting no-op behavior).
+          if (JSON.stringify(prevRating) !== JSON.stringify(rating)) {
+            ratingChange = { book: entry.book, round: entry.round, rating };
+          }
         }
         break;
       }
@@ -540,6 +611,21 @@ Deno.serve(async (req) => {
         cover: meta.cover,
         prev: meetingChange.prev,
         next: meetingChange.next,
+      });
+    }
+  }
+
+  // And for a newly committed Guild score: announced after the write, webhook
+  // failures logged but never fatal to the librarian's action.
+  if (ratingChange) {
+    const webhookUrl = Deno.env.get("DISCORD_WEBHOOK_URL");
+    if (webhookUrl) {
+      const meta = await fetchBookMeta(ratingChange.book);
+      await postRatingToDiscord(webhookUrl, {
+        book: ratingChange.book,
+        round: ratingChange.round,
+        cover: meta.cover,
+        rating: ratingChange.rating,
       });
     }
   }

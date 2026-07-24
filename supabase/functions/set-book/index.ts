@@ -21,7 +21,7 @@ const cors = {
 };
 
 // Base URL of the live app, so Discord embeds can link back to the book's page.
-const SITE_URL = "https://ajrpugs.github.io/the-shelf/";
+const SITE_URL = "https://sh3lf.net/";
 
 // --- Open Library cover lookup -----------------------------------------------
 

@@ -13,7 +13,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const SITE_URL = "https://ajrpugs.github.io/the-shelf/";
+const SITE_URL = "https://sh3lf.net/";
 const MEETING_MINUTES = 60; // each discussion is a 1-hour event
 
 type Meeting = { at?: string; upTo?: string };

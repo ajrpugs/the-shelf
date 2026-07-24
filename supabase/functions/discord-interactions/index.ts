@@ -16,7 +16,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const PUBLIC_KEY = Deno.env.get("DISCORD_PUBLIC_KEY") ?? "";
 
 // Base URL of the live app, so Discord embeds can link back to the book's page.
-const SITE_URL = "https://ajrpugs.github.io/the-shelf/";
+const SITE_URL = "https://sh3lf.net/";
 
 // --- Open Library cover + Discord post ---------------------------------------
 
@@ -172,7 +172,7 @@ async function handleMyBook(interaction: any) {
   }
   if (!user) {
     return reply(
-      `Hey ${discordUsername} — you need to sign in on the web once first so The Shelf knows you: https://ajrpugs.github.io/the-shelf/`,
+      `Hey ${discordUsername} — you need to sign in on the web once first so The Shelf knows you: ${SITE_URL}`,
     );
   }
 
