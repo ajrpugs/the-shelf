@@ -226,7 +226,46 @@ create policy "reads read for all"
 
 alter table public.shelf_state add column if not exists version int not null default 0;
 
--- 10. Realtime --------------------------------------------------------------
+-- 10. clubs ------------------------------------------------------------
+-- Phase 1 of docs/multi-tenant-plan.md, slice 1: additive club scoping. A
+-- `clubs` table plus a `club_id` column (constant-defaulted, so existing rows
+-- and the running app are unaffected) on every table holding per-club
+-- content. No RLS changes, no query scoping yet -- see the migration's header
+-- comment for the full rationale. shelf_users/shelf_librarians are
+-- deliberately untouched (that split only matters once a second club exists).
+
+create table if not exists public.clubs (
+  id         uuid primary key,
+  slug       text not null unique,
+  name       text not null,
+  created_at timestamptz default now()
+);
+
+insert into public.clubs (id, slug, name)
+values ('8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8', 'the-shelf', 'The Shelf')
+on conflict (id) do nothing;
+
+alter table public.clubs enable row level security;
+
+drop policy if exists "clubs read for all" on public.clubs;
+create policy "clubs read for all"
+  on public.clubs for select
+  to anon, authenticated
+  using (true);
+
+alter table public.reads
+  add column if not exists club_id uuid not null default '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8' references public.clubs(id);
+
+alter table public.shelf_state
+  add column if not exists club_id uuid not null default '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8' references public.clubs(id);
+
+alter table public.shelf_reviews
+  add column if not exists club_id uuid not null default '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8' references public.clubs(id);
+
+alter table public.shelf_comments
+  add column if not exists club_id uuid not null default '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8' references public.clubs(id);
+
+-- 11. Realtime --------------------------------------------------------------
 
 alter publication supabase_realtime add table public.shelf_state;
 alter publication supabase_realtime add table public.shelf_users;
