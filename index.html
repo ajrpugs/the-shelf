@@ -850,9 +850,14 @@
     border-left: 2px solid var(--brass); border-radius: 2px;
   }
   .bm-label{
+    display: inline-flex; align-items: center; gap: 5px;
     font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase;
     color: var(--brass); font-weight: 700; margin-bottom: 5px;
+    text-decoration: none; cursor: pointer; border-bottom: 1px solid transparent;
+    transition: color 0.12s ease, border-color 0.12s ease;
   }
+  .bm-label:hover{ color: var(--stamp); border-bottom-color: currentColor; }
+  .bm-arrow{ font-size: 10px; opacity: 0.75; }
   .bm-row{ display:flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12.5px; padding: 2px 0; }
   .bm-row.past{ opacity: 0.45; }
   .bm-phase{
@@ -2219,7 +2224,12 @@ function bookMeetingsHtml(h) {
     </div>`);
   }
   if (!rows.length) return "";
-  return `<div class="book-meetings"><div class="bm-label">Discussion</div>${rows.join("")}</div>`;
+  // The label doubles as a jump to the Calendar tab. It can't be a plain href —
+  // the tab lives in memory, not the hash — so a delegated handler drives it.
+  return `<div class="book-meetings">
+    <a class="bm-label" href="#" data-goto-tab="calendar" title="See the full meeting calendar">Discussion <span class="bm-arrow">→</span></a>
+    ${rows.join("")}
+  </div>`;
 }
 
 // ---- Month grid ----
@@ -3766,6 +3776,17 @@ initAuth();
 // Review buttons live on both the Currently reading banner and book pages, so
 // handle them by delegation instead of per-render wiring.
 document.addEventListener("click", (e) => {
+  // Jump to a tab from anywhere — including a book detail page, which is a hash
+  // route, so we clear the hash and let hashchange do the render.
+  const goto = e.target.closest("[data-goto-tab]");
+  if (goto) {
+    e.preventDefault();
+    currentTab = goto.dataset.gotoTab;
+    if (location.hash && location.hash !== "#") location.hash = "";
+    else render();
+    window.scrollTo(0, 0);
+    return;
+  }
   const rate = e.target.closest("[data-rate-ts]");
   if (rate) {
     const ts = rate.dataset.rateTs;
