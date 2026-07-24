@@ -15,7 +15,7 @@ create table if not exists public.reads (
   winner_id        uuid references auth.users(id) on delete set null,
   winner_username  text not null default 'Reader',
   book             text not null default '',
-  ts               timestamptz not null unique,
+  ts               text not null unique,
   rating           jsonb,
   ratings_open     boolean not null default false,
   meetings         jsonb,
@@ -26,11 +26,13 @@ create table if not exists public.reads (
 -- shapes normalizeState already tolerates: `cycle`/`cycleNumber` -> round, and
 -- (per CLAUDE.md) very old history entries whose winner_id was a plain name
 -- rather than a uuid, from before the Discord OAuth migration -- those parse
--- to NULL here rather than failing the whole backfill. `ts` is the
--- pre-existing ISO timestamp string from history, reused verbatim as the
--- natural key so this backfill is idempotent and reviews/comments (keyed by
--- book_ts) still line up with it. Any entry missing a well-formed ISO `ts` is
--- skipped rather than aborting the migration.
+-- to NULL here rather than failing the whole backfill. `ts` is kept as plain
+-- TEXT (not cast to timestamptz) and reused byte-for-byte as the natural key:
+-- shelf_reviews.book_ts / shelf_comments.book_ts already store this exact
+-- string from the client's toISOString() calls, and PostgREST would
+-- re-serialize a timestamptz differently (+00:00 vs Z) on read, silently
+-- breaking every review/comment join. The regex below is a data-quality
+-- guard (skip garbage), not a cast-safety requirement.
 insert into public.reads (round, winner_id, winner_username, book, ts, rating, ratings_open, meetings)
 select
   coalesce((h->>'round')::int, (h->>'cycle')::int, 1),
@@ -41,7 +43,7 @@ select
   end,
   coalesce(nullif(h->>'winner_username', ''), nullif(h->>'winner', ''), 'Reader'),
   coalesce(h->>'book', ''),
-  (h->>'ts')::timestamptz,
+  h->>'ts',
   h->'rating',
   coalesce((h->>'ratingsOpen')::boolean, false),
   h->'meetings'

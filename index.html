@@ -1509,15 +1509,26 @@ async function signOut() {
 async function loadAll() {
   if (!CONFIGURED) { render(); return; }
   try {
-    const [{ data: sData, error: sErr }, { data: uData, error: uErr }, { data: rData, error: rErr }, { data: cData, error: cErr }] = await Promise.all([
+    const [{ data: sData, error: sErr }, { data: uData, error: uErr }, { data: rData, error: rErr }, { data: cData, error: cErr }, { data: readsData, error: readsErr }] = await Promise.all([
       supabase.from("shelf_state").select("data").eq("id", 1).single(),
       supabase.from("shelf_users").select("*"),
       supabase.from("shelf_reviews").select("*"),
       supabase.from("shelf_comments").select("*"),
+      supabase.from("reads")
+        .select("round, winner_id, winner_username, book, ts, rating, ratingsOpen:ratings_open, meetings")
+        .order("ts", { ascending: false }),
     ]);
     if (sErr && sErr.code !== "PGRST116") throw sErr;
     if (uErr) throw uErr;
-    state = normalizeState(sData?.data);
+    // History lives in `reads` (Phase 0 cutover), not shelf_state.data.history
+    // — eliminated/roundNumber still come from shelf_state. Degrade to an
+    // empty history rather than breaking the whole load if it's unavailable.
+    if (readsErr) console.warn("reads unavailable:", readsErr.message);
+    state = normalizeState({
+      eliminated: sData?.data?.eliminated,
+      roundNumber: sData?.data?.roundNumber,
+      history: (!readsErr && readsData) ? readsData : [],
+    });
     users = uData || [];
     // Reviews/comments are non-critical: if a table isn't there yet (migration
     // not applied), degrade to empty instead of breaking the whole load.
@@ -1539,6 +1550,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_users" }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_reviews" }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_comments" }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "reads" }, () => queueRefresh())
     .subscribe();
 }
 let refreshTimer = null;

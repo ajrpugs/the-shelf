@@ -56,13 +56,12 @@ type HistoryItem = {
   meetings?: Meetings | null; // 50% / 100% discussion dates for this read
 };
 
-type State = {
+// shelf_state.data now holds only these two fields — history moved out to
+// the `reads` table (Phase 0 of docs/multi-tenant-plan.md).
+type GameState = {
   eliminated: string[];       // user ids
-  history: HistoryItem[];
   roundNumber: number;
 };
-
-const emptyState = (): State => ({ eliminated: [], history: [], roundNumber: 1 });
 
 // --- Open Library cover lookup + Discord webhook -----------------------------
 
@@ -329,22 +328,10 @@ async function postRatingToDiscord(
   }
 }
 
-function normalizeState(raw: any): State {
+function normalizeGameState(raw: any): GameState {
   const r = raw ?? {};
   return {
     eliminated: Array.isArray(r.eliminated) ? r.eliminated : [],
-    history: Array.isArray(r.history)
-      ? r.history.map((h: any) => ({
-          round: h.round ?? h.cycle ?? 1,
-          winner_id: h.winner_id ?? null,
-          winner_username: h.winner_username ?? h.winner ?? "Reader",
-          book: h.book ?? "",
-          ts: h.ts,
-          rating: h.rating ?? null,
-          ratingsOpen: !!h.ratingsOpen,
-          meetings: h.meetings ?? null,
-        }))
-      : [],
     roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
   };
 }
@@ -383,10 +370,28 @@ Deno.serve(async (req) => {
   let body: { action?: string; payload?: Record<string, unknown> };
   try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
 
+  // shelf_state.data now holds only { eliminated, roundNumber } -- history
+  // lives in the `reads` table. `version` guards against two concurrent admin
+  // actions clobbering each other: every action that touches eliminated/
+  // roundNumber writes via writeGameState(), conditioned on this exact value.
   const { data: row, error: readErr } = await client
-    .from("shelf_state").select("data").eq("id", 1).single();
+    .from("shelf_state").select("data, version").eq("id", 1).single();
   if (readErr && readErr.code !== "PGRST116") return json({ error: readErr.message }, 500);
-  const state: State = normalizeState(row?.data);
+  const gameState: GameState = normalizeGameState(row?.data);
+  const version: number = row?.version ?? 0;
+
+  async function writeGameState(next: GameState): Promise<Response | null> {
+    const { data: updated, error } = await client
+      .from("shelf_state")
+      .update({ data: next, version: version + 1, updated_at: new Date().toISOString() })
+      .eq("id", 1)
+      .eq("version", version)
+      .select()
+      .maybeSingle();
+    if (error) return json({ error: error.message }, 500);
+    if (!updated) return json({ error: "The shelf changed while you were acting — try again." }, 409);
+    return null;
+  }
 
   const action = body.action;
   const payload = (body.payload ?? {}) as Record<string, unknown>;
@@ -408,47 +413,74 @@ Deno.serve(async (req) => {
           .not("book", "is", null)
           .neq("book", "");
         if (rErr) throw rErr;
-        const { eligible, chosen } = pickEligible(readers, state.eliminated);
-        const entry: HistoryItem = {
-          round: state.roundNumber,
-          winner_id: chosen.id,
-          winner_username: chosen.discord_username,
-          book: chosen.book,
-          ts: new Date().toISOString(),
-        };
-        state.history.unshift(entry);
-        state.eliminated.push(chosen.id);
-        winner = entry;
-        winnerAvatarUrl = (chosen as { avatar_url?: string | null }).avatar_url ?? null;
-        winnerDiscordId = (chosen as { discord_id?: string | null }).discord_id ?? null;
-
+        const { eligible, chosen } = pickEligible(readers, gameState.eliminated);
+        const pickRound = gameState.roundNumber;
+        let newEliminated = [...gameState.eliminated, chosen.id];
+        let newRoundNumber = pickRound;
         // If this pick emptied the eligible pool, roll to the next round.
         if (advanceIfEmpty(eligible.length)) {
-          state.eliminated = [];
-          state.roundNumber += 1;
+          newEliminated = [];
+          newRoundNumber = pickRound + 1;
           roundAdvanced = true;
         }
+        const conflict = await writeGameState({ eliminated: newEliminated, roundNumber: newRoundNumber });
+        if (conflict) return conflict;
+        gameState.eliminated = newEliminated;
+        gameState.roundNumber = newRoundNumber;
+
+        const ts = new Date().toISOString();
+        const { error: insErr } = await client
+          .from("reads")
+          .insert({ round: pickRound, winner_id: chosen.id, winner_username: chosen.discord_username, book: chosen.book, ts });
+        if (insErr) return json({ error: insErr.message }, 500);
+        winner = { round: pickRound, winner_id: chosen.id, winner_username: chosen.discord_username, book: chosen.book, ts };
+        winnerAvatarUrl = (chosen as { avatar_url?: string | null }).avatar_url ?? null;
+        winnerDiscordId = (chosen as { discord_id?: string | null }).discord_id ?? null;
         break;
       }
       case "new_round": {
         // Manual round advance (librarian override).
-        state.eliminated = [];
-        state.roundNumber += 1;
+        const conflict = await writeGameState({ eliminated: [], roundNumber: gameState.roundNumber + 1 });
+        if (conflict) return conflict;
+        gameState.eliminated = [];
+        gameState.roundNumber += 1;
         roundAdvanced = true;
         break;
       }
       case "reset": {
-        Object.assign(state, emptyState());
-        // Also wipe everyone's book so the shelf is truly empty.
+        const conflict = await writeGameState({ eliminated: [], roundNumber: 1 });
+        if (conflict) return conflict;
+        gameState.eliminated = [];
+        gameState.roundNumber = 1;
+        // Also wipe everyone's book and every past read so the shelf is truly empty.
         await client.from("shelf_users").update({ book: null }).neq("id", "00000000-0000-0000-0000-000000000000");
+        await client.from("reads").delete().neq("id", "00000000-0000-0000-0000-000000000000");
         break;
       }
       case "undo_last_spin": {
-        if (state.history.length === 0) throw new Error("nothing to undo");
-        const last = state.history.shift()!;
-        const rolled = rollbackUndo(state.history, state.eliminated, state.roundNumber, last);
-        state.roundNumber = rolled.roundNumber;
-        state.eliminated = rolled.eliminated;
+        const { data: lastRows, error: lastErr } = await client
+          .from("reads")
+          .select("id, round, winner_id, winner_username, book, ts")
+          .order("ts", { ascending: false })
+          .limit(1);
+        if (lastErr) throw lastErr;
+        const last = lastRows?.[0];
+        if (!last) throw new Error("nothing to undo");
+        // Same-round rows other than `last` itself -- mirrors the old
+        // "historyAfterShift" (full history with `last` already removed).
+        const { data: sameRoundReads, error: srErr } = await client
+          .from("reads")
+          .select("round, winner_id")
+          .eq("round", last.round)
+          .neq("id", last.id);
+        if (srErr) throw srErr;
+        const rolled = rollbackUndo(sameRoundReads ?? [], gameState.eliminated, gameState.roundNumber, last);
+        const conflict = await writeGameState({ eliminated: rolled.eliminated, roundNumber: rolled.roundNumber });
+        if (conflict) return conflict;
+        gameState.eliminated = rolled.eliminated;
+        gameState.roundNumber = rolled.roundNumber;
+        const { error: delErr } = await client.from("reads").delete().eq("id", last.id);
+        if (delErr) return json({ error: delErr.message }, 500);
         break;
       }
       case "admin_clear_book": {
@@ -476,12 +508,15 @@ Deno.serve(async (req) => {
         // identified by its history timestamp. total === null clears it.
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
-        const entry = state.history.find(h => h.ts === ts);
+        const { data: entry, error: findErr } = await client
+          .from("reads").select("book, round, rating").eq("ts", ts).maybeSingle();
+        if (findErr) throw findErr;
         if (!entry) throw new Error("history item not found");
         const raw = payload.total;
         const prevRating = entry.rating ?? null;
+        let newRating: Rating | null;
         if (raw === null || raw === "" || raw === undefined) {
-          entry.rating = null;
+          newRating = null;
         } else {
           const rating: Rating = { total: clampRatingTotal(raw) };
           // Optional per-category breakdown, sent when locking in an aggregate
@@ -492,13 +527,15 @@ Deno.serve(async (req) => {
           }
           const rc = Math.round(Number((payload as Record<string, unknown>).reviews));
           if (Number.isFinite(rc) && rc > 0) rating.reviews = rc;
-          entry.rating = rating;
+          newRating = rating;
           // Announce the score only when it actually changed (a re-lock of the
           // same total stays silent, matching the meeting no-op behavior).
           if (JSON.stringify(prevRating) !== JSON.stringify(rating)) {
             ratingChange = { book: entry.book, round: entry.round, rating };
           }
         }
+        const { error: updErr } = await client.from("reads").update({ rating: newRating }).eq("ts", ts);
+        if (updErr) throw updErr;
         break;
       }
       case "admin_set_ratings_open": {
@@ -506,11 +543,15 @@ Deno.serve(async (req) => {
         // submit a review while it's open (also enforced in set-review).
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
-        const entry = state.history.find(h => h.ts === ts);
+        const { data: entry, error: findErr } = await client
+          .from("reads").select("ratings_open").eq("ts", ts).maybeSingle();
+        if (findErr) throw findErr;
         if (!entry) throw new Error("history item not found");
-        entry.ratingsOpen = payload.open === true
+        const nextOpen = payload.open === true
           ? true
-          : payload.open === false ? false : !entry.ratingsOpen;
+          : payload.open === false ? false : !entry.ratings_open;
+        const { error: updErr } = await client.from("reads").update({ ratings_open: nextOpen }).eq("ts", ts);
+        if (updErr) throw updErr;
         break;
       }
       case "admin_set_meeting": {
@@ -519,7 +560,9 @@ Deno.serve(async (req) => {
         // drops the meetings block entirely.
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
-        const entry = state.history.find(h => h.ts === ts);
+        const { data: entry, error: findErr } = await client
+          .from("reads").select("book, round, meetings").eq("ts", ts).maybeSingle();
+        if (findErr) throw findErr;
         if (!entry) throw new Error("history item not found");
         const half = buildMeeting(payload.half_at, payload.half_upto);
         const full = buildMeeting(payload.full_at, undefined);
@@ -530,7 +573,8 @@ Deno.serve(async (req) => {
           if (half) next.half = half;
           if (full) next.full = full;
         }
-        entry.meetings = next;
+        const { error: updErr } = await client.from("reads").update({ meetings: next }).eq("ts", ts);
+        if (updErr) throw updErr;
         // Only worth announcing if something actually moved.
         if (JSON.stringify(prev) !== JSON.stringify(next)) {
           meetingChange = { book: entry.book, round: entry.round, prev, next };
@@ -543,7 +587,9 @@ Deno.serve(async (req) => {
         // second nudge. Posts as a fresh "dates are set" message (prev: null).
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
-        const entry = state.history.find(h => h.ts === ts);
+        const { data: entry, error: findErr } = await client
+          .from("reads").select("book, round, meetings").eq("ts", ts).maybeSingle();
+        if (findErr) throw findErr;
         if (!entry) throw new Error("history item not found");
         if (!entry.meetings || (!entry.meetings.half && !entry.meetings.full)) {
           throw new Error("no meetings scheduled for this read");
@@ -556,16 +602,22 @@ Deno.serve(async (req) => {
         if (!userId) throw new Error("user_id required");
         const { error } = await client.from("shelf_users").delete().eq("id", userId);
         if (error) throw error;
-        state.eliminated = state.eliminated.filter(id => id !== userId);
+        const newEliminated = gameState.eliminated.filter(id => id !== userId);
+        const conflict = await writeGameState({ eliminated: newEliminated, roundNumber: gameState.roundNumber });
+        if (conflict) return conflict;
+        gameState.eliminated = newEliminated;
         break;
       }
       case "admin_import_reviews": {
         // Bulk-import member rubric reviews (e.g. from a spreadsheet) on behalf
         // of readers. Each entry writes one shelf_reviews row keyed by
         // (book_ts, user_id); an existing row for that pair is overwritten.
-        // Returns early — it touches shelf_reviews, not shelf_state.
+        // Returns early — it touches shelf_reviews, not shelf_state/reads.
         const list = Array.isArray(payload.reviews) ? payload.reviews : null;
         if (!list || !list.length) throw new Error("reviews[] required");
+        const { data: existingReads, error: existingErr } = await client.from("reads").select("ts");
+        if (existingErr) throw existingErr;
+        const knownTs = new Set((existingReads ?? []).map((r: { ts: string }) => r.ts));
         const cats = ["plot", "characters", "pacing", "language", "themes"] as const;
         const rows = list.map((r, i) => {
           const rec = r as Record<string, unknown>;
@@ -573,7 +625,7 @@ Deno.serve(async (req) => {
           const user_id = String(rec.user_id ?? "");
           if (!book_ts) throw new Error(`row ${i}: book_ts required`);
           if (!user_id) throw new Error(`row ${i}: user_id required`);
-          if (!state.history.some(h => h.ts === book_ts)) {
+          if (!knownTs.has(book_ts)) {
             throw new Error(`row ${i}: no read with ts ${book_ts}`);
           }
           const out: Record<string, unknown> = { book_ts, user_id };
@@ -620,10 +672,17 @@ Deno.serve(async (req) => {
     return json({ error: (err as Error).message }, 400);
   }
 
-  const { error: writeErr } = await client
-    .from("shelf_state")
-    .upsert({ id: 1, data: state, updated_at: new Date().toISOString() });
-  if (writeErr) return json({ error: writeErr.message }, 500);
+  // Every action (whether or not it touched shelf_state) responds with the
+  // full current history, reconstructed fresh from `reads` -- this keeps the
+  // client's response contract (`normalizeState(body.state)`) identical to
+  // before the cutover. ratingsOpen:ratings_open aliases the column so the
+  // shape lands exactly as the client's normalizeState already expects.
+  const { data: readsRows, error: readsErr } = await client
+    .from("reads")
+    .select("round, winner_id, winner_username, book, ts, rating, ratingsOpen:ratings_open, meetings")
+    .order("ts", { ascending: false });
+  if (readsErr) return json({ error: readsErr.message }, 500);
+  const state = { eliminated: gameState.eliminated, roundNumber: gameState.roundNumber, history: readsRows ?? [] };
 
   // Fire-and-await the Discord webhook after the pick is durable. Failures are
   // logged but do not affect the response — a busted webhook shouldn't block

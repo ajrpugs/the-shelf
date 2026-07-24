@@ -57,17 +57,15 @@ Deno.serve(async (req) => {
   const text = String(body.body ?? "").trim().slice(0, 2000);
   if (!text) return json({ error: "comment is empty" }, 400);
 
-  // The comment must target a real past read.
-  const { data: stateRow, error: stateErr } = await admin
-    .from("shelf_state")
-    .select("data")
-    .eq("id", 1)
+  // The comment must target a real past read. History lives in its own
+  // `reads` table, not shelf_state, since the Phase 0 cutover.
+  const { data: match, error: readsErr } = await admin
+    .from("reads")
+    .select("ts")
+    .eq("ts", bookTs)
     .maybeSingle();
-  if (stateErr) return json({ error: stateErr.message }, 500);
-  const history = Array.isArray(stateRow?.data?.history) ? stateRow!.data.history : [];
-  if (!history.some((h: { ts?: string }) => h?.ts === bookTs)) {
-    return json({ error: "no such read" }, 404);
-  }
+  if (readsErr) return json({ error: readsErr.message }, 500);
+  if (!match) return json({ error: "no such read" }, 404);
 
   const { data: saved, error: insErr } = await admin
     .from("shelf_comments")

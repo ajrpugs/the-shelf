@@ -64,16 +64,16 @@ Deno.serve(async (req) => {
     auth: { persistSession: false },
   });
 
-  // The review must target a real past read. Pull the game state and confirm
-  // the ts exists in history (and grab the book title for any future use).
-  const { data: stateRow, error: stateErr } = await admin
-    .from("shelf_state")
-    .select("data")
-    .eq("id", 1)
-    .maybeSingle();
-  if (stateErr) return json({ error: stateErr.message }, 500);
-  type Read = { ts?: string; rating?: { total?: number } | null; ratingsOpen?: boolean };
-  const history: Read[] = Array.isArray(stateRow?.data?.history) ? stateRow!.data.history : [];
+  // The review must target a real past read. Pull all reads (history lives in
+  // its own table, not shelf_state, since the Phase 0 cutover) and confirm the
+  // ts exists.
+  const { data: allReads, error: readsErr } = await admin
+    .from("reads")
+    .select("ts, rating, ratings_open")
+    .order("ts", { ascending: false });
+  if (readsErr) return json({ error: readsErr.message }, 500);
+  type Read = { ts: string; rating?: { total?: number } | null; ratings_open?: boolean };
+  const history: Read[] = allReads ?? [];
   const entry = history.find(h => h?.ts === bookTs);
   if (!entry) return json({ error: "no such read" }, 404);
 
@@ -97,7 +97,7 @@ Deno.serve(async (req) => {
   if (!current || current.ts !== bookTs) {
     return json({ error: "reviews are only open on the current read" }, 403);
   }
-  if (current.ratingsOpen !== true) {
+  if (current.ratings_open !== true) {
     return json({ error: "ratings aren't open for this read yet" }, 403);
   }
 

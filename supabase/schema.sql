@@ -169,12 +169,15 @@ create policy "shelf_librarians read for authenticated"
   using (true);
 
 -- 8. reads -------------------------------------------------------------
--- Phase 0 of docs/multi-tenant-plan.md: a real table that will eventually
--- replace shelf_state.data.history. Additive only -- the running app still
--- reads/writes the jsonb history; this table is unused until a later cutover.
--- The backfill below is idempotent (on conflict (ts) do nothing) and tolerant
--- of legacy shapes (name-based winner_id, cycle/cycleNumber) the same way
--- normalizeState is.
+-- Phase 0 of docs/multi-tenant-plan.md: replaces shelf_state.data.history as
+-- the source of truth for past reads. `ts` is plain TEXT (not timestamptz) --
+-- shelf_reviews.book_ts / shelf_comments.book_ts already store this exact
+-- string from the client's toISOString() calls, and a timestamptz would
+-- re-serialize differently (+00:00 vs Z) on read, silently breaking every
+-- review/comment join. The backfill is idempotent (on conflict (ts) do
+-- nothing) and tolerant of legacy shapes (name-based winner_id,
+-- cycle/cycleNumber) the same way normalizeState is; the regex is a
+-- data-quality guard, not a cast-safety requirement.
 
 create table if not exists public.reads (
   id               uuid primary key default gen_random_uuid(),
@@ -182,7 +185,7 @@ create table if not exists public.reads (
   winner_id        uuid references auth.users(id) on delete set null,
   winner_username  text not null default 'Reader',
   book             text not null default '',
-  ts               timestamptz not null unique,
+  ts               text not null unique,
   rating           jsonb,
   ratings_open     boolean not null default false,
   meetings         jsonb,
@@ -199,7 +202,7 @@ select
   end,
   coalesce(nullif(h->>'winner_username', ''), nullif(h->>'winner', ''), 'Reader'),
   coalesce(h->>'book', ''),
-  (h->>'ts')::timestamptz,
+  h->>'ts',
   h->'rating',
   coalesce((h->>'ratingsOpen')::boolean, false),
   h->'meetings'
@@ -216,7 +219,14 @@ create policy "reads read for all"
   to anon, authenticated
   using (true);
 
--- 9. Realtime --------------------------------------------------------------
+-- 9. shelf_state.version ----------------------------------------------------
+-- Optimistic-locking token for shelf_state, guarding against two concurrent
+-- admin actions clobbering each other now that history has moved out to a
+-- table of its own (shelf_state.data shrinks to just eliminated/roundNumber).
+
+alter table public.shelf_state add column if not exists version int not null default 0;
+
+-- 10. Realtime --------------------------------------------------------------
 
 alter publication supabase_realtime add table public.shelf_state;
 alter publication supabase_realtime add table public.shelf_users;

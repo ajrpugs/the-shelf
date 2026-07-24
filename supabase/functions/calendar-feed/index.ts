@@ -1,7 +1,7 @@
 // Supabase Edge Function: calendar-feed
 //
 // Serves the book club's meeting schedule as a subscribable iCalendar (.ics)
-// feed built from shelf_state. Each read can carry a 50% and a 100% meeting;
+// feed built from the `reads` table. Each read can carry a 50% and a 100% meeting;
 // this emits one VEVENT per scheduled meeting. Public and read-only so anyone
 // can subscribe by URL in Google/Apple/Outlook — no auth header required.
 //
@@ -125,15 +125,14 @@ Deno.serve(async (req) => {
     { auth: { persistSession: false } },
   );
 
-  const { data: row, error } = await client
-    .from("shelf_state").select("data").eq("id", 1).single();
-  if (error && error.code !== "PGRST116") {
+  const { data: rows, error } = await client
+    .from("reads")
+    .select("round, book, ts, meetings");
+  if (error) {
     return new Response(`error: ${error.message}`, { status: 500 });
   }
 
-  const data = (row as { data?: { history?: HistoryItem[] } } | null)?.data;
-  const history: HistoryItem[] = Array.isArray(data?.history) ? data!.history! : [];
-  const ics = buildIcs(history);
+  const ics = buildIcs((rows ?? []) as HistoryItem[]);
 
   return new Response(req.method === "HEAD" ? null : ics, {
     status: 200,
