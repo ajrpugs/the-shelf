@@ -168,9 +168,58 @@ create policy "shelf_librarians read for authenticated"
   to authenticated
   using (true);
 
--- 8. Realtime --------------------------------------------------------------
+-- 8. reads -------------------------------------------------------------
+-- Phase 0 of docs/multi-tenant-plan.md: a real table that will eventually
+-- replace shelf_state.data.history. Additive only -- the running app still
+-- reads/writes the jsonb history; this table is unused until a later cutover.
+-- The backfill below is idempotent (on conflict (ts) do nothing) and tolerant
+-- of legacy shapes (name-based winner_id, cycle/cycleNumber) the same way
+-- normalizeState is.
+
+create table if not exists public.reads (
+  id               uuid primary key default gen_random_uuid(),
+  round            int not null,
+  winner_id        uuid references auth.users(id) on delete set null,
+  winner_username  text not null default 'Reader',
+  book             text not null default '',
+  ts               timestamptz not null unique,
+  rating           jsonb,
+  ratings_open     boolean not null default false,
+  meetings         jsonb,
+  created_at       timestamptz default now()
+);
+
+insert into public.reads (round, winner_id, winner_username, book, ts, rating, ratings_open, meetings)
+select
+  coalesce((h->>'round')::int, (h->>'cycle')::int, 1),
+  case
+    when h->>'winner_id' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    then (h->>'winner_id')::uuid
+    else null
+  end,
+  coalesce(nullif(h->>'winner_username', ''), nullif(h->>'winner', ''), 'Reader'),
+  coalesce(h->>'book', ''),
+  (h->>'ts')::timestamptz,
+  h->'rating',
+  coalesce((h->>'ratingsOpen')::boolean, false),
+  h->'meetings'
+from public.shelf_state, jsonb_array_elements(coalesce(data->'history', '[]'::jsonb)) as h
+where id = 1
+  and h->>'ts' ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
+on conflict (ts) do nothing;
+
+alter table public.reads enable row level security;
+
+drop policy if exists "reads read for all" on public.reads;
+create policy "reads read for all"
+  on public.reads for select
+  to anon, authenticated
+  using (true);
+
+-- 9. Realtime --------------------------------------------------------------
 
 alter publication supabase_realtime add table public.shelf_state;
 alter publication supabase_realtime add table public.shelf_users;
 alter publication supabase_realtime add table public.shelf_reviews;
 alter publication supabase_realtime add table public.shelf_comments;
+alter publication supabase_realtime add table public.reads;

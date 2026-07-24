@@ -10,6 +10,14 @@
 //   supabase functions deploy admin-update --no-verify-jwt
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  pickEligible,
+  advanceIfEmpty,
+  rollbackUndo,
+  clampRatingTotal,
+  clampCategoryScore,
+  buildMeeting,
+} from "../_shared/shelf-logic.mjs";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -400,10 +408,7 @@ Deno.serve(async (req) => {
           .not("book", "is", null)
           .neq("book", "");
         if (rErr) throw rErr;
-        const eliminatedSet = new Set(state.eliminated);
-        const eligible = (readers ?? []).filter(u => !eliminatedSet.has(u.id));
-        if (eligible.length === 0) throw new Error("no eligible readers");
-        const chosen = eligible[Math.floor(Math.random() * eligible.length)];
+        const { eligible, chosen } = pickEligible(readers, state.eliminated);
         const entry: HistoryItem = {
           round: state.roundNumber,
           winner_id: chosen.id,
@@ -418,7 +423,7 @@ Deno.serve(async (req) => {
         winnerDiscordId = (chosen as { discord_id?: string | null }).discord_id ?? null;
 
         // If this pick emptied the eligible pool, roll to the next round.
-        if (eligible.length - 1 === 0) {
+        if (advanceIfEmpty(eligible.length)) {
           state.eliminated = [];
           state.roundNumber += 1;
           roundAdvanced = true;
@@ -441,15 +446,9 @@ Deno.serve(async (req) => {
       case "undo_last_spin": {
         if (state.history.length === 0) throw new Error("nothing to undo");
         const last = state.history.shift()!;
-        if (last.round < state.roundNumber) {
-          // The undone pick had auto-advanced the round — roll back.
-          state.roundNumber = last.round;
-          state.eliminated = state.history
-            .filter(h => h.round === last.round && h.winner_id)
-            .map(h => h.winner_id as string);
-        } else if (last.winner_id) {
-          state.eliminated = state.eliminated.filter(id => id !== last.winner_id);
-        }
+        const rolled = rollbackUndo(state.history, state.eliminated, state.roundNumber, last);
+        state.roundNumber = rolled.roundNumber;
+        state.eliminated = rolled.eliminated;
         break;
       }
       case "admin_clear_book": {
@@ -484,17 +483,11 @@ Deno.serve(async (req) => {
         if (raw === null || raw === "" || raw === undefined) {
           entry.rating = null;
         } else {
-          const n = Math.round(Number(raw));
-          if (!Number.isFinite(n)) throw new Error("total must be a number");
-          const rating: Rating = { total: Math.max(0, Math.min(100, n)) };
+          const rating: Rating = { total: clampRatingTotal(raw) };
           // Optional per-category breakdown, sent when locking in an aggregate
           // of member reviews. Each is clamped to 1..20; bad values are dropped.
-          const clampCat = (v: unknown) => {
-            const c = Math.round(Number(v));
-            return Number.isFinite(c) ? Math.max(1, Math.min(20, c)) : undefined;
-          };
           for (const cat of ["plot", "characters", "pacing", "language", "themes"] as const) {
-            const c = clampCat((payload as Record<string, unknown>)[cat]);
+            const c = clampCategoryScore((payload as Record<string, unknown>)[cat]);
             if (c !== undefined) rating[cat] = c;
           }
           const rc = Math.round(Number((payload as Record<string, unknown>).reviews));
@@ -528,18 +521,8 @@ Deno.serve(async (req) => {
         if (!ts) throw new Error("ts required");
         const entry = state.history.find(h => h.ts === ts);
         if (!entry) throw new Error("history item not found");
-        const mk = (at: unknown, upTo?: unknown): Meeting | undefined => {
-          const s = typeof at === "string" ? at.trim() : "";
-          if (!s) return undefined;
-          const d = new Date(s);
-          if (isNaN(d.getTime())) throw new Error("invalid meeting date");
-          const m: Meeting = { at: d.toISOString() };
-          const u = typeof upTo === "string" ? upTo.trim() : "";
-          if (u) m.upTo = u.slice(0, 200);
-          return m;
-        };
-        const half = mk(payload.half_at, payload.half_upto);
-        const full = mk(payload.full_at);
+        const half = buildMeeting(payload.half_at, payload.half_upto);
+        const full = buildMeeting(payload.full_at, undefined);
         const prev = entry.meetings ?? null;
         let next: Meetings | null = null;
         if (half || full) {
