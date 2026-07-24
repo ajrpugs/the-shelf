@@ -40,7 +40,8 @@ The three write-path functions each carry their own copy of the Open Library cov
 - `shelf_state.data` is the single source of truth for game state and is edited as a whole object, not per-field — read it, mutate the object, upsert it back.
 - `eliminated` and `history[].winner_id` hold **user ids** (uuid), not names. Older name-based entries are tolerated by `normalizeState`, which also maps legacy `cycle`/`cycleNumber` → `round`/`roundNumber`.
 - **`normalizeState` exists in two places** (`index.html` and `admin-update`) and both rebuild each history item field-by-field. Any new per-read field (`ratingsOpen`, `meetings`, …) **must be added to both copies** or it gets silently wiped on the next admin action.
-- Meetings live on the history item: `history[].meetings = { half: { at, upTo }, full: { at } }`. `at` is an **ISO instant**; the client converts the librarian's `datetime-local` input to UTC before sending, because the edge function's local time is UTC and would otherwise misread a bare `T20:00`. `upTo` (the "read up to Chapter 12" checkpoint) exists only on `half`.
+- Meetings live on the history item: `history[].meetings = { half: { at, upTo }, full: { at } }`. `at` is an **ISO instant**. `upTo` (the "read up to Chapter 12" checkpoint) exists only on `half`.
+- **Meeting times are pinned to `America/Toronto` (`CLUB_TZ`), not the browser's zone** — the club meets Wednesdays 8pm ET, and that must read the same for a librarian or member in any timezone. `clubWallToInstant` / `toClubInputValue` convert between Toronto wall-clock and UTC instants via `Intl.DateTimeFormat`, so DST (EST↔EDT) is handled; never use bare `new Date("...T20:00")` on a `datetime-local` value, and never let the edge function parse one (its local time is UTC, so it would read `T20:00` as 8pm UTC).
 - `undo_last_spin` has to detect whether the undone pick had auto-advanced the round and roll `roundNumber` back accordingly.
 
 ## Common commands

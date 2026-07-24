@@ -2034,36 +2034,99 @@ function allMeetings() {
   return out;
 }
 
+// The club is Toronto-based: a meeting is "Wednesday 8pm ET" no matter where the
+// librarian scheduling it or the member reading it happens to be. Stored values
+// stay exact UTC instants — only the wall-clock reading is pinned to this zone.
+const CLUB_TZ = "America/Toronto";
+
+const clubDTF = new Intl.DateTimeFormat("en-US", {
+  timeZone: CLUB_TZ, hour12: false,
+  year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", second: "2-digit",
+});
+
+// The wall-clock fields an instant reads as in the club's timezone.
+function clubParts(date) {
+  const out = {};
+  for (const p of clubDTF.formatToParts(date)) {
+    if (p.type !== "literal") out[p.type] = Number(p.value);
+  }
+  if (out.hour === 24) out.hour = 0; // some engines emit hour 24 for midnight
+  return out;
+}
+
+// The club zone's UTC offset (ms) at a given instant — handles EST/EDT.
+function clubOffsetMs(date) {
+  const p = clubParts(date);
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - date.getTime();
+}
+
+// Club wall-clock components -> the real UTC instant. Resolved twice so times
+// near a DST transition settle on the correct offset.
+function clubWallToInstant(y, mo, d, h, mi) {
+  const wall = Date.UTC(y, mo - 1, d, h, mi, 0);
+  let inst = wall - clubOffsetMs(new Date(wall));
+  inst = wall - clubOffsetMs(new Date(inst));
+  return new Date(inst);
+}
+
+// A pseudo-Date whose *UTC* fields carry the club wall-clock, so day arithmetic
+// (getUTCDay / setUTCDate) runs free of the browser's own timezone.
+function clubWall(date) {
+  const p = clubParts(date);
+  return new Date(Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, 0));
+}
+function clubWallBack(w) {
+  return clubWallToInstant(w.getUTCFullYear(), w.getUTCMonth() + 1, w.getUTCDate(), w.getUTCHours(), w.getUTCMinutes());
+}
+
+// Meetings always display in Toronto time, with the zone spelled out so a member
+// elsewhere isn't left guessing.
 function fmtMeetingWhen(date) {
   try {
     return date.toLocaleString(undefined, {
+      timeZone: CLUB_TZ,
       weekday: "short", month: "short", day: "numeric",
-      hour: "numeric", minute: "2-digit",
+      hour: "numeric", minute: "2-digit", timeZoneName: "short",
     });
   } catch { return ""; }
 }
 
-// Value for an <input type="datetime-local"> in the browser's local time.
-function toLocalInputValue(date) {
+// Value for an <input type="datetime-local">, expressed in club (Toronto) time.
+function toClubInputValue(date) {
   if (!date || isNaN(date.getTime())) return "";
-  const p = (n) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`;
+  const p = clubParts(date);
+  const z = (n) => String(n).padStart(2, "0");
+  return `${p.year}-${z(p.month)}-${z(p.day)}T${z(p.hour)}:${z(p.minute)}`;
 }
 
-// The club meets Wednesdays at 8pm, every other week. Suggest the next such slot
-// strictly after `after` (a Date), so the librarian mostly just confirms dates.
+// A datetime-local value typed by the librarian is Toronto wall time -> instant.
+function clubInputToInstant(v) {
+  const m = (v || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const d = clubWallToInstant(+m[1], +m[2], +m[3], +m[4], +m[5]);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// The club meets Wednesdays at 8pm Toronto, every other week. Suggest the next
+// such slot after `after`, so the librarian mostly just confirms dates.
 function nextBiweeklyWednesday(after) {
-  const base = (after && !isNaN(after.getTime())) ? new Date(after.getTime()) : new Date();
-  // If anchoring off a prior meeting, the next one is two weeks later.
-  const start = (after && !isNaN(after.getTime())) ? new Date(base.getTime() + 14 * 864e5) : base;
-  const d = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 20, 0, 0, 0);
-  // Advance to Wednesday (day 3); if already past-or-today when anchoring off now, roll forward.
+  const anchored = !!(after && !isNaN(after.getTime()));
+  const w = clubWall(anchored ? after : new Date());
+  if (anchored) w.setUTCDate(w.getUTCDate() + 14); // next slot is two weeks on
+  w.setUTCHours(20, 0, 0, 0);
   let guard = 0;
-  while (d.getDay() !== 3 || (!after && d.getTime() <= Date.now())) {
-    d.setDate(d.getDate() + 1);
-    if (++guard > 21) break;
+  while (w.getUTCDay() !== 3 && guard++ < 7) w.setUTCDate(w.getUTCDate() + 1);
+  let inst = clubWallBack(w);
+  if (!anchored) {
+    // Anchoring off "now": roll forward until the slot is actually in the future.
+    guard = 0;
+    while (inst.getTime() <= Date.now() && guard++ < 5) {
+      w.setUTCDate(w.getUTCDate() + 7);
+      inst = clubWallBack(w);
+    }
   }
-  return d;
+  return inst;
 }
 
 function meetingRowHtml(m) {
@@ -2133,24 +2196,24 @@ function calendarTabHtml(admin, currentlyReading, nextUp) {
         const half = mt.half || {};
         const full = mt.full || {};
         let halfVal;
-        if (half.at) { halfVal = toLocalInputValue(new Date(half.at)); anchor = new Date(half.at); }
-        else { anchor = suggestSlot(anchor); halfVal = toLocalInputValue(anchor); }
+        if (half.at) { halfVal = toClubInputValue(new Date(half.at)); anchor = new Date(half.at); }
+        else { anchor = suggestSlot(anchor); halfVal = toClubInputValue(anchor); }
         let fullVal;
-        if (full.at) { fullVal = toLocalInputValue(new Date(full.at)); anchor = new Date(full.at); }
-        else { anchor = suggestSlot(anchor); fullVal = toLocalInputValue(anchor); }
+        if (full.at) { fullVal = toClubInputValue(new Date(full.at)); anchor = new Date(full.at); }
+        else { anchor = suggestSlot(anchor); fullVal = toClubInputValue(anchor); }
         html += `<div class="meeting-editor" data-me-ts="${attr(h.ts || '')}">
           <div class="me-book-title">${esc(h.book || 'Untitled')}</div>
           <div class="me-row">
-            <label>50% meeting<input type="datetime-local" data-me-field="half_at" value="${attr(halfVal)}"></label>
+            <label>50% meeting (Toronto)<input type="datetime-local" data-me-field="half_at" value="${attr(halfVal)}"></label>
             <label>Read up to<input type="text" data-me-field="half_upto" value="${attr(half.upTo || '')}" placeholder="e.g. Chapter 12"></label>
           </div>
           <div class="me-row">
-            <label>100% meeting<input type="datetime-local" data-me-field="full_at" value="${attr(fullVal)}"></label>
+            <label>100% meeting (Toronto)<input type="datetime-local" data-me-field="full_at" value="${attr(fullVal)}"></label>
             <button class="btn-mini" data-me-save="${attr(h.ts || '')}">Save meetings</button>
           </div>
         </div>`;
       });
-      html += `<div class="me-hint">Prefilled with Wednesdays 8pm, biweekly — adjust and Save. Clear a date to remove that meeting.</div>`;
+      html += `<div class="me-hint">Prefilled with Wednesdays 8pm <b>Toronto time</b>, biweekly — adjust and Save. Times are always entered and shown in Toronto time, wherever you are. Clear a date to remove that meeting.</div>`;
     }
     html += `</div>`;
   }
@@ -3375,11 +3438,10 @@ function wireUp() {
       const box = btn.closest("[data-me-ts]");
       if (!box) return;
       const field = (name) => box.querySelector(`[data-me-field="${name}"]`);
+      // Inputs are Toronto wall time, not the librarian's own timezone.
       const toIso = (v) => {
-        const s = (v || "").trim();
-        if (!s) return "";
-        const d = new Date(s); // datetime-local is parsed as the librarian's local time
-        return isNaN(d.getTime()) ? "" : d.toISOString();
+        const d = clubInputToInstant(v);
+        return d ? d.toISOString() : "";
       };
       const payload = {
         ts,
