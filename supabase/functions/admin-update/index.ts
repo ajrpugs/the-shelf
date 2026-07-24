@@ -565,6 +565,40 @@ Deno.serve(async (req) => {
         state.eliminated = state.eliminated.filter(id => id !== userId);
         break;
       }
+      case "admin_import_reviews": {
+        // Bulk-import member rubric reviews (e.g. from a spreadsheet) on behalf
+        // of readers. Each entry writes one shelf_reviews row keyed by
+        // (book_ts, user_id); an existing row for that pair is overwritten.
+        // Returns early — it touches shelf_reviews, not shelf_state.
+        const list = Array.isArray(payload.reviews) ? payload.reviews : null;
+        if (!list || !list.length) throw new Error("reviews[] required");
+        const cats = ["plot", "characters", "pacing", "language", "themes"] as const;
+        const rows = list.map((r, i) => {
+          const rec = r as Record<string, unknown>;
+          const book_ts = String(rec.book_ts ?? "");
+          const user_id = String(rec.user_id ?? "");
+          if (!book_ts) throw new Error(`row ${i}: book_ts required`);
+          if (!user_id) throw new Error(`row ${i}: user_id required`);
+          if (!state.history.some(h => h.ts === book_ts)) {
+            throw new Error(`row ${i}: no read with ts ${book_ts}`);
+          }
+          const out: Record<string, unknown> = { book_ts, user_id };
+          for (const c of cats) {
+            const n = Math.round(Number(rec[c]));
+            if (!Number.isFinite(n) || n < 1 || n > 20) {
+              throw new Error(`row ${i}: ${c} must be a whole number 1..20`);
+            }
+            out[c] = n;
+          }
+          if (typeof rec.note === "string" && rec.note.trim()) out.note = rec.note.trim().slice(0, 2000);
+          return out;
+        });
+        const { error } = await client
+          .from("shelf_reviews")
+          .upsert(rows, { onConflict: "book_ts,user_id" });
+        if (error) throw error;
+        return json({ ok: true, imported: rows.length });
+      }
       default:
         throw new Error(`unknown action: ${action}`);
     }
