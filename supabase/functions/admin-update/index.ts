@@ -30,6 +30,12 @@ type Rating = {
   themes?: number;
   reviews?: number; // how many member reviews the snapshot averaged
 };
+// A book-club meeting for a read: the 50% checkpoint (with how far to read) and
+// the 100% finish meeting. Each `at` is an ISO instant; either may be absent
+// until the librarian schedules it.
+type Meeting = { at: string; upTo?: string };
+type Meetings = { half?: Meeting; full?: Meeting };
+
 type HistoryItem = {
   round: number;
   winner_id: string | null;
@@ -38,6 +44,7 @@ type HistoryItem = {
   ts: string;
   rating?: Rating | null;
   ratingsOpen?: boolean; // librarian has opened member reviews for this read
+  meetings?: Meetings | null; // 50% / 100% discussion dates for this read
 };
 
 type State = {
@@ -200,6 +207,8 @@ function normalizeState(raw: any): State {
           book: h.book ?? "",
           ts: h.ts,
           rating: h.rating ?? null,
+          ratingsOpen: !!h.ratingsOpen,
+          meetings: h.meetings ?? null,
         }))
       : [],
     roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
@@ -363,6 +372,36 @@ Deno.serve(async (req) => {
         entry.ratingsOpen = payload.open === true
           ? true
           : payload.open === false ? false : !entry.ratingsOpen;
+        break;
+      }
+      case "admin_set_meeting": {
+        // Librarian sets the 50% / 100% discussion dates for a read, identified
+        // by its history timestamp. Empty dates clear that phase; clearing both
+        // drops the meetings block entirely.
+        const ts = String(payload.ts ?? "");
+        if (!ts) throw new Error("ts required");
+        const entry = state.history.find(h => h.ts === ts);
+        if (!entry) throw new Error("history item not found");
+        const mk = (at: unknown, upTo?: unknown): Meeting | undefined => {
+          const s = typeof at === "string" ? at.trim() : "";
+          if (!s) return undefined;
+          const d = new Date(s);
+          if (isNaN(d.getTime())) throw new Error("invalid meeting date");
+          const m: Meeting = { at: d.toISOString() };
+          const u = typeof upTo === "string" ? upTo.trim() : "";
+          if (u) m.upTo = u.slice(0, 200);
+          return m;
+        };
+        const half = mk(payload.half_at, payload.half_upto);
+        const full = mk(payload.full_at);
+        if (half || full) {
+          const meetings: Meetings = {};
+          if (half) meetings.half = half;
+          if (full) meetings.full = full;
+          entry.meetings = meetings;
+        } else {
+          entry.meetings = null;
+        }
         break;
       }
       case "admin_remove_user": {

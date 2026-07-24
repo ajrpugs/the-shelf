@@ -17,6 +17,8 @@ There is **no build step and no framework**. The entire frontend is a single `in
 - Auth is Discord OAuth via `supabase.auth.signInWithOAuth({ provider: "discord" })`. On sign-in, `ensureUserRow` upserts the reader into `shelf_users`.
 - `loadAll` fetches the singleton `shelf_state` row and all `shelf_users`; `subscribeRealtime` listens to `postgres_changes` on both tables and debounces a refresh via `queueRefresh`.
 - The whole UI is re-rendered by string-building `render()` (with `esc`/`attr` escaping helpers) after every state change.
+- The signed-in main view is **tabbed**: `Reading | The Shelf | The Wheel | Leaderboard | Stats | Reviews | Calendar` plus an `Admin` tab that only exists in librarian mode. The active tab is the module-level `currentTab` (in memory, **not** in the hash) and `render()` appends only that tab's sections. Deep-link hash routes (`#book=`, `#shelf=`, `#tag=`, `#reader=`, `#recap`) still short-circuit `render()` into their own full-page views before the tabs are built.
+- `render()` bails early while an `<input>`/`<textarea>` has focus (it defers via `pendingRender`). Any handler that changes state from a button must `document.activeElement?.blur?.()` first — Safari doesn't focus buttons on click, so the re-render would otherwise be silently swallowed.
 - Reads go directly to Postgres (RLS allows anon read). **All writes go through Edge Functions** — the client never writes tables directly.
 - Book covers are looked up from Open Library (`fetchCoverFromOpenLibrary`) — both client-side for display and server-side for Discord embeds.
 
@@ -30,11 +32,15 @@ There is **no build step and no framework**. The entire frontend is a single `in
 - `set-book` — a signed-in reader sets/clears their own book. Verifies the JWT itself (pulls the user id out), then writes with the service role and posts to Discord. Deployed `--no-verify-jwt` for its own error handling.
 - `discord-interactions` — receives Discord slash-command webhooks (`/mybook`). **Must** verify Discord's Ed25519 signature (`DISCORD_PUBLIC_KEY`) or Discord rejects the endpoint. Looks the reader up by `discord_id`.
 
-The three functions each carry their own copy of the Open Library cover lookup + Discord embed helpers (`normalizeForMatch`, `parseTitleAuthor`, `fetchCover`, `postBookSet`). If you change cover-matching or embed formatting, **change it in all copies**.
+- `calendar-feed` — public, read-only **iCalendar (`.ics`) feed** of the club's meetings, built from `shelf_state`. Emits one `VEVENT` per scheduled 50%/100% meeting. Deployed `--no-verify-jwt` because calendar clients (Google/Apple/Outlook) can't send a Supabase apikey. Members subscribe to this URL once and it stays in sync. `GET` only.
+
+The three write-path functions each carry their own copy of the Open Library cover lookup + Discord embed helpers (`normalizeForMatch`, `parseTitleAuthor`, `fetchCover`, `postBookSet`). If you change cover-matching or embed formatting, **change it in all copies**.
 
 ### State-shape gotchas
 - `shelf_state.data` is the single source of truth for game state and is edited as a whole object, not per-field — read it, mutate the object, upsert it back.
 - `eliminated` and `history[].winner_id` hold **user ids** (uuid), not names. Older name-based entries are tolerated by `normalizeState`, which also maps legacy `cycle`/`cycleNumber` → `round`/`roundNumber`.
+- **`normalizeState` exists in two places** (`index.html` and `admin-update`) and both rebuild each history item field-by-field. Any new per-read field (`ratingsOpen`, `meetings`, …) **must be added to both copies** or it gets silently wiped on the next admin action.
+- Meetings live on the history item: `history[].meetings = { half: { at, upTo }, full: { at } }`. `at` is an **ISO instant**; the client converts the librarian's `datetime-local` input to UTC before sending, because the edge function's local time is UTC and would otherwise misread a bare `T20:00`. `upTo` (the "read up to Chapter 12" checkpoint) exists only on `half`.
 - `undo_last_spin` has to detect whether the undone pick had auto-advanced the round and roll `roundNumber` back accordingly.
 
 ## Common commands
@@ -49,6 +55,7 @@ python3 -m http.server        # then open http://localhost:8000/index.html
 supabase functions deploy admin-update --no-verify-jwt
 supabase functions deploy set-book --no-verify-jwt
 supabase functions deploy discord-interactions --no-verify-jwt
+supabase functions deploy calendar-feed --no-verify-jwt
 
 # Manage server-side secrets (never in the HTML)
 supabase secrets set ADMIN_PASSWORD='...'

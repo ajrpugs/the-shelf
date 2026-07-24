@@ -740,6 +740,58 @@
   .modal-actions button.btn-ghost{
     background: transparent; border: 1px solid var(--ink-soft); color: var(--ink-soft);
   }
+
+  /* ---- Tab navigation ---- */
+  .tabs{
+    display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 22px;
+    border-bottom: 1px solid var(--panel-border); padding-bottom: 0;
+  }
+  .tab-btn{
+    background: transparent; border: none; border-bottom: 2px solid transparent;
+    color: var(--ink-soft); cursor: pointer; padding: 8px 12px 9px;
+    font-family:'Courier Prime', monospace; font-size: 11.5px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: -1px;
+    border-radius: 2px 2px 0 0; transition: color 0.12s ease, background 0.12s ease;
+  }
+  .tab-btn:hover{ color: var(--ink); background: rgba(236,227,207,0.05); }
+  .tab-btn.on{ color: var(--stamp); border-bottom-color: var(--stamp); }
+  .tab-btn.tab-admin{ color: var(--brass); }
+  .tab-btn.tab-admin.on{ color: var(--brass); border-bottom-color: var(--brass); }
+
+  /* ---- Calendar / meetings ---- */
+  .meeting-card{
+    display:flex; align-items: baseline; gap: 12px; padding: 12px 14px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .meeting-card:last-child{ border-bottom: none; }
+  .meeting-phase{
+    flex: 0 0 auto; font-family:'Fraunces',serif; font-weight: 700; font-size: 15px;
+    color: var(--stamp); width: 46px;
+  }
+  .meeting-body{ flex: 1; min-width: 0; }
+  .meeting-book{ font-weight: 700; color: var(--ink); }
+  .meeting-upto{ font-size: 12px; color: var(--brass); font-style: italic; margin-top: 2px; }
+  .meeting-when{ font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
+  .meeting-when.past{ opacity: 0.5; }
+  .sub-box{
+    display:flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    background: var(--panel-2); border: 1px solid var(--panel-border);
+    border-radius: 2px; padding: 10px 12px; margin-top: 8px;
+  }
+  .sub-url{
+    flex: 1; min-width: 180px; font-family:'Courier Prime', monospace; font-size: 11.5px;
+    color: var(--ink-soft); word-break: break-all;
+  }
+  .meeting-editor{ margin-top: 10px; }
+  .meeting-editor .me-row{ display:flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 10px; }
+  .meeting-editor label{ display:flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--ink-soft); letter-spacing: 0.06em; text-transform: uppercase; }
+  .meeting-editor input[type=datetime-local], .meeting-editor input[type=text]{
+    padding: 7px 9px; font-size: 13px; border: 1px solid var(--panel-border);
+    border-radius: 2px; background: var(--panel-2); color: var(--ink);
+    font-family:'Courier Prime', monospace;
+  }
+  .me-book-title{ font-family:'Fraunces',serif; font-weight: 700; color: var(--ink); margin-bottom: 8px; }
+  .me-hint{ font-size: 11.5px; color: var(--ink-soft); font-style: italic; }
 </style>
 </head>
 <body>
@@ -764,6 +816,7 @@ let users = [];              // shelf_users rows
 let reviews = [];            // shelf_reviews rows (member rubric reviews)
 let comments = [];           // shelf_comments rows (per-book discussion)
 let leaderboardQuery = "";    // live filter text for the leaderboard
+let currentTab = "reading";  // active top-level tab in the main view
 let session = null;          // Supabase auth session
 let myUserRow = null;        // Current user's shelf_users row
 let spinning = false;
@@ -787,6 +840,7 @@ function normalizeState(raw) {
       ts: h.ts,
       rating: h.rating ?? null,
       ratingsOpen: !!h.ratingsOpen,
+      meetings: h.meetings ?? null,
     })) : [],
     roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
   };
@@ -1931,6 +1985,8 @@ async function runDraw() {
     if (body.roundAdvanced && state.roundNumber > prevRound) {
       setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back on the shelf.`);
     }
+    // The wheel's result shows up as a banner on the Reading tab — go there.
+    currentTab = "reading";
     render();
   } catch (err) {
     spinning = false;
@@ -1951,6 +2007,156 @@ function attr(str) {
 function fmtDate(iso) {
   try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); }
   catch (e) { return ""; }
+}
+
+// ---------- Meetings / calendar ----------
+// The subscribable feed (see supabase/functions/calendar-feed). Members add this
+// URL once to their own Google/Apple/Outlook calendar; it stays in sync as the
+// librarian schedules meetings in the app.
+const CALENDAR_FEED_URL = `${SUPABASE_URL}/functions/v1/calendar-feed`;
+
+// Flatten every scheduled meeting across all reads into a sorted timeline.
+// Each item: { ts, round, book, phase: 'half'|'full', at: Date, upTo, past }.
+function allMeetings() {
+  const out = [];
+  for (const h of state.history) {
+    const m = h.meetings;
+    if (!m) continue;
+    for (const phase of ["half", "full"]) {
+      const slot = m[phase];
+      if (!slot || !slot.at) continue;
+      const at = new Date(slot.at);
+      if (isNaN(at.getTime())) continue;
+      out.push({ ts: h.ts, round: h.round, book: h.book || "a read", phase, at, upTo: slot.upTo || "", past: at.getTime() < Date.now() });
+    }
+  }
+  out.sort((a, b) => a.at - b.at);
+  return out;
+}
+
+function fmtMeetingWhen(date) {
+  try {
+    return date.toLocaleString(undefined, {
+      weekday: "short", month: "short", day: "numeric",
+      hour: "numeric", minute: "2-digit",
+    });
+  } catch { return ""; }
+}
+
+// Value for an <input type="datetime-local"> in the browser's local time.
+function toLocalInputValue(date) {
+  if (!date || isNaN(date.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`;
+}
+
+// The club meets Wednesdays at 8pm, every other week. Suggest the next such slot
+// strictly after `after` (a Date), so the librarian mostly just confirms dates.
+function nextBiweeklyWednesday(after) {
+  const base = (after && !isNaN(after.getTime())) ? new Date(after.getTime()) : new Date();
+  // If anchoring off a prior meeting, the next one is two weeks later.
+  const start = (after && !isNaN(after.getTime())) ? new Date(base.getTime() + 14 * 864e5) : base;
+  const d = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 20, 0, 0, 0);
+  // Advance to Wednesday (day 3); if already past-or-today when anchoring off now, roll forward.
+  let guard = 0;
+  while (d.getDay() !== 3 || (!after && d.getTime() <= Date.now())) {
+    d.setDate(d.getDate() + 1);
+    if (++guard > 21) break;
+  }
+  return d;
+}
+
+function meetingRowHtml(m) {
+  const pct = m.phase === "half" ? "50%" : "100%";
+  return `<div class="meeting-card">
+    <div class="meeting-phase">${pct}</div>
+    <div class="meeting-body">
+      <div class="meeting-book"><a class="book-link" href="#book=${m.round}">${esc(m.book)}</a></div>
+      ${m.phase === "half" && m.upTo ? `<div class="meeting-upto">Read up to ${esc(m.upTo)}</div>` : ''}
+    </div>
+    <div class="meeting-when ${m.past ? 'past' : ''}">${esc(fmtMeetingWhen(m.at))}</div>
+  </div>`;
+}
+
+// The Calendar tab: subscribe URL, the upcoming-meetings timeline (merged across
+// current + next-up reads), and — for the librarian — a per-read editor that
+// pre-fills the next biweekly Wednesday 8pm slots.
+function calendarTabHtml(admin, currentlyReading, nextUp) {
+  const feed = CALENDAR_FEED_URL;
+  const webcal = feed.replace(/^https?:\/\//, "webcal://");
+  let html = `<section><div class="section-title">Meeting calendar</div>`;
+
+  html += `<div class="me-hint">Subscribe once — every meeting the librarian schedules then shows up in your own calendar.</div>`;
+  html += `<div class="sub-box">
+    <span class="sub-url" id="feed-url">${esc(feed)}</span>
+    <button class="btn-mini" id="copy-feed">Copy URL</button>
+    <a class="btn-mini" href="${attr(webcal)}">Subscribe</a>
+  </div>`;
+  html += `<div class="me-hint" style="margin-top:6px;">Google Calendar: <b>Other calendars → From URL</b>, paste the URL. Apple/Outlook: click <b>Subscribe</b>. (Subscribed feeds refresh on the calendar's own schedule — usually within a few hours.)</div>`;
+
+  const meetings = allMeetings();
+  const upcoming = meetings.filter(m => !m.past);
+  html += `<div class="card no-rule" style="margin-top:14px;"><div class="mini-head">Upcoming meetings</div>`;
+  if (upcoming.length === 0) {
+    html += `<div class="empty-note">No meetings scheduled yet.${admin ? ' Set dates below.' : ''}</div>`;
+  } else {
+    upcoming.forEach(m => { html += meetingRowHtml(m); });
+  }
+  html += `</div>`;
+
+  const past = meetings.filter(m => m.past).slice(-3).reverse();
+  if (past.length) {
+    html += `<div class="card no-rule" style="margin-top:12px;"><div class="mini-head">Recently</div>`;
+    past.forEach(m => { html += meetingRowHtml(m); });
+    html += `</div>`;
+  }
+
+  if (admin) {
+    const inFlight = [];
+    if (currentlyReading) inFlight.push(currentlyReading);
+    nextUp.forEach(h => inFlight.push(h));
+    html += `<div class="card no-rule" style="margin-top:14px;"><div class="mini-head">Schedule meetings (librarian)</div>`;
+    if (inFlight.length === 0) {
+      html += `<div class="empty-note">No active read to schedule. Spin the wheel first.</div>`;
+    } else {
+      // Rolling suggestion anchor: latest scheduled meeting so far, else now.
+      let anchor = null;
+      for (const m of meetings) { if (!anchor || m.at > anchor) anchor = m.at; }
+      // Never pre-fill a date in the past: if rolling forward off a stale
+      // meeting still lands behind us, suggest from today instead.
+      const suggestSlot = (from) => {
+        const d = nextBiweeklyWednesday(from);
+        return d.getTime() < Date.now() ? nextBiweeklyWednesday(null) : d;
+      };
+      inFlight.forEach(h => {
+        const mt = h.meetings || {};
+        const half = mt.half || {};
+        const full = mt.full || {};
+        let halfVal;
+        if (half.at) { halfVal = toLocalInputValue(new Date(half.at)); anchor = new Date(half.at); }
+        else { anchor = suggestSlot(anchor); halfVal = toLocalInputValue(anchor); }
+        let fullVal;
+        if (full.at) { fullVal = toLocalInputValue(new Date(full.at)); anchor = new Date(full.at); }
+        else { anchor = suggestSlot(anchor); fullVal = toLocalInputValue(anchor); }
+        html += `<div class="meeting-editor" data-me-ts="${attr(h.ts || '')}">
+          <div class="me-book-title">${esc(h.book || 'Untitled')}</div>
+          <div class="me-row">
+            <label>50% meeting<input type="datetime-local" data-me-field="half_at" value="${attr(halfVal)}"></label>
+            <label>Read up to<input type="text" data-me-field="half_upto" value="${attr(half.upTo || '')}" placeholder="e.g. Chapter 12"></label>
+          </div>
+          <div class="me-row">
+            <label>100% meeting<input type="datetime-local" data-me-field="full_at" value="${attr(fullVal)}"></label>
+            <button class="btn-mini" data-me-save="${attr(h.ts || '')}">Save meetings</button>
+          </div>
+        </div>`;
+      });
+      html += `<div class="me-hint">Prefilled with Wednesdays 8pm, biweekly — adjust and Save. Clear a date to remove that meeting.</div>`;
+    }
+    html += `</div>`;
+  }
+
+  html += `</section>`;
+  return html;
 }
 
 function computeStats() {
@@ -2289,15 +2495,38 @@ function render() {
     html += `<div class="flash ${flashMsg.kind === 'info' ? 'info' : ''}">${esc(flashMsg.text)}</div>`;
   }
 
-  // Currently reading first (what we're on now), then the Next up queue. The
-  // rate pill lives on Currently reading — that's the book you finish and score.
-  if (currentlyReading) {
-    html += bannerHtml(currentlyReading, { stamp: "Currently reading", admin, showRate: true });
-  }
-  nextUp.forEach(pick => {
-    html += bannerHtml(pick, { stamp: "Next up", admin, showRate: false });
-  });
+  // ---- Tab bar ----
+  const TABS = [
+    { id: "reading", label: "Reading" },
+    { id: "shelf", label: "The Shelf" },
+    { id: "wheel", label: "The Wheel" },
+    { id: "leaderboard", label: "Leaderboard" },
+    { id: "stats", label: "Stats" },
+    { id: "reviews", label: "Reviews" },
+    { id: "calendar", label: "Calendar" },
+    ...(admin ? [{ id: "admin", label: "Admin", adminTab: true }] : []),
+  ];
+  if (!TABS.some(t => t.id === currentTab)) currentTab = "reading";
+  html += `<nav class="tabs">${TABS.map(t =>
+    `<button class="tab-btn ${t.adminTab ? 'tab-admin' : ''} ${currentTab === t.id ? 'on' : ''}" data-tab="${t.id}">${t.label}</button>`
+  ).join("")}</nav>`;
 
+  // ---- Reading: Currently reading + Next up ----
+  if (currentTab === "reading") {
+    // The rate pill lives on Currently reading — the book you finish and score.
+    if (currentlyReading) {
+      html += bannerHtml(currentlyReading, { stamp: "Currently reading", admin, showRate: true });
+    }
+    nextUp.forEach(pick => {
+      html += bannerHtml(pick, { stamp: "Next up", admin, showRate: false });
+    });
+    if (!currentlyReading && nextUp.length === 0) {
+      html += `<div class="empty-note">Nothing on the go yet. Spin the wheel to pick the first read.</div>`;
+    }
+  }
+
+  // ---- The Shelf: My book + On the shelf ----
+  if (currentTab === "shelf") {
   // ---- My book ----
   html += `
     <section>
@@ -2340,8 +2569,10 @@ function render() {
     });
   }
   html += `</section>`;
+  } // end shelf tab
 
-  // ---- Choose our next read ----
+  // ---- The Wheel: Choose our next read ----
+  if (currentTab === "wheel") {
   html += `<section><div class="section-title">Choose our next read</div>`;
   if (eligibleCount === 0) {
     html += `<div class="wheel-empty">Add a book above to fill the shelf.</div>`;
@@ -2361,8 +2592,10 @@ function render() {
     html += `<div style="font-size: 12px; color: var(--muted); font-style: italic;">Only the librarian can choose the next read.</div>`;
   }
   html += `</div></section>`;
+  } // end wheel tab
 
   // ---- Leaderboard (finished reads, ranked by Guild rating) ----
+  if (currentTab === "leaderboard") {
   // Rated books only — in-progress reads live in the hero banners above, so
   // nothing unrated clutters the ranking.
   html += `<section><div class="section-title">Leaderboard</div>`;
@@ -2403,8 +2636,10 @@ function render() {
     html += `</div>`;
   }
   html += `</section>`;
+  } // end leaderboard tab
 
   // ---- Stats ----
+  if (currentTab === "stats") {
   // Club numbers render now; the API-derived tiles/blocks (pages, reading time,
   // superlatives, decades, genres) fill in via decorateStats once the Open
   // Library metadata for every past read resolves.
@@ -2487,6 +2722,18 @@ function render() {
     html += `<div id="decade-chart"><span class="genre-loading">Sorting by era…</span></div>`;
     html += `</div>`;
 
+  }
+  html += `</section>`;
+  } // end stats tab
+
+  // ---- Reviews: Reviewers' corner + reviewed reads + Year in books ----
+  if (currentTab === "reviews") {
+    html += `<section><div class="section-title">Reviews</div>`;
+    const recapYears = availableRecapYears();
+    html += `<a class="card no-rule" href="#recap" style="display:block; text-decoration:none;">
+      <div class="mini-head">Year in books ↗</div>
+      <div class="me-hint">A recap of everything the club has read${recapYears.length ? `, ${recapYears.length} year${recapYears.length === 1 ? '' : 's'} on record` : ''}.</div>
+    </a>`;
     const sup = reviewSuperlatives();
     if (sup.controversial || sup.harsh || sup.generous) {
       html += `<div class="card no-rule" style="margin-top: 12px;">`;
@@ -2503,11 +2750,32 @@ function render() {
       }
       html += `</div></div>`;
     }
-  }
-  html += `</section>`;
+    const reviewed = state.history.filter(h => ratingTotal(h) != null);
+    html += `<div class="card no-rule" style="margin-top: 12px;"><div class="mini-head">Reviewed reads</div>`;
+    if (reviewed.length === 0) {
+      html += `<div class="empty-note">No reads have been reviewed yet.</div>`;
+    } else {
+      reviewed.forEach(h => {
+        const total = ratingTotal(h);
+        const band = ratingBand(total);
+        const rc = reviewsFor(h.ts).length;
+        html += `<div class="history-item">
+          <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
+          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>${rc ? `<span class="h-meta"> · ${rc} member review${rc === 1 ? '' : 's'}</span>` : ''}</span>
+          ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
+        </div>`;
+      });
+    }
+    html += `</div></section>`;
+  } // end reviews tab
 
-  // ---- Librarian tools (admin only, at the bottom) ----
-  if (admin) {
+  // ---- Calendar: meetings + subscribe URL (+ librarian editor) ----
+  if (currentTab === "calendar") {
+    html += calendarTabHtml(admin, currentlyReading, nextUp);
+  }
+
+  // ---- Admin: Librarian tools ----
+  if (currentTab === "admin" && admin) {
     const lastPick = state.history[0];
     const undoDesc = lastPick
       ? `Reverses the pick of "${lastPick.book}" by ${lastPick.winner_username}.`
@@ -2549,15 +2817,20 @@ function render() {
         `;
       });
     }
-    html += `</div></section>`;
-  }
+    html += `</div>`;
+    html += `<div class="card no-rule" style="margin-top:10px;">
+      <div class="tools-label">Danger zone</div>
+      <div class="tool-row">
+        <button class="btn-danger" id="reset-btn">Reset the shelf</button>
+        <span class="tool-row-desc">Wipes history, every book, and the round counter. No undo.</span>
+      </div>
+    </div>`;
+    html += `</section>`;
+  } // end admin tab
 
   // ---- Footer ----
   html += `<footer>`;
-  html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="https://discord.gg/4YeGJgs8u" target="_blank" rel="noopener" class="footer-link">Join the Discord</a><br/>`;
-  if (admin) {
-    html += `<button class="btn-danger" id="reset-btn">Reset the shelf</button>`;
-  }
+  html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="https://discord.gg/4YeGJgs8u" target="_blank" rel="noopener" class="footer-link">Join the Discord</a>`;
   html += `</footer>`;
 
   app.innerHTML = html;
@@ -3071,6 +3344,54 @@ function wireLoginGate() {
 }
 
 function wireUp() {
+  // Tab switching.
+  document.querySelectorAll("[data-tab]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.tab;
+      if (!id || id === currentTab) return;
+      // render() defers while an input holds focus (Safari doesn't focus
+      // buttons on click), so drop focus before switching.
+      document.activeElement?.blur?.();
+      currentTab = id;
+      render();
+    });
+  });
+
+  // Copy the calendar subscribe URL.
+  const copyFeed = document.getElementById("copy-feed");
+  if (copyFeed) copyFeed.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(CALENDAR_FEED_URL);
+      setFlash("info", "Calendar URL copied — add it in your calendar app.");
+    } catch {
+      setFlash("err", "Couldn't copy. Long-press the URL to copy it manually.");
+    }
+  });
+
+  // Librarian saves a read's 50% / 100% meeting dates.
+  document.querySelectorAll("[data-me-save]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const ts = btn.dataset.meSave;
+      const box = btn.closest("[data-me-ts]");
+      if (!box) return;
+      const field = (name) => box.querySelector(`[data-me-field="${name}"]`);
+      const toIso = (v) => {
+        const s = (v || "").trim();
+        if (!s) return "";
+        const d = new Date(s); // datetime-local is parsed as the librarian's local time
+        return isNaN(d.getTime()) ? "" : d.toISOString();
+      };
+      const payload = {
+        ts,
+        half_at: toIso(field("half_at")?.value),
+        half_upto: (field("half_upto")?.value || "").trim(),
+        full_at: toIso(field("full_at")?.value),
+      };
+      document.activeElement?.blur?.(); // let the post-save render through
+      callAdmin("admin_set_meeting", payload);
+    });
+  });
+
   const lbSearch = document.getElementById("lb-search");
   if (lbSearch) {
     const applyLb = () => {
