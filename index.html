@@ -3519,6 +3519,41 @@ function renderReaderPage(app, key) {
   }
   html += `</section>`;
 
+  // ---- This reader's personal rankings ----
+  // Every past read this reader has reviewed, ranked best→worst by *their own*
+  // rubric total (/100) — distinct from Picks (books they chose, club-scored).
+  // Only linked accounts (a real user id) carry reviews; name-based profiles
+  // have none, so the section simply doesn't appear for them.
+  if (userId) {
+    const mine = reviews
+      .filter(r => r.user_id === userId)
+      .map(r => {
+        const h = state.history.find(e => e.ts === r.book_ts);
+        return h ? { h, total: reviewTotal(r) } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => (b.total - a.total) || (b.h.round - a.h.round));
+
+    if (mine.length) {
+      const possessive = `${name}${/s$/i.test(name) ? "’" : "’s"}`;
+      html += `<section style="margin-top:16px;"><div class="section-title">${esc(possessive)} rankings</div>`;
+      html += `<div class="empty-note">${mine.length} book${mine.length === 1 ? "" : "s"} reviewed, ranked by ${esc(name)}’s own score.</div>`;
+      html += `<div class="card no-rule">`;
+      mine.forEach((item, i) => {
+        const h = item.h;
+        const band = ratingBand(item.total);
+        html += `
+        <div class="history-item">
+          <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
+          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a><span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
+          <span class="h-meta">#${i + 1} · Round ${h.round}</span>
+          <span class="score-pill ${band.cls}" title="${esc(name)}’s score · ${band.label} · ${item.total}/100">${item.total}</span>
+        </div>`;
+      });
+      html += `</div></section>`;
+    }
+  }
+
   app.innerHTML = html;
   decorateCovers();
   decorateMeta();
