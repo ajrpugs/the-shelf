@@ -841,6 +841,11 @@
     .cal-cell{ min-height: 42px; padding: 3px 2px; }
     .cal-ev{ padding: 1px 3px; font-size: 8.5px; }
     .cal-ev-book{ display: none; }   /* dates stay legible; detail lives in the list below */
+    /* Stack the meeting-list rows so the (nowrap) date no longer competes with
+       the book title for width — the title gets the full line, the date drops
+       beneath it, indented under the title past the 46px phase + 12px gap. */
+    .meeting-card{ flex-wrap: wrap; }
+    .meeting-when{ flex-basis: 100%; white-space: normal; margin-left: 58px; margin-top: 2px; }
   }
 
   /* Per-book meeting strip (Reading banners + book pages) */
