@@ -792,6 +792,25 @@
   }
   .me-book-title{ font-family:'Fraunces',serif; font-weight: 700; color: var(--ink); margin-bottom: 8px; }
   .me-hint{ font-size: 11.5px; color: var(--ink-soft); font-style: italic; }
+
+  /* Per-book meeting strip (Reading banners + book pages) */
+  .book-meetings{
+    margin-top: 10px; padding: 9px 11px;
+    background: rgba(236,227,207,0.045);
+    border-left: 2px solid var(--brass); border-radius: 2px;
+  }
+  .bm-label{
+    font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--brass); font-weight: 700; margin-bottom: 5px;
+  }
+  .bm-row{ display:flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12.5px; padding: 2px 0; }
+  .bm-row.past{ opacity: 0.45; }
+  .bm-phase{
+    flex: 0 0 auto; min-width: 34px; font-weight: 700; color: var(--stamp);
+    font-family:'Courier Prime', monospace; font-size: 11.5px;
+  }
+  .bm-when{ color: var(--ink); }
+  .bm-upto{ color: var(--brass); font-style: italic; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -2129,6 +2148,29 @@ function nextBiweeklyWednesday(after) {
   return inst;
 }
 
+// The 50% / 100% dates for one read, as a compact strip. Used on the Reading
+// tab's banners and on a book's own page, so a reader sees when it's discussed
+// without going to the Calendar tab. Returns "" when nothing is scheduled.
+function bookMeetingsHtml(h) {
+  const mt = h && h.meetings;
+  if (!mt) return "";
+  const rows = [];
+  for (const phase of ["half", "full"]) {
+    const slot = mt[phase];
+    if (!slot || !slot.at) continue;
+    const at = new Date(slot.at);
+    if (isNaN(at.getTime())) continue;
+    const past = at.getTime() < Date.now();
+    rows.push(`<div class="bm-row${past ? ' past' : ''}">
+      <span class="bm-phase">${phase === "half" ? "50%" : "100%"}</span>
+      <span class="bm-when">${esc(fmtMeetingWhen(at))}</span>
+      ${phase === "half" && slot.upTo ? `<span class="bm-upto">read to ${esc(slot.upTo)}</span>` : ''}
+    </div>`);
+  }
+  if (!rows.length) return "";
+  return `<div class="book-meetings"><div class="bm-label">Discussion</div>${rows.join("")}</div>`;
+}
+
 function meetingRowHtml(m) {
   const pct = m.phase === "half" ? "50%" : "100%";
   return `<div class="meeting-card">
@@ -2149,17 +2191,10 @@ function calendarTabHtml(admin, currentlyReading, nextUp) {
   const webcal = feed.replace(/^https?:\/\//, "webcal://");
   let html = `<section><div class="section-title">Meeting calendar</div>`;
 
-  html += `<div class="me-hint">Subscribe once — every meeting the librarian schedules then shows up in your own calendar.</div>`;
-  html += `<div class="sub-box">
-    <span class="sub-url" id="feed-url">${esc(feed)}</span>
-    <button class="btn-mini" id="copy-feed">Copy URL</button>
-    <a class="btn-mini" href="${attr(webcal)}">Subscribe</a>
-  </div>`;
-  html += `<div class="me-hint" style="margin-top:6px;">Google Calendar: <b>Other calendars → From URL</b>, paste the URL. Apple/Outlook: click <b>Subscribe</b>. (Subscribed feeds refresh on the calendar's own schedule — usually within a few hours.)</div>`;
-
+  // What's coming up leads the tab — the subscribe plumbing sits below it.
   const meetings = allMeetings();
   const upcoming = meetings.filter(m => !m.past);
-  html += `<div class="card no-rule" style="margin-top:14px;"><div class="mini-head">Upcoming meetings</div>`;
+  html += `<div class="card no-rule"><div class="mini-head">Upcoming meetings</div>`;
   if (upcoming.length === 0) {
     html += `<div class="empty-note">No meetings scheduled yet.${admin ? ' Set dates below.' : ''}</div>`;
   } else {
@@ -2173,6 +2208,14 @@ function calendarTabHtml(admin, currentlyReading, nextUp) {
     past.forEach(m => { html += meetingRowHtml(m); });
     html += `</div>`;
   }
+
+  html += `<div class="me-hint" style="margin-top:16px;">Subscribe once — every meeting the librarian schedules then shows up in your own calendar.</div>`;
+  html += `<div class="sub-box">
+    <span class="sub-url" id="feed-url">${esc(feed)}</span>
+    <button class="btn-mini" id="copy-feed">Copy URL</button>
+    <a class="btn-mini" href="${attr(webcal)}">Subscribe</a>
+  </div>`;
+  html += `<div class="me-hint" style="margin-top:6px;">Google Calendar: <b>Other calendars → From URL</b>, paste the URL. Apple/Outlook: click <b>Subscribe</b>. (Subscribed feeds refresh on the calendar's own schedule — usually within a few hours.)</div>`;
 
   if (admin) {
     const inFlight = [];
@@ -2468,6 +2511,7 @@ function bannerHtml(pick, { stamp, admin, showRate }) {
       </div>
       ${pick.book ? `<div class="wdesc bn-desc"></div>` : ''}
       ${pick.book ? `<div class="wtags genre-tags bn-tags"></div>` : ''}
+      ${bookMeetingsHtml(pick)}
       ${reviewBlock}
       ${pick.book ? `<a class="wmore" href="#book=${pick.round}">Full details →</a>` : ''}
     </div>
@@ -3118,7 +3162,7 @@ function renderBookDetail(app, ctx) {
   window.scrollTo(0, 0);
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
 
-  let book, eyebrow, metaLine, reviewHtml = "", discussionBlock = "";
+  let book, eyebrow, metaLine, reviewHtml = "", discussionBlock = "", meetingsHtml = "";
   if (ctx.kind === "past") {
     const h = state.history.find(e => e.round === ctx.round);
     if (!h) return renderDetailMissing(app, back, state.history.length === 0, `There's no past read for round ${ctx.round}.`);
@@ -3131,6 +3175,7 @@ function renderBookDetail(app, ctx) {
     metaLine = `Picked by ${who} · Round ${h.round} · ${fmtDate(h.ts)}`;
     reviewHtml = guildReviewHtml(h);
     discussionBlock = discussionHtml(h.ts);
+    meetingsHtml = bookMeetingsHtml(h);
   } else {
     const u = users.find(x => x.id === ctx.userId);
     if (!u || !(u.book || "").trim()) return renderDetailMissing(app, back, users.length === 0, `That book isn't on the shelf anymore.`);
@@ -3153,6 +3198,7 @@ function renderBookDetail(app, ctx) {
           <div class="bd-pick">${metaLine}</div>
         </div>
       </div>
+      ${meetingsHtml}
       ${reviewHtml}
       <div id="bd-desc"></div>
       <div id="bd-firstline"></div>
