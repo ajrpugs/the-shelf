@@ -1224,6 +1224,26 @@ const getAdminPw = () => sessionStorage.getItem(ADMIN_KEY) || "";
 const setAdminPw = (pw) => sessionStorage.setItem(ADMIN_KEY, pw);
 const clearAdminPw = () => sessionStorage.removeItem(ADMIN_KEY);
 
+// Confirm a password against the server before granting librarian mode, so the
+// admin UI can't be entered locally with any typed string. Returns true only
+// when the edge function accepts the password.
+async function verifyAdminPw(pw) {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-update`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({ password: pw, action: "verify", payload: {} }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function callAdmin(action, payload = {}) {
   const pw = getAdminPw();
   if (!pw) { promptLibrarianPassword(action, payload); return; }
@@ -1279,15 +1299,28 @@ function promptLibrarianPassword(retryAction, retryPayload) {
   input.focus();
   const close = () => document.body.removeChild(back);
   back.querySelector("#pw-cancel").addEventListener("click", close);
+  const okBtn = back.querySelector("#pw-ok");
   const submit = async () => {
     const pw = input.value.trim();
     if (!pw) return;
+    okBtn.disabled = true;
+    okBtn.textContent = "Checking…";
+    const ok = await verifyAdminPw(pw);
+    if (!ok) {
+      okBtn.disabled = false;
+      okBtn.textContent = "Unlock";
+      input.value = "";
+      input.focus();
+      setFlash("err", "Wrong password.");
+      render();
+      return;
+    }
     setAdminPw(pw);
     close();
     if (retryAction) callAdmin(retryAction, retryPayload);
     else render();
   };
-  back.querySelector("#pw-ok").addEventListener("click", submit);
+  okBtn.addEventListener("click", submit);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
 }
 

@@ -220,6 +220,10 @@ Deno.serve(async (req) => {
     return json({ error: "unauthorized" }, 401);
   }
 
+  // Password-only check used by the client to gate entering librarian mode.
+  // The password was already validated above; nothing to mutate.
+  if (body.action === "verify") return json({ ok: true });
+
   const client = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
