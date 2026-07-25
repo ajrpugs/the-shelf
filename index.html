@@ -4,6 +4,24 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>The Shelf</title>
+<meta name="description" content="The Shelf — a Discord book club picker where the wheel of names decides the next read. Set a book, spin the wheel, and rate finished reads.">
+<meta name="theme-color" content="#1e2137">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Shelf">
+<meta property="og:title" content="The Shelf">
+<meta property="og:description" content="A book club picker where the wheel of names decides the next read.">
+<meta property="og:url" content="https://sh3lf.net/">
+<meta property="og:image" content="https://sh3lf.net/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Shelf — the wheel of names decides the next read">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="The Shelf">
+<meta name="twitter:description" content="A book club picker where the wheel of names decides the next read.">
+<meta name="twitter:image" content="https://sh3lf.net/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,500&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
 <style>
@@ -946,6 +964,76 @@
   }
   .bm-when{ color: var(--ink); }
   .bm-upto{ color: var(--brass); font-style: italic; font-size: 12px; }
+
+  /* ---- Global search (under the tab bar) ---- */
+  .global-search{ position: relative; margin: 0 0 18px; }
+  .gsearch-icon{ position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    color: var(--ink-soft); font-size: 16px; pointer-events: none; }
+  .gsearch-input{
+    width: 100%; padding: 10px 12px 10px 34px; font-size: 13px;
+    font-family: 'Courier Prime', monospace; background: var(--panel-2);
+    border: 1px solid var(--panel-border); border-radius: 2px; color: var(--ink); outline: none;
+  }
+  .gsearch-input::placeholder{ color: var(--ink-soft); opacity: 0.75; }
+  .gsearch-input:focus{ border-color: var(--brass); }
+  .gsearch-results{
+    position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 35;
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 3px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.5); padding: 6px; max-height: 60vh; overflow: auto;
+  }
+  .gsearch-results:empty{ display: none; }
+  .gsearch-group{ padding: 4px 2px; }
+  .gsearch-group + .gsearch-group{ border-top: 1px solid var(--panel-border); margin-top: 4px; }
+  .gsearch-head{ font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--ink-soft); padding: 4px 8px; }
+  .gsearch-item{ display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 2px;
+    text-decoration: none; color: var(--ink); }
+  .gsearch-item:hover{ background: var(--panel-2); }
+  .gsearch-item .cover-slot.tiny{ flex-shrink: 0; }
+  .gsearch-item .leader-avatar-placeholder{ flex-shrink: 0; }
+  .gsearch-label{ flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: 'Fraunces', serif; font-weight: 600; font-size: 13.5px; }
+  .gsearch-sub{ color: var(--ink-soft); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+  .gsearch-empty{ padding: 12px; color: var(--muted); font-size: 12.5px; }
+
+  /* ---- Personal dashboard (Reading tab) ---- */
+  .dash{ border-top: 2px solid var(--brass); }
+  .dash-top{ display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .dash-id{ display: inline-flex; align-items: center; gap: 9px; text-decoration: none; color: var(--ink); }
+  .dash-avatar{ width: 30px; height: 30px; border-radius: 50%; object-fit: cover; }
+  .dash-name{ font-family: 'Fraunces', serif; font-weight: 700; font-size: 17px; }
+  .dash-status{ font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700;
+    padding: 3px 9px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+  .dash-status-in{ color: var(--green); }
+  .dash-status-out{ color: var(--ink-soft); }
+  .dash-status-warn{ color: var(--stamp); }
+  .dash-welcome{ margin-top: 10px; font-size: 12.5px; color: var(--ink-soft); font-style: italic; }
+  .dash-book{ display: flex; align-items: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .dash-k{ font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); }
+  .dash-v{ flex: 1; min-width: 0; font-family: 'Fraunces', serif; font-weight: 600; font-size: 15px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dash-v-empty{ color: var(--muted); font-style: italic; font-weight: 400; }
+  .dash-stats{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px;
+    font-size: 12px; color: var(--ink-soft); }
+  .dash-stats b{ color: var(--ink); font-weight: 700; }
+  .dash-dot{ opacity: 0.4; }
+  .dash-profile{ margin-left: auto; color: var(--brass); text-decoration: none; font-size: 12px; }
+  .dash-profile:hover{ text-decoration: underline; }
+  .dash-actions{ margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--panel-border);
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .dash-actions-label{ font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--stamp); width: 100%; }
+  .dash-action{ display: inline-flex; align-items: center; text-decoration: none;
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--panel-border);
+    padding: 7px 12px; font-size: 12px; letter-spacing: 0; text-transform: none; font-weight: 400;
+    border-radius: 999px; font-family: 'Courier Prime', monospace; }
+  .dash-action:hover{ border-color: var(--brass); color: var(--brass); }
+
+  /* ---- Comment composer footer + linkified URLs ---- */
+  .bd-comment-formfoot{ display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .bd-comment-hint{ font-size: 11px; color: var(--ink-soft); }
+  .bd-comment-count{ margin-left: auto; font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .comment-url{ color: var(--brass); text-decoration: underline; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -970,6 +1058,7 @@ let users = [];              // shelf_users rows
 let reviews = [];            // shelf_reviews rows (member rubric reviews)
 let comments = [];           // shelf_comments rows (per-book discussion)
 let leaderboardQuery = "";    // live filter text for the leaderboard
+let globalSearchQuery = "";   // live filter text for the header search
 let currentTab = "reading";  // active top-level tab in the main view
 let calendarMonth = null;    // { y, m } shown in the calendar grid; null = auto
 let session = null;          // Supabase auth session
@@ -2693,6 +2782,145 @@ function bannerHtml(pick, { stamp, admin, showRate }) {
   `;
 }
 
+// Human "3 days ago" / "in 2 hours" for comment and meeting timestamps. Falls
+// back to the absolute date past a week so old threads stay legible.
+function relTime(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const diff = t - Date.now();
+  const past = diff < 0;
+  const s = Math.abs(diff) / 1000;
+  const mins = Math.round(s / 60), hrs = Math.round(s / 3600), days = Math.round(s / 86400);
+  if (s < 45) return past ? "just now" : "in a moment";
+  if (s < 3600) return past ? `${mins} min ago` : `in ${mins} min`;
+  if (s < 86400) return past ? `${hrs} hr${hrs === 1 ? '' : 's'} ago` : `in ${hrs} hr${hrs === 1 ? '' : 's'}`;
+  if (days <= 7) return past ? `${days} day${days === 1 ? '' : 's'} ago` : `in ${days} day${days === 1 ? '' : 's'}`;
+  return fmtDate(iso);
+}
+
+// The soonest scheduled meeting still in the future, across all reads.
+function upcomingMeeting() {
+  const now = Date.now();
+  let best = null;
+  for (const h of state.history) {
+    const m = h.meetings; if (!m) continue;
+    for (const phase of ["half", "full"]) {
+      const at = m[phase]?.at; if (!at) continue;
+      const t = Date.parse(at);
+      if (Number.isFinite(t) && t >= now && (!best || t < best.t)) best = { t, at, phase, h };
+    }
+  }
+  return best;
+}
+
+// Turn bare URLs in user text into links, escaping everything else first so
+// this stays injection-safe. Used in comments.
+function linkifyEsc(text) {
+  return esc(text).replace(/https?:\/\/[^\s<]+/g, (u) =>
+    `<a class="comment-url" href="${attr(u)}" target="_blank" rel="noopener nofollow">${u}</a>`);
+}
+
+// ---- Global search (books + readers), filtered client-side ----
+function globalSearchResults(q) {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return { reads: [], readers: [] };
+  const reads = state.history
+    .filter(h => `${h.book || ""} ${h.winner_username || ""}`.toLowerCase().includes(needle))
+    .slice(0, 6);
+  const seen = new Set();
+  const readers = [];
+  for (const u of users) {
+    if (`${u.discord_username || ""} ${u.book || ""}`.toLowerCase().includes(needle)) {
+      readers.push({ key: readerKey(u.id, u.discord_username), name: u.discord_username || "Reader", avatar: u.avatar_url, book: u.book });
+      seen.add(u.id);
+    }
+    if (readers.length >= 6) break;
+  }
+  return { reads, readers };
+}
+function globalSearchResultsHtml(q) {
+  const { reads, readers } = globalSearchResults(q);
+  if (!q.trim()) return "";
+  if (!reads.length && !readers.length) return `<div class="gsearch-empty">No books or readers match “${esc(q.trim())}”.</div>`;
+  let h = "";
+  if (reads.length) {
+    h += `<div class="gsearch-group"><div class="gsearch-head">Books</div>`;
+    for (const r of reads) {
+      h += `<a class="gsearch-item" href="#book=${r.round}"><span class="cover-slot tiny" data-cover-title="${attr(r.book || '')}"></span><span class="gsearch-label">${esc(r.book || '')}</span><span class="gsearch-sub">Round ${r.round}</span></a>`;
+    }
+    h += `</div>`;
+  }
+  if (readers.length) {
+    h += `<div class="gsearch-group"><div class="gsearch-head">Readers</div>`;
+    for (const r of readers) {
+      h += `<a class="gsearch-item" href="${readerHref(r.key.startsWith('name:') ? null : r.key, r.name)}">${r.avatar ? `<img class="avatar-mini" src="${attr(r.avatar)}" alt="">` : `<span class="leader-avatar-placeholder"></span>`}<span class="gsearch-label">${esc(r.name)}</span>${r.book ? `<span class="gsearch-sub">${esc(r.book)}</span>` : ''}</a>`;
+    }
+    h += `</div>`;
+  }
+  return h;
+}
+
+// ---- Personal dashboard (top of the Reading tab) ----
+// A member's home: who they are, their book + standing this round, a few of
+// their own numbers, and the actions the club is waiting on them for.
+function personalDashboardHtml({ myBook, iAmEliminated, currentlyReading }) {
+  const me = session.user;
+  const myId = me.id;
+  const myKey = readerKey(myId, myUserRow?.discord_username || displayNameFromMeta(me));
+  const name = displayNameFromMeta(me);
+  const avatar = me.user_metadata?.avatar_url;
+  const myReviews = reviews.filter(r => r.user_id === myId);
+  const avgGiven = myReviews.length ? Math.round(myReviews.reduce((s, r) => s + reviewTotal(r), 0) / myReviews.length) : null;
+  const myPicks = state.history.filter(h => h.winner_id === myId).length;
+  const brandNew = !myBook && !myPicks && !myReviews.length;
+
+  const status = !myBook
+    ? { cls: "dash-status-warn", label: "No book on the shelf" }
+    : iAmEliminated
+      ? { cls: "dash-status-out", label: "Picked this round — sitting out" }
+      : { cls: "dash-status-in", label: "Eligible for the wheel" };
+
+  // "Needs you" actions.
+  const actions = [];
+  if (!myBook) actions.push(`<button class="dash-action" data-goto-tab="shelf">＋ Add your book to the shelf</button>`);
+  if (currentlyReading && ratingsOpen(currentlyReading) && !myReviewFor(currentlyReading.ts)) {
+    actions.push(`<button class="dash-action" data-rate-ts="${attr(currentlyReading.ts)}">★ Rate “${esc(currentlyReading.book || 'the current read')}”</button>`);
+  }
+  const meet = upcomingMeeting();
+  if (meet) {
+    const phase = meet.phase === "half" ? "Halfway" : "Wrap-up";
+    actions.push(`<a class="dash-action" href="#book=${meet.h.round}">📅 ${phase} discussion of “${esc(meet.h.book || '')}” · ${esc(relTime(meet.at))}</a>`);
+  }
+
+  let h = `<div class="dash card no-rule">`;
+  h += `<div class="dash-top">
+      <a class="dash-id reader-link" href="#reader=${encodeURIComponent(myKey)}">
+        ${avatar ? `<img class="dash-avatar" src="${attr(avatar)}" alt="">` : `<span class="dash-avatar leader-avatar-placeholder"></span>`}
+        <span class="dash-name">${esc(name)}</span>
+      </a>
+      <span class="dash-status ${status.cls}">${status.label}</span>
+    </div>`;
+  if (brandNew) {
+    h += `<div class="dash-welcome">Welcome to the Shelf. Add a book below and you’re in the next spin.</div>`;
+  }
+  h += `<div class="dash-book">
+      <span class="dash-k">Your book</span>
+      <span class="dash-v ${myBook ? '' : 'dash-v-empty'}">${myBook ? esc(myBook) : 'nothing on the shelf yet'}</span>
+      <button class="btn-mini dash-edit" data-goto-tab="shelf">${myBook ? 'Edit' : 'Add'}</button>
+    </div>`;
+  h += `<div class="dash-stats">
+      <span><b>${myPicks}</b> picked</span><span class="dash-dot">·</span>
+      <span><b>${myReviews.length}</b> reviewed</span><span class="dash-dot">·</span>
+      <span>avg <b>${avgGiven != null ? avgGiven : '—'}</b> given</span>
+      <a class="dash-profile" href="#reader=${encodeURIComponent(myKey)}">Your profile →</a>
+    </div>`;
+  if (actions.length) {
+    h += `<div class="dash-actions"><span class="dash-actions-label">Needs you</span>${actions.join("")}</div>`;
+  }
+  h += `</div>`;
+  return h;
+}
+
 function render() {
   if (spinning) { pendingRender = true; return; }
   if (document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
@@ -2789,8 +3017,16 @@ function render() {
     `<button class="tab-btn ${t.adminTab ? 'tab-admin' : ''} ${currentTab === t.id ? 'on' : ''}" data-tab="${t.id}">${t.label}</button>`
   ).join("")}</nav>`;
 
-  // ---- Reading: Currently reading + Next up ----
+  // ---- Global search (books + readers) ----
+  html += `<div class="global-search">
+      <span class="gsearch-icon" aria-hidden="true">⌕</span>
+      <input type="text" id="global-search-input" class="gsearch-input" placeholder="Search books & readers…" autocomplete="off" aria-label="Search books and readers" value="${attr(globalSearchQuery)}">
+      <div id="global-search-results" class="gsearch-results">${globalSearchResultsHtml(globalSearchQuery)}</div>
+    </div>`;
+
+  // ---- Reading: personal dashboard + Currently reading + Next up ----
   if (currentTab === "reading") {
+    html += personalDashboardHtml({ myBook, iAmEliminated, currentlyReading });
     // The rate pill lives on Currently reading — the book you finish and score.
     if (currentlyReading) {
       html += bannerHtml(currentlyReading, { stamp: "Currently reading", admin, showRate: true });
@@ -3345,7 +3581,7 @@ function guildReviewHtml(h) {
 // The per-book discussion thread: existing comments + a compose box.
 function discussionHtml(bookTs) {
   const cs = commentsFor(bookTs);
-  let html = `<div class="bd-block bd-discussion"><div class="bd-block-head">Discussion</div>`;
+  let html = `<div class="bd-block bd-discussion"><div class="bd-block-head">Discussion${cs.length ? ` · ${cs.length}` : ''}</div>`;
   if (cs.length) {
     html += `<div class="bd-comments">`;
     for (const c of cs) {
@@ -3356,10 +3592,10 @@ function discussionHtml(bookTs) {
       html += `<div class="bd-comment">
         <div class="bd-comment-head">
           ${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<a class="reader-link" href="${readerHref(c.user_id, name)}"><b>${esc(name)}</b></a>
-          <span class="bd-comment-time">${fmtDate(c.created_at)}</span>
+          <span class="bd-comment-time" title="${attr(fmtDate(c.created_at))}">${esc(relTime(c.created_at))}</span>
           ${mine ? `<button class="comment-del" data-comment-delete="${attr(c.id)}" title="Delete">×</button>` : ''}
         </div>
-        <div class="bd-comment-body">${esc(c.body)}</div>
+        <div class="bd-comment-body">${linkifyEsc(c.body)}</div>
       </div>`;
     }
     html += `</div>`;
@@ -3369,7 +3605,11 @@ function discussionHtml(bookTs) {
   if (session) {
     html += `<div class="bd-comment-form">
       <textarea id="comment-input" class="rubric-note" maxlength="2000" placeholder="Add to the discussion…"></textarea>
-      <button class="btn-mini" data-comment-post="${attr(bookTs)}">Post</button>
+      <div class="bd-comment-formfoot">
+        <span class="bd-comment-hint">⌘/Ctrl+Enter to post</span>
+        <span class="bd-comment-count" id="comment-count">0 / 2000</span>
+        <button class="btn-mini" data-comment-post="${attr(bookTs)}">Post</button>
+      </div>
     </div>`;
   }
   html += `</div>`;
@@ -3807,6 +4047,20 @@ function wireUp() {
     applyLb();
   }
 
+  const gSearch = document.getElementById("global-search-input");
+  if (gSearch) {
+    const gResults = document.getElementById("global-search-results");
+    const applyG = () => {
+      globalSearchQuery = gSearch.value;
+      gResults.innerHTML = globalSearchResultsHtml(globalSearchQuery);
+      decorateCovers();
+    };
+    gSearch.addEventListener("input", applyG);
+    gSearch.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { gSearch.value = ""; globalSearchQuery = ""; gResults.innerHTML = ""; gSearch.blur(); }
+    });
+  }
+
   const save = document.getElementById("save-book");
   if (save) save.addEventListener("click", () => {
     const val = document.getElementById("my-book").value;
@@ -3927,6 +4181,15 @@ document.addEventListener("click", (e) => {
   document.querySelectorAll("details.row-menu[open]").forEach(d => {
     if (!d.contains(e.target)) d.removeAttribute("open");
   });
+  // Collapse the header search when clicking outside it (a result click lands
+  // inside .global-search, so navigation still fires before this clears it).
+  if (globalSearchQuery && !e.target.closest(".global-search")) {
+    globalSearchQuery = "";
+    const gi = document.getElementById("global-search-input");
+    const gr = document.getElementById("global-search-results");
+    if (gi) gi.value = "";
+    if (gr) gr.innerHTML = "";
+  }
   // Jump to a tab from anywhere — including a book detail page, which is a hash
   // route, so we clear the hash and let hashchange do the render.
   const goto = e.target.closest("[data-goto-tab]");
@@ -3957,6 +4220,22 @@ document.addEventListener("click", (e) => {
   }
   const cDel = e.target.closest("[data-comment-delete]");
   if (cDel && confirm("Delete this comment?")) deleteComment(cDel.dataset.commentDelete);
+});
+
+// Comment composer niceties (delegated so they survive every re-render): a live
+// character count, and ⌘/Ctrl+Enter to post.
+document.addEventListener("input", (e) => {
+  if (e.target && e.target.id === "comment-input") {
+    const c = document.getElementById("comment-count");
+    if (c) c.textContent = `${e.target.value.length} / 2000`;
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.target && e.target.id === "comment-input" && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    const post = document.querySelector("[data-comment-post]");
+    if (post && e.target.value.trim()) postComment(post.dataset.commentPost, e.target.value);
+  }
 });
 
 window.addEventListener("hashchange", () => render());
