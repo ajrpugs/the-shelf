@@ -26,15 +26,22 @@
   html,body{ margin:0; padding:0; }
   body{
     background:
-      radial-gradient(ellipse at 20% -10%, rgba(224, 180, 90, 0.11), transparent 55%),
-      radial-gradient(ellipse at 90% 110%, rgba(201, 74, 55, 0.09), transparent 55%),
-      linear-gradient(180deg, var(--felt-dark) 0%, var(--felt) 55%, var(--felt) 100%);
+      radial-gradient(130% 100% at 50% -5%, transparent 60%, rgba(8,9,20,0.55) 100%),
+      linear-gradient(180deg, var(--felt-dark) 0%, var(--felt) 62%, var(--felt-dark) 100%);
     background-attachment: fixed;
     min-height: 100vh;
     font-family: 'Courier Prime', monospace;
     color: var(--card);
     padding: 32px 16px 80px;
   }
+  /* Fine felt grain over the whole surface — tactile, and it kills the
+     "generated glow" look without changing the palette. */
+  body::before{
+    content:""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.045; mix-blend-mode: overlay;
+  }
+  .wrap, header, section, footer, nav.tabs, .winner-banner, .setup, .book-detail{ position: relative; z-index: 1; }
   .wrap{ max-width: 720px; margin: 0 auto; }
 
   header{ text-align:center; margin-bottom: 20px; }
@@ -59,8 +66,13 @@
     letter-spacing: 0.03em;
   }
   .rule{
-    width: 64px; height: 2px; background: var(--stamp);
-    margin: 18px auto 0;
+    width: 130px; height: 1px; border: none; background: rgba(213,87,63,0.45);
+    margin: 20px auto 0; position: relative;
+  }
+  .rule::after{
+    content:""; position: absolute; left: 50%; top: 50%;
+    width: 7px; height: 7px; background: var(--stamp);
+    transform: translate(-50%,-50%) rotate(45deg); border-radius: 1px;
   }
 
   .signed-in-strip{
@@ -99,7 +111,7 @@
     color: var(--ink);
     border: 1px solid var(--panel-border);
     border-radius: 2px;
-    box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
+    box-shadow: 0 10px 22px rgba(0,0,0,0.26);
     padding: 16px 18px;
     position: relative;
     margin-bottom: 10px;
@@ -166,6 +178,9 @@
   button:active{ transform: scale(0.97); }
   button:disabled{ opacity: 0.4; cursor: not-allowed; }
   .btn-primary{ background: var(--stamp); color: var(--card); }
+  .btn-primary:hover:not(:disabled){ filter: brightness(1.08); }
+  .btn-mini:hover:not(:disabled){ filter: brightness(1.08); }
+  .btn-mini.remove:hover:not(:disabled){ background: rgba(213,87,63,0.12); filter: none; }
   .btn-ghost{ background: transparent; color: var(--card); border: 1px solid rgba(255,255,255,0.25); }
   .btn-mini{ background: var(--green); color: var(--card); padding: 6px 10px; font-size: 11px; }
   .btn-mini.remove{ background: transparent; color: var(--stamp); border: 1px solid var(--stamp); }
@@ -259,13 +274,14 @@
   }
 
   .winner-banner{
-    background: var(--panel);
+    background: linear-gradient(180deg, #313963 0%, var(--panel) 62%);
     color: var(--ink);
     border: 1px solid var(--panel-border);
+    border-top: 2px solid var(--brass);
     border-radius: 3px;
-    padding: 20px;
+    padding: 22px;
     text-align:left;
-    box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
+    box-shadow: 0 8px 0 var(--card-shadow), 0 20px 38px rgba(0,0,0,0.5);
     margin-top: 16px;
     margin-bottom: 20px;
   }
@@ -693,7 +709,38 @@
     margin-left: 4px;
   }
   .user-row-tag.lib{ background: var(--brass); color: var(--felt); }
-  .user-row-actions{ display: flex; gap: 6px; flex-wrap: wrap; }
+  .user-row-actions{ display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+
+  /* Per-reader action dropdown (native <details>) */
+  .row-menu{ position: relative; }
+  .row-menu-toggle{
+    list-style: none; cursor: pointer; user-select: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 28px; border-radius: 2px;
+    background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--panel-border);
+    font-family: 'Courier Prime', monospace; font-weight: 700; font-size: 18px; line-height: 1;
+    transition: border-color 0.12s ease, color 0.12s ease;
+  }
+  .row-menu-toggle::-webkit-details-marker{ display: none; }
+  .row-menu-toggle:hover{ border-color: var(--brass); color: var(--brass); }
+  .row-menu[open] .row-menu-toggle{ border-color: var(--brass); color: var(--brass); }
+  .row-menu-list{
+    position: absolute; right: 0; top: calc(100% + 5px); z-index: 30;
+    min-width: 168px; padding: 4px;
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 3px;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column;
+  }
+  .row-menu-item{
+    background: transparent; color: var(--ink);
+    text-align: left; text-transform: none; letter-spacing: 0.01em; font-weight: 400;
+    padding: 8px 10px; font-size: 12.5px; border-radius: 2px;
+  }
+  .row-menu-item:hover{ background: var(--panel-2); }
+  .row-menu-item.danger{ color: var(--stamp); }
+  .row-menu-item.danger:hover{ background: rgba(213,87,63,0.12); }
+
   .tools-label{
     font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
     color: var(--stamp); margin-bottom: 10px;
@@ -729,9 +776,11 @@
   .loading{ text-align:center; padding: 60px 0; color: var(--brass); font-family:'Fraunces',serif; font-style: italic; }
 
   .setup{
-    background: var(--panel); color: var(--ink); border-radius: 3px;
+    background: linear-gradient(180deg, #313963 0%, var(--panel) 62%);
+    color: var(--ink); border-radius: 3px;
+    border-top: 2px solid var(--brass);
     padding: 26px 22px; text-align: center;
-    box-shadow: 0 6px 0 var(--card-shadow), 0 14px 26px rgba(0,0,0,0.4);
+    box-shadow: 0 8px 0 var(--card-shadow), 0 18px 34px rgba(0,0,0,0.46);
     max-width: 480px; margin: 0 auto;
   }
   .setup h2{ font-family:'Fraunces',serif; margin: 0 0 8px; color: var(--stamp); }
@@ -3039,12 +3088,17 @@ function render() {
               <div class="user-row-book">${book ? esc(book) : 'no book set'}</div>
             </div>
             <div class="user-row-actions">
-              <button class="btn-mini" data-admin-editbook="${attr(u.id)}">Edit book</button>
-              ${book ? `<button class="btn-mini remove" data-admin-clear="${attr(u.id)}">Clear book</button>` : ''}
-              ${isLibrarianId(u.id)
-                ? (u.id === session.user.id ? '' : `<button class="btn-mini remove" data-admin-revoke-lib="${attr(u.id)}">Revoke librarian</button>`)
-                : `<button class="btn-mini" data-admin-grant-lib="${attr(u.id)}">Make librarian</button>`}
-              <button class="btn-mini remove" data-admin-remove="${attr(u.id)}">Remove</button>
+              <details class="row-menu">
+                <summary class="row-menu-toggle" title="Manage reader" aria-label="Manage reader">⋯</summary>
+                <div class="row-menu-list">
+                  <button class="row-menu-item" data-admin-editbook="${attr(u.id)}">Edit book</button>
+                  ${book ? `<button class="row-menu-item danger" data-admin-clear="${attr(u.id)}">Clear book</button>` : ''}
+                  ${isLibrarianId(u.id)
+                    ? (u.id === session.user.id ? '' : `<button class="row-menu-item danger" data-admin-revoke-lib="${attr(u.id)}">Revoke librarian</button>`)
+                    : `<button class="row-menu-item" data-admin-grant-lib="${attr(u.id)}">Make librarian</button>`}
+                  <button class="row-menu-item danger" data-admin-remove="${attr(u.id)}">Remove</button>
+                </div>
+              </details>
             </div>
           </div>
         `;
@@ -3868,6 +3922,11 @@ initAuth();
 // Review buttons live on both the Currently reading banner and book pages, so
 // handle them by delegation instead of per-render wiring.
 document.addEventListener("click", (e) => {
+  // Close any open reader dropdown when the click lands outside it. (Clicking a
+  // menu item triggers a re-render, which rebuilds the <details> closed anyway.)
+  document.querySelectorAll("details.row-menu[open]").forEach(d => {
+    if (!d.contains(e.target)) d.removeAttribute("open");
+  });
   // Jump to a tab from anywhere — including a book detail page, which is a hash
   // route, so we clear the hash and let hashchange do the render.
   const goto = e.target.closest("[data-goto-tab]");
