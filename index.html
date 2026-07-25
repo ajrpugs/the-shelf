@@ -331,6 +331,11 @@
     color: var(--ink-soft);
   }
   .history-item:last-child{ border-bottom: none; }
+  .history-item .lb-rank{
+    flex-shrink: 0; min-width: 20px; text-align: right;
+    font-family: 'Fraunces', serif; font-weight: 700; font-size: 13px;
+    color: var(--ink-soft); font-variant-numeric: tabular-nums;
+  }
   .history-item .h-content{ flex: 1; min-width: 0; }
   .history-item .h-meta{ white-space: nowrap; flex-shrink: 0; }
   .history-item .h-who{ color: var(--ink); font-weight: 700; }
@@ -414,6 +419,26 @@
   }
   .bd-review .bd-score-max{ font-size: 15px; color: var(--ink-soft); font-weight: 400; margin-left: 2px; }
   .bd-review .score-pill{ font-size: 13px; align-self: center; }
+
+  /* Book-level superlative badges (Most divisive, Top rated, …) */
+  .bd-badges{ display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+  .bd-badge{
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: 'Fraunces', serif; font-weight: 700; font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--brass); color: var(--brass);
+    background: rgba(236,227,207,0.05);
+  }
+
+  /* "Currently reading" / "Next up" stamp on the book detail page */
+  .detail-stamp{
+    display: inline-block; margin-bottom: 10px;
+    border: 3px solid var(--stamp); color: var(--stamp);
+    font-family: 'Fraunces', serif; font-weight: 700; font-size: 13px;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 4px 12px; border-radius: 4px; transform: rotate(-3deg);
+  }
 
   /* Live scorecard on the Currently reading banner */
   .bn-review{ margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--panel-border); }
@@ -2816,13 +2841,14 @@ function render() {
       if (rb !== ra) return rb - ra; // higher rating first
       return b.round - a.round;   // tie-break: newest first
     });
-    ranked.forEach(h => {
+    ranked.forEach((h, i) => {
       const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
       const total = ratingTotal(h);
       const band = ratingBand(total);
       const hay = `${h.book || ''} ${h.winner_username || ''}`.toLowerCase();
       html += `
         <div class="history-item" data-search="${attr(hay)}">
+          <span class="lb-rank">${i + 1}</span>
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
           <span class="h-content">
             ${h.winner_username
@@ -3154,6 +3180,40 @@ function renderDetailMissing(app, back, loading, msg) {
 // ctx is { kind: "past", round } or { kind: "shelf", userId }. Past reads are
 // keyed by round and shelf books by the reader's id, so the same title picked
 // by several people still resolves to distinct pages.
+// Book-level superlative badges for a single read, mirroring the Reviewers'
+// corner: divisiveness comes from the spread of member-review totals, and the
+// top/bottom badges from the committed Guild scores. A read only earns a badge
+// when it's the extreme across the whole shelf (needs ≥2 books to compare).
+function bookBadges(h) {
+  if (!h) return [];
+  const badges = [];
+  // Spread-based, from member reviews (same math as reviewSuperlatives).
+  const byBook = {};
+  for (const r of reviews) (byBook[r.book_ts] ||= []).push(reviewTotal(r));
+  const spreads = [];
+  for (const [ts, totals] of Object.entries(byBook)) {
+    if (totals.length < 2) continue;
+    const mean = totals.reduce((a, b) => a + b, 0) / totals.length;
+    const sd = Math.sqrt(totals.reduce((a, b) => a + (b - mean) ** 2, 0) / totals.length);
+    spreads.push({ ts, sd });
+  }
+  if (spreads.length >= 2) {
+    const mostDivisive = spreads.reduce((m, x) => (x.sd > m.sd ? x : m));
+    const mostAgreed = spreads.reduce((m, x) => (x.sd < m.sd ? x : m));
+    if (mostDivisive.ts === h.ts) badges.push({ emoji: "🔥", label: "Most divisive" });
+    else if (mostAgreed.ts === h.ts) badges.push({ emoji: "🤝", label: "Most agreed-upon" });
+  }
+  // Score-based, from the committed Guild ratings.
+  const rated = state.history.filter(x => ratingTotal(x) != null);
+  if (rated.length >= 2) {
+    const top = rated.reduce((m, x) => (ratingTotal(x) > ratingTotal(m) ? x : m));
+    const bottom = rated.reduce((m, x) => (ratingTotal(x) < ratingTotal(m) ? x : m));
+    if (top.ts === h.ts) badges.push({ emoji: "⭐", label: "Top rated" });
+    else if (bottom.ts === h.ts) badges.push({ emoji: "💀", label: "Lowest rated" });
+  }
+  return badges;
+}
+
 // The Guild review block for a past read: the committed (or live) /100 score,
 // the per-category breakdown, each member's scores + notes, and a rate button.
 function guildReviewHtml(h) {
@@ -3170,6 +3230,10 @@ function guildReviewHtml(h) {
   const headBand = committed != null ? ratingBand(committed) : (agg ? agg.band : null);
 
   let html = `<div class="bd-block bd-review ${headBand ? headBand.cls : ''}"><div class="bd-block-head">Guild review</div>`;
+  const badges = bookBadges(h);
+  if (badges.length) {
+    html += `<div class="bd-badges">${badges.map(b => `<span class="bd-badge">${b.emoji} ${esc(b.label)}</span>`).join("")}</div>`;
+  }
   if (headTotal != null) {
     html += `<div class="bd-review-row"><span class="bd-score">${headTotal}<span class="bd-score-max">/100</span></span>`;
     html += `<span class="score-pill ${headBand.cls}">${headBand.label}</span>`;
@@ -3262,12 +3326,19 @@ function renderBookDetail(app, ctx) {
   window.scrollTo(0, 0);
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
 
-  let book, eyebrow, metaLine, reviewHtml = "", discussionBlock = "", meetingsHtml = "";
+  let book, eyebrow, metaLine, reviewHtml = "", discussionBlock = "", meetingsHtml = "", stampHtml = "";
   if (ctx.kind === "past") {
     const h = state.history.find(e => e.round === ctx.round);
     if (!h) return renderDetailMissing(app, back, state.history.length === 0, `There's no past read for round ${ctx.round}.`);
     book = h.book;
-    eyebrow = `Past read · Round ${h.round}`;
+    // Unrated picks are in flight: the oldest is "Currently reading", newer ones
+    // are "Next up". Rated picks are finished ("Past read"). Mirrors render().
+    const unrated = state.history.filter(x => ratingTotal(x) == null);
+    const current = unrated.length ? unrated[unrated.length - 1] : null;
+    const status = current && h.ts === current.ts ? "Currently reading"
+      : ratingTotal(h) == null ? "Next up" : null;
+    eyebrow = `${status || "Past read"} · Round ${h.round}`;
+    if (status) stampHtml = `<div class="detail-stamp">${esc(status)}</div>`;
     const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
     const who = h.winner_username
       ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="reader-link" href="${readerHref(h.winner_id, h.winner_username)}"><b>${esc(h.winner_username)}</b></a>`
@@ -3292,6 +3363,7 @@ function renderBookDetail(app, ctx) {
       <div class="bd-top">
         <div class="cover-slot xl" id="bd-cover"></div>
         <div class="bd-head">
+          ${stampHtml}
           <div class="bd-title">${esc(book || '—')}</div>
           <div class="bd-author" id="bd-author"></div>
           <div class="bd-facts" id="bd-facts"><span class="detail-muted">Looking up…</span></div>
