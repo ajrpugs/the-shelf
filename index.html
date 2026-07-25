@@ -1009,12 +1009,9 @@
   .gsearch-sub{ color: var(--ink-soft); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
   .gsearch-empty{ padding: 12px; color: var(--muted); font-size: 12.5px; }
 
-  /* ---- Personal dashboard (Reading tab) ---- */
+  /* ---- Own-profile "Your shelf" card ---- */
   .dash{ border-top: 2px solid var(--brass); }
   .dash-top{ display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-  .dash-id{ display: inline-flex; align-items: center; gap: 9px; text-decoration: none; color: var(--ink); }
-  .dash-avatar{ width: 30px; height: 30px; border-radius: 50%; object-fit: cover; }
-  .dash-name{ font-family: 'Fraunces', serif; font-weight: 700; font-size: 17px; }
   .dash-status{ font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700;
     padding: 3px 9px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
   .dash-status-in{ color: var(--green); }
@@ -1030,17 +1027,6 @@
     font-size: 12px; color: var(--ink-soft); }
   .dash-stats b{ color: var(--ink); font-weight: 700; }
   .dash-dot{ opacity: 0.4; }
-  .dash-profile{ margin-left: auto; color: var(--brass); text-decoration: none; font-size: 12px; }
-  .dash-profile:hover{ text-decoration: underline; }
-  .dash-actions{ margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--panel-border);
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .dash-actions-label{ font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--stamp); width: 100%; }
-  .dash-action{ display: inline-flex; align-items: center; text-decoration: none;
-    background: var(--panel-2); color: var(--ink); border: 1px solid var(--panel-border);
-    padding: 7px 12px; font-size: 12px; letter-spacing: 0; text-transform: none; font-weight: 400;
-    border-radius: 999px; font-family: 'Courier Prime', monospace; }
-  .dash-action:hover{ border-color: var(--brass); color: var(--brass); }
 
   /* ---- Comment composer footer + linkified URLs ---- */
   .bd-comment-formfoot{ display: flex; align-items: center; gap: 10px; margin-top: 8px; }
@@ -2889,21 +2875,6 @@ function relTime(iso) {
   return fmtDate(iso);
 }
 
-// The soonest scheduled meeting still in the future, across all reads.
-function upcomingMeeting() {
-  const now = Date.now();
-  let best = null;
-  for (const h of state.history) {
-    const m = h.meetings; if (!m) continue;
-    for (const phase of ["half", "full"]) {
-      const at = m[phase]?.at; if (!at) continue;
-      const t = Date.parse(at);
-      if (Number.isFinite(t) && t >= now && (!best || t < best.t)) best = { t, at, phase, h };
-    }
-  }
-  return best;
-}
-
 // Turn bare URLs in user text into links, escaping everything else first so
 // this stays injection-safe. Used in comments.
 function linkifyEsc(text) {
@@ -2951,16 +2922,14 @@ function globalSearchResultsHtml(q) {
   return h;
 }
 
-// ---- Personal dashboard (top of the Reading tab) ----
-// A member's home: who they are, their book + standing this round, a few of
-// their own numbers, and the actions the club is waiting on them for.
-function personalDashboardHtml({ myBook, iAmEliminated, currentlyReading }) {
-  const me = session.user;
-  const myId = me.id;
-  const myKey = readerKey(myId, myUserRow?.discord_username || displayNameFromMeta(me));
-  const name = displayNameFromMeta(me);
-  const avatar = me.user_metadata?.avatar_url;
-  const myReviews = reviews.filter(r => r.user_id === myId);
+// ---- Own-profile card (top of your own reader page) ----
+// Shown only on your own profile: your round standing, your book (with a jump to
+// edit it on the Shelf tab), and a welcome line for brand-new members.
+function ownProfileCardHtml() {
+  const myId = session.user.id;
+  const myBook = (myUserRow?.book || "").trim();
+  const iAmEliminated = state.eliminated.includes(myId);
+  const myReviews = (reviews || []).filter(r => r.user_id === myId);
   const avgGiven = myReviews.length ? Math.round(myReviews.reduce((s, r) => s + reviewTotal(r), 0) / myReviews.length) : null;
   const myPicks = state.history.filter(h => h.winner_id === myId).length;
   const brandNew = !myBook && !myPicks && !myReviews.length;
@@ -2971,42 +2940,21 @@ function personalDashboardHtml({ myBook, iAmEliminated, currentlyReading }) {
       ? { cls: "dash-status-out", label: "Picked this round — sitting out" }
       : { cls: "dash-status-in", label: "Eligible for the wheel" };
 
-  // "Needs you" actions.
-  const actions = [];
-  if (!myBook) actions.push(`<button class="dash-action" data-goto-tab="shelf">＋ Add your book to the shelf</button>`);
-  if (currentlyReading && ratingsOpen(currentlyReading) && !myReviewFor(currentlyReading.ts)) {
-    actions.push(`<button class="dash-action" data-rate-ts="${attr(currentlyReading.ts)}">★ Rate “${esc(currentlyReading.book || 'the current read')}”</button>`);
-  }
-  const meet = upcomingMeeting();
-  if (meet) {
-    const phase = meet.phase === "half" ? "Halfway" : "Wrap-up";
-    actions.push(`<a class="dash-action" href="#book=${meet.h.round}">📅 ${phase} discussion of “${esc(meet.h.book || '')}” · ${esc(relTime(meet.at))}</a>`);
-  }
-
   let h = `<div class="dash card no-rule">`;
   h += `<div class="dash-top">
-      <a class="dash-id reader-link" href="#reader=${encodeURIComponent(myKey)}">
-        ${avatar ? `<img class="dash-avatar" src="${attr(avatar)}" alt="">` : `<span class="dash-avatar leader-avatar-placeholder"></span>`}
-        <span class="dash-name">${esc(name)}</span>
-      </a>
+      <span class="dash-k">Your shelf</span>
       <span class="dash-status ${status.cls}">${status.label}</span>
     </div>`;
   if (brandNew) {
-    h += `<div class="dash-welcome">Welcome to the Shelf. Add a book below and you’re in the next spin.</div>`;
+    h += `<div class="dash-welcome">Welcome to the Shelf. Add a book and you’re in the next spin.</div>`;
   }
   h += `<div class="dash-book">
       <span class="dash-k">Your book</span>
       <span class="dash-v ${myBook ? '' : 'dash-v-empty'}">${myBook ? esc(myBook) : 'nothing on the shelf yet'}</span>
       <button class="btn-mini dash-edit" data-goto-tab="shelf">${myBook ? 'Edit' : 'Add'}</button>
     </div>`;
-  h += `<div class="dash-stats">
-      <span><b>${myPicks}</b> picked</span><span class="dash-dot">·</span>
-      <span><b>${myReviews.length}</b> reviewed</span><span class="dash-dot">·</span>
-      <span>avg <b>${avgGiven != null ? avgGiven : '—'}</b> given</span>
-      <a class="dash-profile" href="#reader=${encodeURIComponent(myKey)}">Your profile →</a>
-    </div>`;
-  if (actions.length) {
-    h += `<div class="dash-actions"><span class="dash-actions-label">Needs you</span>${actions.join("")}</div>`;
+  if (myReviews.length) {
+    h += `<div class="dash-stats"><span><b>${myReviews.length}</b> reviewed</span><span class="dash-dot">·</span><span>avg <b>${avgGiven}</b> given</span></div>`;
   }
   h += `</div>`;
   return h;
@@ -3115,9 +3063,8 @@ function render() {
       <div id="global-search-results" class="gsearch-results">${globalSearchResultsHtml(globalSearchQuery)}</div>
     </div>`;
 
-  // ---- Reading: personal dashboard + Currently reading + Next up ----
+  // ---- Reading: Currently reading + Next up ----
   if (currentTab === "reading") {
-    html += personalDashboardHtml({ myBook, iAmEliminated, currentlyReading });
     // The rate pill lives on Currently reading — the book you finish and score.
     if (currentlyReading) {
       html += bannerHtml(currentlyReading, { stamp: "Currently reading", admin, showRate: true });
@@ -3882,11 +3829,13 @@ function renderReaderPage(app, key) {
   const picks = state.history.filter(h => readerKey(h.winner_id, h.winner_username) === key);
   const shelfUser = userId ? users.find(x => x.id === userId) : null;
   const shelfBook = shelfUser && (shelfUser.book || "").trim() ? shelfUser.book.trim() : null;
+  const isMe = !!(session && userId && userId === session.user.id);
   // A reader may be reachable purely as a reviewer (their name is clickable in
   // review/comment lists) without ever having picked a book — still show them.
   const hasReviews = userId ? reviews.some(r => r.user_id === userId) : false;
 
-  if (picks.length === 0 && !shelfBook && !hasReviews) {
+  // Always render your own profile (even brand-new, so the welcome card shows).
+  if (!isMe && picks.length === 0 && !shelfBook && !hasReviews) {
     return renderDetailMissing(app, back, state.history.length === 0 && users.length === 0, `No reads recorded for ${name}.`);
   }
 
@@ -3911,6 +3860,7 @@ function renderReaderPage(app, key) {
       ${avatar ? `<img class="reader-avatar" src="${attr(avatar)}" alt="">` : `<span class="reader-avatar reader-avatar-ph"></span>`}
       <div class="reader-name">${esc(name)}</div>
     </div>
+    ${isMe ? ownProfileCardHtml() : ''}
     <div class="stat-grid reader-stats">
       <div class="stat-card"><div class="stat-label">Books picked</div><div class="stat-number">${picks.length}</div><div class="stat-suffix">all rounds</div></div>
       <div class="stat-card"><div class="stat-label">Avg rating</div><div class="stat-number ${avgBand ? avgBand.cls : ''}">${avg != null ? avg : '—'}</div><div class="stat-suffix">${avgBand ? avgBand.label : 'unrated'}</div></div>
@@ -3925,7 +3875,7 @@ function renderReaderPage(app, key) {
     </div>`;
   }
 
-  if (shelfBook) {
+  if (shelfBook && !isMe) {
     html += `<div class="card no-rule reader-shelf"><span class="mini-head" style="margin:0 10px 0 0;">On the shelf now</span><a class="book-link" href="#shelf=${encodeURIComponent(userId)}">${esc(shelfBook)}</a></div>`;
   }
 
