@@ -42,6 +42,19 @@
   }
   *{ box-sizing: border-box; }
   html,body{ margin:0; padding:0; }
+
+  /* Keyboard focus: a visible ring for keyboard users (mouse clicks stay clean). */
+  :focus-visible{ outline: 2px solid var(--brass); outline-offset: 2px; border-radius: 2px; }
+  /* Respect users who ask for less motion: drop transitions/animations. The
+     wheel's JS spin is separately shortened in spinToWinner(). */
+  @media (prefers-reduced-motion: reduce){
+    *, *::before, *::after{
+      transition-duration: 0.001ms !important;
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+    }
+  }
   body{
     background:
       radial-gradient(130% 100% at 50% -5%, transparent 60%, rgba(8,9,20,0.55) 100%),
@@ -1034,6 +1047,39 @@
   .bd-comment-hint{ font-size: 11px; color: var(--ink-soft); }
   .bd-comment-count{ margin-left: auto; font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
   .comment-url{ color: var(--brass); text-decoration: underline; word-break: break-all; }
+
+  /* ---- Comment reactions ---- */
+  .react-bar{ display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .react-chip{
+    display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--panel-border);
+    border-radius: 999px; font-size: 12px; text-transform: none; letter-spacing: 0; font-weight: 400;
+    font-variant-numeric: tabular-nums; line-height: 1.6;
+  }
+  .react-chip .react-emoji{ font-size: 13px; }
+  .react-chip:hover{ border-color: var(--brass); }
+  .react-chip.mine{ border-color: var(--brass); background: rgba(224,180,90,0.12); color: var(--brass); }
+  .react-menu{ position: relative; display: inline-block; }
+  .react-add{
+    list-style: none; cursor: pointer; user-select: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 22px; border-radius: 999px;
+    background: transparent; color: var(--ink-soft); border: 1px dashed var(--panel-border);
+    font-size: 15px; line-height: 1; font-family: 'Courier Prime', monospace;
+  }
+  .react-add::-webkit-details-marker{ display: none; }
+  .react-add:hover{ color: var(--brass); border-color: var(--brass); }
+  .react-palette{
+    position: absolute; left: 0; top: calc(100% + 5px); z-index: 30;
+    display: flex; gap: 2px; padding: 5px;
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 999px;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.5);
+  }
+  .react-opt{
+    background: transparent; border: none; padding: 4px 6px; font-size: 18px; line-height: 1;
+    border-radius: 50%; cursor: pointer;
+  }
+  .react-opt:hover{ background: var(--panel-2); }
 </style>
 </head>
 <body>
@@ -1057,6 +1103,7 @@ let state = emptyState();
 let users = [];              // shelf_users rows
 let reviews = [];            // shelf_reviews rows (member rubric reviews)
 let comments = [];           // shelf_comments rows (per-book discussion)
+let reactions = [];          // shelf_comment_reactions rows (emoji on comments)
 let leaderboardQuery = "";    // live filter text for the leaderboard
 let globalSearchQuery = "";   // live filter text for the header search
 let currentTab = "reading";  // active top-level tab in the main view
@@ -1672,7 +1719,7 @@ async function signOut() {
 async function loadAll() {
   if (!CONFIGURED) { render(); return; }
   try {
-    const [{ data: sData, error: sErr }, { data: uData, error: uErr }, { data: rData, error: rErr }, { data: cData, error: cErr }, { data: readsData, error: readsErr }] = await Promise.all([
+    const [{ data: sData, error: sErr }, { data: uData, error: uErr }, { data: rData, error: rErr }, { data: cData, error: cErr }, { data: readsData, error: readsErr }, { data: xData, error: xErr }] = await Promise.all([
       supabase.from("shelf_state").select("data").eq("id", 1).single(),
       supabase.from("shelf_users").select("*"),
       supabase.from("shelf_reviews").select("*"),
@@ -1680,6 +1727,7 @@ async function loadAll() {
       supabase.from("reads")
         .select("round, winner_id, winner_username, book, ts, rating, ratingsOpen:ratings_open, meetings")
         .order("ts", { ascending: false }),
+      supabase.from("shelf_comment_reactions").select("comment_id, user_id, emoji"),
     ]);
     if (sErr && sErr.code !== "PGRST116") throw sErr;
     if (uErr) throw uErr;
@@ -1699,6 +1747,8 @@ async function loadAll() {
     reviews = (!rErr && rData) ? rData : [];
     if (cErr) console.warn("shelf_comments unavailable:", cErr.message);
     comments = (!cErr && cData) ? cData : [];
+    if (xErr) console.warn("shelf_comment_reactions unavailable:", xErr.message);
+    reactions = (!xErr && xData) ? xData : [];
     if (session) myUserRow = users.find(u => u.id === session.user.id) || myUserRow;
   } catch (err) {
     setFlash("err", `Couldn't load: ${err.message}`);
@@ -1713,6 +1763,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_users" }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_reviews" }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_comments" }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_comment_reactions" }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "reads" }, () => queueRefresh())
     .subscribe();
 }
@@ -1816,6 +1867,45 @@ async function deleteComment(id) {
     comments = comments.filter(c => c.id !== id);
     render();
   } catch (err) { setFlash("err", `Couldn't delete: ${err.message}`); render(); }
+}
+
+// ---------- Comment reactions ----------
+// Reactions are low-stakes and carry no service-role logic, so (unlike comments)
+// they're written straight to the table under RLS (insert/delete your own row).
+const REACTION_EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
+function reactionsFor(commentId) {
+  return (reactions || []).filter(r => r.comment_id === commentId);
+}
+// Group a comment's reactions into { emoji, count, mine }, most-used first.
+function reactionSummary(commentId) {
+  const myId = session?.user?.id;
+  const map = new Map();
+  for (const r of reactionsFor(commentId)) {
+    const e = map.get(r.emoji) || { emoji: r.emoji, count: 0, mine: false };
+    e.count++; if (myId && r.user_id === myId) e.mine = true;
+    map.set(r.emoji, e);
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count);
+}
+async function reactComment(commentId, emoji) {
+  if (!session || !commentId || !emoji) return;
+  document.activeElement?.blur?.();
+  const myId = session.user.id;
+  const has = reactions.some(r => r.comment_id === commentId && r.user_id === myId && r.emoji === emoji);
+  try {
+    if (has) {
+      const { error } = await supabase.from("shelf_comment_reactions").delete()
+        .match({ comment_id: commentId, user_id: myId, emoji });
+      if (error) throw error;
+      reactions = reactions.filter(r => !(r.comment_id === commentId && r.user_id === myId && r.emoji === emoji));
+    } else {
+      const { error } = await supabase.from("shelf_comment_reactions")
+        .insert({ comment_id: commentId, user_id: myId, emoji });
+      if (error) throw error;
+      reactions.push({ comment_id: commentId, user_id: myId, emoji });
+    }
+    render();
+  } catch (err) { setFlash("err", `Couldn't react: ${err.message || err}`); render(); }
 }
 
 // Librarian opens or closes member reviews for a read.
@@ -2125,10 +2215,11 @@ async function spinToWinner(canvas, entries, winnerIdx) {
   const anglePer = (2 * Math.PI) / N;
   const jitter = (Math.random() - 0.5) * anglePer * 0.65;
   const targetR = -(winnerIdx + 0.5) * anglePer + jitter;
-  const spins = 6;
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const spins = reduce ? 0 : 6;
   const finalR = targetR + spins * 2 * Math.PI;
 
-  const duration = 5200;
+  const duration = reduce ? 250 : 5200;
   const start = performance.now();
   return new Promise(resolve => {
     function frame(now) {
@@ -2998,7 +3089,7 @@ function render() {
   `;
 
   if (flashMsg) {
-    html += `<div class="flash ${flashMsg.kind === 'info' ? 'info' : ''}">${esc(flashMsg.text)}</div>`;
+    html += `<div class="flash ${flashMsg.kind === 'info' ? 'info' : ''}" role="status" aria-live="polite">${esc(flashMsg.text)}</div>`;
   }
 
   // ---- Tab bar ----
@@ -3013,8 +3104,8 @@ function render() {
     ...(admin ? [{ id: "admin", label: "Admin", adminTab: true }] : []),
   ];
   if (!TABS.some(t => t.id === currentTab)) currentTab = "reading";
-  html += `<nav class="tabs">${TABS.map(t =>
-    `<button class="tab-btn ${t.adminTab ? 'tab-admin' : ''} ${currentTab === t.id ? 'on' : ''}" data-tab="${t.id}">${t.label}</button>`
+  html += `<nav class="tabs" role="tablist" aria-label="Sections">${TABS.map(t =>
+    `<button class="tab-btn ${t.adminTab ? 'tab-admin' : ''} ${currentTab === t.id ? 'on' : ''}" role="tab" aria-selected="${currentTab === t.id ? 'true' : 'false'}" data-tab="${t.id}">${t.label}</button>`
   ).join("")}</nav>`;
 
   // ---- Global search (books + readers) ----
@@ -3094,7 +3185,7 @@ function render() {
     html += `
       <div class="wheel-holder">
         <div class="wheel-pointer"></div>
-        <canvas id="wheel-canvas" class="wheel-canvas"></canvas>
+        <canvas id="wheel-canvas" class="wheel-canvas" role="img" aria-label="Wheel of eligible readers"></canvas>
       </div>
       <div class="spin-caption">${eligibleCount} book${eligibleCount === 1 ? '' : 's'} on the shelf</div>
     `;
@@ -3142,7 +3233,7 @@ function render() {
           </span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
           ${admin
-            ? `<button class="score-pill ${band ? band.cls : 'score-pill-empty'}" data-admin-rate="${attr(h.ts || '')}" title="Set score (librarian)">${band ? total : '＋'}</button>`
+            ? `<button class="score-pill ${band ? band.cls : 'score-pill-empty'}" data-admin-rate="${attr(h.ts || '')}" title="Set score (librarian)" aria-label="Set Guild score for ${attr(h.book || 'this read')}">${band ? total : '＋'}</button>`
             : (band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`)}
         </div>
       `;
@@ -3593,9 +3684,13 @@ function discussionHtml(bookTs) {
         <div class="bd-comment-head">
           ${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<a class="reader-link" href="${readerHref(c.user_id, name)}"><b>${esc(name)}</b></a>
           <span class="bd-comment-time" title="${attr(fmtDate(c.created_at))}">${esc(relTime(c.created_at))}</span>
-          ${mine ? `<button class="comment-del" data-comment-delete="${attr(c.id)}" title="Delete">×</button>` : ''}
+          ${mine ? `<button class="comment-del" data-comment-delete="${attr(c.id)}" title="Delete" aria-label="Delete your comment">×</button>` : ''}
         </div>
         <div class="bd-comment-body">${linkifyEsc(c.body)}</div>
+        <div class="react-bar">
+          ${reactionSummary(c.id).map(r => `<button class="react-chip${r.mine ? ' mine' : ''}" data-react-comment="${attr(c.id)}" data-react-emoji="${attr(r.emoji)}" aria-label="${r.mine ? 'Remove' : 'Add'} ${attr(r.emoji)} reaction, ${r.count} total"><span class="react-emoji">${r.emoji}</span> ${r.count}</button>`).join("")}
+          ${session ? `<details class="react-menu"><summary class="react-add" aria-label="Add a reaction">＋</summary><div class="react-palette">${REACTION_EMOJI.map(e => `<button class="react-opt" data-react-comment="${attr(c.id)}" data-react-emoji="${e}" aria-label="React ${e}">${e}</button>`).join("")}</div></details>` : ''}
+        </div>
       </div>`;
     }
     html += `</div>`;
@@ -4176,9 +4271,10 @@ initAuth();
 // Review buttons live on both the Currently reading banner and book pages, so
 // handle them by delegation instead of per-render wiring.
 document.addEventListener("click", (e) => {
-  // Close any open reader dropdown when the click lands outside it. (Clicking a
-  // menu item triggers a re-render, which rebuilds the <details> closed anyway.)
-  document.querySelectorAll("details.row-menu[open]").forEach(d => {
+  // Close any open reader dropdown / reaction palette when the click lands
+  // outside it. (A menu item click triggers a re-render, which rebuilds the
+  // <details> closed anyway.)
+  document.querySelectorAll("details.row-menu[open], details.react-menu[open]").forEach(d => {
     if (!d.contains(e.target)) d.removeAttribute("open");
   });
   // Collapse the header search when clicking outside it (a result click lands
@@ -4219,7 +4315,9 @@ document.addEventListener("click", (e) => {
     return;
   }
   const cDel = e.target.closest("[data-comment-delete]");
-  if (cDel && confirm("Delete this comment?")) deleteComment(cDel.dataset.commentDelete);
+  if (cDel && confirm("Delete this comment?")) { deleteComment(cDel.dataset.commentDelete); return; }
+  const react = e.target.closest("[data-react-emoji]");
+  if (react) { reactComment(react.dataset.reactComment, react.dataset.reactEmoji); return; }
 });
 
 // Comment composer niceties (delegated so they survive every re-render): a live

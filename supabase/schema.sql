@@ -146,6 +146,42 @@ create policy "shelf_comments delete self"
   to authenticated
   using (auth.uid() = user_id);
 
+-- 6b. shelf_comment_reactions ----------------------------------------------
+-- Emoji reactions on comments. No service-role logic or Discord side effects,
+-- so signed-in readers write these straight to the table under RLS (add/remove
+-- only their own). See migration 20260725120000_add_comment_reactions.sql.
+
+create table if not exists public.shelf_comment_reactions (
+  comment_id uuid not null references public.shelf_comments(id) on delete cascade,
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  emoji      text not null,
+  created_at timestamptz not null default now(),
+  club_id    uuid not null default '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8' references public.clubs(id),
+  primary key (comment_id, user_id, emoji)
+);
+create index if not exists shelf_comment_reactions_comment_idx
+  on public.shelf_comment_reactions(comment_id);
+
+alter table public.shelf_comment_reactions enable row level security;
+
+drop policy if exists "comment_reactions read for all" on public.shelf_comment_reactions;
+create policy "comment_reactions read for all"
+  on public.shelf_comment_reactions for select
+  to anon, authenticated
+  using (true);
+
+drop policy if exists "comment_reactions insert self" on public.shelf_comment_reactions;
+create policy "comment_reactions insert self"
+  on public.shelf_comment_reactions for insert
+  to authenticated
+  with check (auth.uid() = user_id);
+
+drop policy if exists "comment_reactions delete self" on public.shelf_comment_reactions;
+create policy "comment_reactions delete self"
+  on public.shelf_comment_reactions for delete
+  to authenticated
+  using (auth.uid() = user_id);
+
 -- 7. shelf_librarians ------------------------------------------------------
 -- Who may perform admin actions. Presence of a row = librarian; this replaces
 -- the old shared ADMIN_PASSWORD. Roles deliberately do NOT live on shelf_users:
@@ -307,4 +343,5 @@ alter publication supabase_realtime add table public.shelf_state;
 alter publication supabase_realtime add table public.shelf_users;
 alter publication supabase_realtime add table public.shelf_reviews;
 alter publication supabase_realtime add table public.shelf_comments;
+alter publication supabase_realtime add table public.shelf_comment_reactions;
 alter publication supabase_realtime add table public.reads;
