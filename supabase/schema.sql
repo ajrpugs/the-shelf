@@ -345,3 +345,29 @@ alter publication supabase_realtime add table public.shelf_reviews;
 alter publication supabase_realtime add table public.shelf_comments;
 alter publication supabase_realtime add table public.shelf_comment_reactions;
 alter publication supabase_realtime add table public.reads;
+
+-- 13. shelf_reviews.dnf ------------------------------------------------
+-- A reader can flag a read as "didn't finish" instead of scoring it. DNF
+-- rows carry no rubric scores, so the five score columns become nullable;
+-- the check constraint keeps a scored review (all five present) and a DNF
+-- review (none present) mutually exclusive.
+
+alter table public.shelf_reviews
+  alter column plot drop not null,
+  alter column characters drop not null,
+  alter column pacing drop not null,
+  alter column language drop not null,
+  alter column themes drop not null;
+
+alter table public.shelf_reviews
+  add column if not exists dnf boolean not null default false;
+
+alter table public.shelf_reviews
+  drop constraint if exists shelf_reviews_dnf_scores_chk;
+alter table public.shelf_reviews
+  add constraint shelf_reviews_dnf_scores_chk
+  check (
+    (dnf and plot is null and characters is null and pacing is null and language is null and themes is null)
+    or
+    (not dnf and plot is not null and characters is not null and pacing is not null and language is not null and themes is not null)
+  );
