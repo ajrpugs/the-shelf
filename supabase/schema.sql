@@ -371,3 +371,97 @@ alter table public.shelf_reviews
     or
     (not dnf and plot is not null and characters is not null and pacing is not null and language is not null and themes is not null)
   );
+
+-- 14. Club scoping, for real -------------------------------------------
+-- Phase 1 of docs/multi-tenant-plan.md, slice 3. See
+-- 20260726180000_club_scoping_rls.sql for the full rationale: adds
+-- clubs.visibility (defaulted 'public' so the existing club stays
+-- anon-readable), is_member() (is_librarian() deferred to Phase 2, unused
+-- until then), a fresh live club_members backfill, and swaps the
+-- `using (true)` select policy on reads/shelf_state/shelf_reviews/
+-- shelf_comments/shelf_comment_reactions/club_members for one that checks
+-- club membership or public visibility. clubs itself and
+-- shelf_users/shelf_librarians are untouched.
+
+alter table public.clubs
+  add column if not exists visibility text not null default 'public'
+  check (visibility in ('public', 'private'));
+
+create or replace function public.is_member(club uuid)
+returns boolean
+language sql
+security definer
+stable
+as $$
+  select exists (
+    select 1 from public.club_members
+    where club_id = club and user_id = auth.uid()
+  );
+$$;
+
+insert into public.club_members (club_id, user_id, role, book, joined_at)
+select
+  '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8',
+  su.id,
+  case when sl.user_id is not null then 'librarian' else 'member' end,
+  su.book,
+  su.updated_at
+from public.shelf_users su
+left join public.shelf_librarians sl on sl.user_id = su.id
+on conflict (club_id, user_id) do update
+  set role = excluded.role,
+      book = excluded.book;
+
+drop policy if exists "reads read for all" on public.reads;
+create policy "reads read for all"
+  on public.reads for select
+  to anon, authenticated
+  using (
+    is_member(club_id)
+    or exists (select 1 from public.clubs c where c.id = club_id and c.visibility = 'public')
+  );
+
+drop policy if exists "shelf_state read for all" on public.shelf_state;
+create policy "shelf_state read for all"
+  on public.shelf_state for select
+  to anon, authenticated
+  using (
+    is_member(club_id)
+    or exists (select 1 from public.clubs c where c.id = club_id and c.visibility = 'public')
+  );
+
+drop policy if exists "shelf_reviews read for all" on public.shelf_reviews;
+create policy "shelf_reviews read for all"
+  on public.shelf_reviews for select
+  to anon, authenticated
+  using (
+    is_member(club_id)
+    or exists (select 1 from public.clubs c where c.id = club_id and c.visibility = 'public')
+  );
+
+drop policy if exists "shelf_comments read for all" on public.shelf_comments;
+create policy "shelf_comments read for all"
+  on public.shelf_comments for select
+  to anon, authenticated
+  using (
+    is_member(club_id)
+    or exists (select 1 from public.clubs c where c.id = club_id and c.visibility = 'public')
+  );
+
+drop policy if exists "comment_reactions read for all" on public.shelf_comment_reactions;
+create policy "comment_reactions read for all"
+  on public.shelf_comment_reactions for select
+  to anon, authenticated
+  using (
+    is_member(club_id)
+    or exists (select 1 from public.clubs c where c.id = club_id and c.visibility = 'public')
+  );
+
+drop policy if exists "club_members read for all" on public.club_members;
+create policy "club_members read for all"
+  on public.club_members for select
+  to anon, authenticated
+  using (
+    is_member(club_id)
+    or exists (select 1 from public.clubs c where c.id = club_id and c.visibility = 'public')
+  );

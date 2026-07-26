@@ -1190,6 +1190,10 @@ const SUPABASE_ANON_KEY = "sb_publishable_Ovyd_-OHfFzfUlT2mtirfw_73i3sYWv";
 const CONFIGURED = !SUPABASE_URL.startsWith("REPLACE_") && !SUPABASE_ANON_KEY.startsWith("REPLACE_");
 const supabase = CONFIGURED ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
+// Stand-in until per-club routing exists (Phase 3 of docs/multi-tenant-plan.md)
+// -- the only real club today. Matches the seeded row in supabase/schema.sql.
+const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
+
 // ---------- State ----------
 const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
 let state = emptyState();
@@ -1877,12 +1881,13 @@ async function loadAll() {
     const [{ data: sData, error: sErr }, { data: uData, error: uErr }, { data: rData, error: rErr }, { data: cData, error: cErr }, { data: readsData, error: readsErr }, { data: xData, error: xErr }] = await Promise.all([
       supabase.from("shelf_state").select("data").eq("id", 1).single(),
       supabase.from("shelf_users").select("*"),
-      supabase.from("shelf_reviews").select("*"),
-      supabase.from("shelf_comments").select("*"),
+      supabase.from("shelf_reviews").select("*").eq("club_id", DEFAULT_CLUB_ID),
+      supabase.from("shelf_comments").select("*").eq("club_id", DEFAULT_CLUB_ID),
       supabase.from("reads")
         .select("round, winner_id, winner_username, book, ts, rating, ratingsOpen:ratings_open, meetings")
+        .eq("club_id", DEFAULT_CLUB_ID)
         .order("ts", { ascending: false }),
-      supabase.from("shelf_comment_reactions").select("comment_id, user_id, emoji"),
+      supabase.from("shelf_comment_reactions").select("comment_id, user_id, emoji").eq("club_id", DEFAULT_CLUB_ID),
     ]);
     if (sErr && sErr.code !== "PGRST116") throw sErr;
     if (uErr) throw uErr;
@@ -1914,13 +1919,14 @@ async function loadAll() {
 
 function subscribeRealtime() {
   if (!CONFIGURED) return;
+  const clubFilter = `club_id=eq.${DEFAULT_CLUB_ID}`;
   supabase.channel("shelf-live")
-    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_state" }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_state", filter: clubFilter }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_users" }, () => queueRefresh())
-    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_reviews" }, () => queueRefresh())
-    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_comments" }, () => queueRefresh())
-    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_comment_reactions" }, () => queueRefresh())
-    .on("postgres_changes", { event: "*", schema: "public", table: "reads" }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_reviews", filter: clubFilter }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_comments", filter: clubFilter }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "shelf_comment_reactions", filter: clubFilter }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "reads", filter: clubFilter }, () => queueRefresh())
     .subscribe();
 }
 let refreshTimer = null;

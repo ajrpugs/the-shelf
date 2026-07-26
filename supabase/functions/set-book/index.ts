@@ -23,6 +23,10 @@ const cors = {
 // Base URL of the live app, so Discord embeds can link back to the book's page.
 const SITE_URL = "https://sh3lf.net/";
 
+// Stand-in until per-club routing exists (Phase 3 of docs/multi-tenant-plan.md)
+// -- the only real club today. Matches the seeded row in supabase/schema.sql.
+const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
+
 // --- Open Library cover lookup -----------------------------------------------
 
 function normalizeForMatch(s: string): string {
@@ -148,6 +152,19 @@ Deno.serve(async (req) => {
     .select()
     .single();
   if (updErr) return json({ error: updErr.message }, 500);
+
+  // Best-effort mirror into club_members -- not the source of truth yet, so a
+  // missed sync here is recoverable and must never fail the reader's request.
+  // Awaited (not fire-and-forget) so it actually runs before the isolate can
+  // be torn down after the response is sent.
+  try {
+    const { error: syncErr } = await admin
+      .from("club_members")
+      .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book: book || null }, { onConflict: "club_id,user_id" });
+    if (syncErr) console.error("club_members sync failed:", syncErr.message);
+  } catch (err) {
+    console.error("club_members sync error:", err);
+  }
 
   // Post to Discord only when a book is set/changed. Clearing stays quiet.
   const bookChanged = book && book !== prev;

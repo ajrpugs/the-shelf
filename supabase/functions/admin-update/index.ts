@@ -28,6 +28,54 @@ const cors = {
 // Base URL of the live app, so Discord embeds can link back to a book's page.
 const SITE_URL = "https://sh3lf.net/";
 
+// Stand-in until per-club routing exists (Phase 3 of docs/multi-tenant-plan.md)
+// -- the only real club today. Matches the seeded row in supabase/schema.sql.
+const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
+
+// club_members dual-writes -- not the source of truth yet, so a missed sync
+// here is recoverable and must never fail the librarian's actual action.
+type AdminClient = ReturnType<typeof createClient>;
+
+async function syncClubMemberBook(client: AdminClient, userId: string, book: string | null): Promise<void> {
+  try {
+    const { error } = await client
+      .from("club_members")
+      .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book }, { onConflict: "club_id,user_id" });
+    if (error) console.error("club_members book sync failed:", error.message);
+  } catch (err) {
+    console.error("club_members book sync error:", err);
+  }
+}
+
+async function syncClubMembersAllBooksCleared(client: AdminClient): Promise<void> {
+  try {
+    const { error } = await client.from("club_members").update({ book: null }).eq("club_id", DEFAULT_CLUB_ID);
+    if (error) console.error("club_members bulk book-clear sync failed:", error.message);
+  } catch (err) {
+    console.error("club_members bulk book-clear sync error:", err);
+  }
+}
+
+async function syncClubMemberRole(client: AdminClient, userId: string, role: "librarian" | "member"): Promise<void> {
+  try {
+    const { error } = await client
+      .from("club_members")
+      .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, role }, { onConflict: "club_id,user_id" });
+    if (error) console.error("club_members role sync failed:", error.message);
+  } catch (err) {
+    console.error("club_members role sync error:", err);
+  }
+}
+
+async function syncClubMemberRemoved(client: AdminClient, userId: string): Promise<void> {
+  try {
+    const { error } = await client.from("club_members").delete().eq("club_id", DEFAULT_CLUB_ID).eq("user_id", userId);
+    if (error) console.error("club_members removal sync failed:", error.message);
+  } catch (err) {
+    console.error("club_members removal sync error:", err);
+  }
+}
+
 type Rating = {
   total: number;
   // Optional per-category breakdown (1..20 each) snapshotted from member
@@ -455,6 +503,7 @@ Deno.serve(async (req) => {
         // Also wipe everyone's book and every past read so the shelf is truly empty.
         await client.from("shelf_users").update({ book: null }).neq("id", "00000000-0000-0000-0000-000000000000");
         await client.from("reads").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+        await syncClubMembersAllBooksCleared(client);
         break;
       }
       case "undo_last_spin": {
@@ -488,6 +537,7 @@ Deno.serve(async (req) => {
         if (!userId) throw new Error("user_id required");
         const { error } = await client.from("shelf_users").update({ book: null }).eq("id", userId);
         if (error) throw error;
+        await syncClubMemberBook(client, userId, null);
         break;
       }
       case "admin_set_book": {
@@ -501,6 +551,7 @@ Deno.serve(async (req) => {
           .update({ book: bookVal || null, updated_at: new Date().toISOString() })
           .eq("id", userId);
         if (error) throw error;
+        await syncClubMemberBook(client, userId, bookVal || null);
         break;
       }
       case "admin_set_rating": {
@@ -602,6 +653,7 @@ Deno.serve(async (req) => {
         if (!userId) throw new Error("user_id required");
         const { error } = await client.from("shelf_users").delete().eq("id", userId);
         if (error) throw error;
+        await syncClubMemberRemoved(client, userId);
         const newEliminated = gameState.eliminated.filter(id => id !== userId);
         const conflict = await writeGameState({ eliminated: newEliminated, roundNumber: gameState.roundNumber });
         if (conflict) return conflict;
@@ -652,6 +704,7 @@ Deno.serve(async (req) => {
         const { error } = await client
           .from("shelf_librarians").upsert({ user_id: uid }, { onConflict: "user_id" });
         if (error) throw error;
+        await syncClubMemberRole(client, uid, "librarian");
         return json({ ok: true });
       }
       case "admin_revoke_librarian": {
@@ -663,6 +716,7 @@ Deno.serve(async (req) => {
         if (uid === callerId) throw new Error("you can't revoke your own librarian role");
         const { error } = await client.from("shelf_librarians").delete().eq("user_id", uid);
         if (error) throw error;
+        await syncClubMemberRole(client, uid, "member");
         return json({ ok: true });
       }
       default:

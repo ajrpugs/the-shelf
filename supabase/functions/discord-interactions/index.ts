@@ -18,6 +18,23 @@ const PUBLIC_KEY = Deno.env.get("DISCORD_PUBLIC_KEY") ?? "";
 // Base URL of the live app, so Discord embeds can link back to the book's page.
 const SITE_URL = "https://sh3lf.net/";
 
+// Stand-in until per-club routing exists (Phase 3 of docs/multi-tenant-plan.md)
+// -- the only real club today. Matches the seeded row in supabase/schema.sql.
+const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
+
+// Best-effort mirror into club_members -- not the source of truth yet, so a
+// missed sync here is recoverable and must never fail the /mybook command.
+async function syncClubMembersBook(client: ReturnType<typeof createClient>, userId: string, book: string | null): Promise<void> {
+  try {
+    const { error } = await client
+      .from("club_members")
+      .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book }, { onConflict: "club_id,user_id" });
+    if (error) console.error("club_members sync failed:", error.message);
+  } catch (err) {
+    console.error("club_members sync error:", err);
+  }
+}
+
 // --- Open Library cover + Discord post ---------------------------------------
 
 function normalizeForMatch(s: string): string {
@@ -181,6 +198,7 @@ async function handleMyBook(interaction: any) {
   if (!bookTitle) {
     const { error } = await client.from("shelf_users").update({ book: null }).eq("id", user.id);
     if (error) return reply("Couldn't clear your book. Try again.");
+    await syncClubMembersBook(client, user.id, null);
     return reply("📖 Cleared your book. You're off the shelf.");
   }
 
@@ -189,6 +207,7 @@ async function handleMyBook(interaction: any) {
     .update({ book: bookTitle, updated_at: new Date().toISOString() })
     .eq("id", user.id);
   if (error) return reply("Couldn't save your book. Try again.");
+  await syncClubMembersBook(client, user.id, bookTitle);
 
   // Post to the channel only when a book was actually set or changed.
   if (bookTitle !== prevBook) {
