@@ -1,7 +1,7 @@
 # Multi-tenant plan — "The Shelf" as a product
 
-**Status:** proposal, nothing implemented.
-**Goal:** anyone can sign up at a custom domain, create a book club, invite members, and run the wheel/meetings/reviews flow independently of every other club.
+**Status:** Phases 0–2 (harden, tenancy foundation, per-club librarian role) are implemented and live in production. Phases 3–7 (routing/hosting move, signup/invites, more auth providers, per-club settings, frontend restructure) are still proposal — see §8 for what's actually landed vs. what isn't.
+**Goal:** anyone can sign up at a custom domain, create a book club, invite members, and run the wheel/meetings/reviews flow independently of every other club. That goal itself hasn't been committed to yet (see §10, still unanswered) — what's landed so far is the correctness/security foundation that both "stay single-club forever" and "open it up" need either way.
 
 This builds on the feasibility findings: the blocker isn't difficulty, it's that the data model changes under everything at once, and there are currently no tests to catch what breaks.
 
@@ -239,19 +239,23 @@ None is hard. Together they're comparable in size to the tenancy work itself, an
 
 Each phase should be shippable and leave the existing club working.
 
-### Phase 0 — Harden *(no user-visible change)*
+### Phase 0 — Harden *(no user-visible change)* — ✅ done
 Test harness for render + edge function logic. `reads` table replacing the `history` array and `book_ts`. `version` column + optimistic locking. Migrate existing data in place.
 **Exit:** current club runs entirely on `reads`; tests cover the wheel, ratings, meetings.
 
-### Phase 1 — Tenancy foundation
+Landed before the tenancy work below started. `supabase/functions/_shared/shelf-logic.mjs` holds the pure draw/undo/rating/meeting logic, covered by `node --test`; `reads` is the live source of truth for history; `shelf_state.version` guards every admin write. This was the baseline Phase 1 built on.
+
+### Phase 1 — Tenancy foundation — ✅ done (schema/RLS/scoping); ⬜ automated isolation tests, `profiles`, `club_secrets`
 `clubs`, `club_members`, `profiles`, `club_secrets`. `club_id` on everything. New RLS + policy tests. Scope every query and the realtime subscriptions. Existing club migrates to club #1.
 **Exit:** two clubs coexist in the DB with no data bleed, proven by tests.
 
 Schema/RLS/dual-writes/query-scoping landed 2026-07-26. Isolation itself was verified manually the same day (no local Postgres/Docker in this environment, so no automated policy-test suite exists yet): a throwaway private second club + one real user as its only member were inserted directly via `supabase db query --linked`, then read back under `SET ROLE`/simulated JWT claims as (a) anon, (b) that member, (c) a real member of club #1 who is *not* a member of the test club, confirming (c) got zero rows from the test club while their own club's rows were unaffected — then the test club/member/rows were deleted. `profiles` and `club_secrets` are still not built; nothing depends on a second club existing yet, so this was a one-off proof, not regression coverage — a real automated policy-test suite is still owed before a second real club goes live.
 
-### Phase 2 — Role-based librarian
+### Phase 2 — Role-based librarian — ✅ done
 Retire `ADMIN_PASSWORD`. `admin-update` verifies JWT (pattern already exists in `set-book`) and checks `role = 'librarian'`.
 **Exit:** no shared secret anywhere; librarian rights are per-club.
+
+There was no literal `ADMIN_PASSWORD` by the time this landed — `shelf_librarians` (JWT-verified, role-based) already predated this plan. What this phase actually closed: `admin-update`'s authorization check read the *global* `shelf_librarians` table, so a librarian would have silently been a librarian in every club, not just their own. Landed 2026-07-26: the check now reads `club_members.role = 'librarian'` scoped to `DEFAULT_CLUB_ID` instead; `admin_grant_librarian`/`admin_revoke_librarian` dual-write both tables so `shelf_librarians` (still what the client's tab-gate reads) and `club_members.role` (what the server actually enforces) can't drift.
 
 ### Phase 3 — Routing + hosting
 Move to Cloudflare Pages, custom domain, `/c/<slug>` router. Tabs get real URLs.

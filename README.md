@@ -10,7 +10,7 @@ Single-page HTML frontend + Supabase backend (Postgres + Realtime + Edge Functio
   - Set or change their one book — from the web app, or with the `/mybook <title>` slash command in Discord.
   - Clear their book to take themselves off the shelf.
   - See who's on the shelf, who's already been picked this round, past reads, and stats.
-  - Once a read finishes, submit a rubric review (five categories, 1–20 each) while the librarian has ratings open for it, and post comments on its discussion thread.
+  - Once a read finishes, submit a rubric review (five categories, 1–20 each) or flag it as didn't-finish, while the librarian has ratings open for it, and post comments (and single-level replies, plus emoji reactions) on its discussion thread.
 - **Anyone with the link** (no login) can read the current state — who's on the shelf, past reads, ratings, and stats.
 - **Only a librarian** (a reader holding the librarian role — see below) can:
   - Spin the wheel — the server picks randomly from readers who have a book set and haven't been picked yet this round.
@@ -31,7 +31,7 @@ The app is organized into tabs: **Reading** (what's currently being read / up ne
 ### 1. Supabase project
 
 1. Create a free project at [supabase.com](https://supabase.com).
-2. Open the **SQL editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates all five tables (`shelf_state`, `shelf_users`, `shelf_reviews`, `shelf_comments`, `shelf_librarians`), their RLS policies, and hooks the first four into realtime.
+2. Open the **SQL editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates all nine tables (`shelf_state`, `reads`, `shelf_users`, `shelf_reviews`, `shelf_comments`, `shelf_comment_reactions`, `shelf_librarians`, `clubs`, `club_members`), their RLS policies, and hooks six of them into realtime. `clubs`/`club_members` are groundwork for eventually supporting more than one club (see [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md)) — everything below still just runs your one club, seeded automatically by the schema.
 
 ### 2. Discord OAuth (sign-in)
 
@@ -101,13 +101,15 @@ If you're serving from a custom domain (this repo's live instance is `sh3lf.net`
 
 ### 6. Make your first librarian
 
-There's no signup flow for this — insert a row directly once you have a real `auth.users` id (sign in once first, then find your id in the Supabase dashboard's **Authentication → Users**, or `select id from auth.users;`):
+There's no signup flow for this — insert rows directly once you have a real `auth.users` id (sign in once first, then find your id in the Supabase dashboard's **Authentication → Users**, or `select id from auth.users;`). You need **both** of these — the actual authorization check is the second one; the first is what the Admin tab's UI reads to know who's a librarian:
 
 ```sql
 insert into shelf_librarians (user_id) values ('<your auth user id>');
+insert into club_members (club_id, user_id, role) values ('8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8', '<your auth user id>', 'librarian')
+  on conflict (club_id, user_id) do update set role = 'librarian';
 ```
 
-After that, librarians can grant/revoke the role for other readers from the **Admin** tab — no more SQL needed.
+After that, librarians can grant/revoke the role for other readers from the **Admin** tab — no more SQL needed (it writes both tables for you).
 
 ## Local dev
 
@@ -115,9 +117,9 @@ Just open `index.html` in a browser (or serve it with any static server — `pyt
 
 ## Security notes
 
-- The anon key + RLS mean anyone with the URL can **read** state (including reviews and comments). That's intentional.
-- Writes are locked down by RLS: readers can only insert/update their own `shelf_users` row, insert/update/delete their own `shelf_reviews` row, and insert/delete their own `shelf_comments` row. All game-state changes (`shelf_state`) go through the `admin-update` edge function — the client never writes it directly.
-- **Librarian is a role, not a password.** A librarian is any reader whose id has a row in `shelf_librarians`. That table has no write policy at all — grants and revokes only happen through the service-role `admin_grant_librarian` / `admin_revoke_librarian` edge-function actions, gated on the caller already being a librarian. A librarian can't revoke themselves (so the club can never end up with zero librarians via self-service).
+- The anon key + RLS mean anyone with the URL can **read** state (including reviews and comments). That's intentional — the seeded club defaults to `visibility = 'public'` in the `clubs` table, which is what actually grants anonymous read access under RLS (not a blanket policy anymore).
+- Writes are locked down by RLS: readers can only insert/update their own `shelf_users` row, insert/update/delete their own `shelf_reviews` row, insert/delete their own `shelf_comments` row, and insert/delete their own `shelf_comment_reactions` row. All game-state changes (`shelf_state`/`reads`) go through the `admin-update` edge function — the client never writes them directly.
+- **Librarian is a role, not a password.** A librarian is any reader whose id has a row in `shelf_librarians`, but the actual authorization check inside `admin-update` reads `club_members.role = 'librarian'` instead (club-scoped, so it holds up once more than one club exists). Neither table has a write policy at all — grants and revokes only happen through the service-role `admin_grant_librarian` / `admin_revoke_librarian` edge-function actions, gated on the caller already being a librarian, which write both tables together. A librarian can't revoke themselves (so the club can never end up with zero librarians via self-service).
 - `admin-update`, `set-review`, and `post-comment` each verify the caller's Supabase JWT themselves (rather than relying on the platform's built-in verification), which is why they're deployed with `--no-verify-jwt`.
 - `discord-interactions` verifies Discord's Ed25519 request signature against `DISCORD_PUBLIC_KEY`, so only genuine Discord requests are honored.
 
@@ -125,11 +127,13 @@ Just open `index.html` in a browser (or serve it with any static server — `pyt
 
 The Supabase dashboard has a full backup + SQL export.
 
-- Game state (eliminated readers, history, round number, ratings, meeting schedules) is a single JSON blob: `select data from shelf_state where id = 1;`
+- Game state (eliminated readers, round number) is a small JSON blob: `select data from shelf_state where id = 1;`
+- Past reads (ratings, meeting schedules) live in their own table, not the blob: `select * from reads order by ts desc;`
 - Readers plus their current books: `select * from shelf_users;`
-- Member rubric reviews: `select * from shelf_reviews;`
-- Book discussion comments: `select * from shelf_comments;`
-- Who holds the librarian role: `select * from shelf_librarians;`
+- Member rubric reviews (including DNFs): `select * from shelf_reviews;`
+- Book discussion comments (and replies, via `parent_id`): `select * from shelf_comments;`
+- Comment emoji reactions: `select * from shelf_comment_reactions;`
+- Who holds the librarian role: `select * from shelf_librarians;` (the club-scoped mirror `admin-update` actually checks: `select * from club_members where role = 'librarian';`)
 
 ## License
 
