@@ -395,6 +395,23 @@
     .history-item .h-meta{ margin-left: auto; font-size: 11px; }
   }
   .empty-note{ font-size: 12.5px; color: var(--muted); padding: 6px 2px; }
+  /* A bigger, felt-table-styled treatment for the handful of "first thing you
+     see" empty states (a whole tab with nothing in it yet) — same family as
+     .wheel-empty, just not quite as loud. Contextual/secondary empties (no
+     comments on this book, no meetings scheduled, filter no-match, …) stay
+     on the plain .empty-note above; promoting all 13 to this would be noise. */
+  .empty-block{
+    text-align: center;
+    padding: 34px 20px;
+    color: var(--brass);
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 14px;
+    line-height: 1.5;
+    border: 1px dashed rgba(185,150,87,0.35);
+    border-radius: 4px;
+    background: rgba(0,0,0,0.15);
+  }
 
   /* Book metadata: "· 1984 · 317pp" */
   .book-meta{ color: var(--muted); font-weight: 400; font-style: normal; }
@@ -574,6 +591,13 @@
   .sup-item{ display:flex; align-items:baseline; gap:10px; padding:7px 0; border-bottom:1px solid var(--panel-border); flex-wrap:wrap; }
   .sup-item:last-child{ border-bottom:none; }
   .sup-item-label{ font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:var(--ink-soft); min-width:96px; }
+  /* On phones the label + long book title + fixed-width stat used to all
+     fight for one line, so the title (the one thing with room to shrink)
+     got ellipsised down to almost nothing. Give the label its own line so
+     title and value share the full width on the next one instead. */
+  @media (max-width: 480px){
+    .sup-item-label{ flex-basis: 100%; }
+  }
 
   /* Leaderboard search */
   .lb-search{ width:100%; padding:9px 12px; margin-bottom:10px; font-size:13px;
@@ -3180,7 +3204,7 @@ function render() {
       html += bannerHtml(pick, { stamp: "Next up", admin, showRate: false });
     });
     if (!currentlyReading && nextUp.length === 0) {
-      html += `<div class="empty-note">Nothing on the go yet. Spin the wheel to pick the first read.</div>`;
+      html += `<div class="empty-block">Nothing on the go yet.<br>Spin the wheel to pick the first read.</div>`;
     }
   }
 
@@ -3208,7 +3232,7 @@ function render() {
   // ---- On the shelf ----
   html += `<section><div class="section-title">On the shelf</div>`;
   if (eligibleSubs.length === 0) {
-    html += `<div class="empty-note">The shelf is empty. Be the first to add a book above.</div>`;
+    html += `<div class="empty-block">The shelf is empty.<br>Be the first to add a book above.</div>`;
   } else {
     eligibleSubs.forEach(entry => {
       html += `
@@ -3260,7 +3284,7 @@ function render() {
   html += `<section><div class="section-title">Leaderboard</div>`;
   const rated = state.history.filter(h => ratingTotal(h) != null);
   if (rated.length === 0) {
-    html += `<div class="empty-note">No books rated yet.</div>`;
+    html += `<div class="empty-block">No books rated yet.</div>`;
   } else {
     if (rated.length > 6) {
       html += `<input type="text" id="lb-search" class="lb-search" placeholder="Search past reads by title or reader…" autocomplete="off" value="${attr(leaderboardQuery)}">`;
@@ -3413,7 +3437,7 @@ function render() {
     const reviewed = state.history.filter(h => ratingTotal(h) != null);
     html += `<div class="card no-rule" style="margin-top: 12px;"><div class="mini-head">Reviewed reads</div>`;
     if (reviewed.length === 0) {
-      html += `<div class="empty-note">No reads have been reviewed yet.</div>`;
+      html += `<div class="empty-block">No reads have been reviewed yet.</div>`;
     } else {
       reviewed.forEach(h => {
         const total = ratingTotal(h);
@@ -3421,7 +3445,8 @@ function render() {
         const rc = reviewsFor(h.ts).length;
         html += `<div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>${rc ? `<span class="h-meta"> · ${rc} member review${rc === 1 ? '' : 's'}</span>` : ''}</span>
+          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a></span>
+          ${rc ? `<span class="h-meta">${rc} member review${rc === 1 ? '' : 's'}</span>` : ''}
           ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
         </div>`;
       });
