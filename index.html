@@ -3078,7 +3078,7 @@ function render() {
       <div class="rule"></div>
       <div class="signed-in-strip">
         ${avatar ? `<img class="avatar" src="${attr(avatar)}" alt="">` : ''}
-        <span>Signed in as <b>${esc(displayName)}</b></span>
+        <span>Signed in as <a class="reader-link" href="${readerHref(session.user.id, displayName)}"><b>${esc(displayName)}</b></a></span>
         <span class="sep">·</span>
         <button id="sign-out-btn">Sign out</button>
       </div>
