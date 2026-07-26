@@ -465,3 +465,10 @@ create policy "club_members read for all"
     is_member(club_id)
     or exists (select 1 from public.clubs c where c.id = club_id and c.visibility = 'public')
   );
+
+-- 15. Threaded replies ---------------------------------------------------
+-- Single-level threaded replies on shelf_comments. See
+-- 20260726190000_add_comment_parent.sql for the full rationale.
+
+alter table public.shelf_comments
+  add column if not exists parent_id uuid references public.shelf_comments(id) on delete cascade;

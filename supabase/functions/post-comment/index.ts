@@ -34,7 +34,7 @@ Deno.serve(async (req) => {
   if (authErr || !userData?.user) return json({ error: "invalid auth" }, 401);
   const userId = userData.user.id;
 
-  let body: { book_ts?: string; body?: string; delete_id?: string };
+  let body: { book_ts?: string; body?: string; delete_id?: string; parent_id?: string };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
 
   const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
@@ -67,9 +67,26 @@ Deno.serve(async (req) => {
   if (readsErr) return json({ error: readsErr.message }, 500);
   if (!match) return json({ error: "no such read" }, 404);
 
+  // Threading is single-level: a reply's own parent must itself be a
+  // top-level comment on the same book. Can't be a DB check constraint
+  // (those can't reference other rows), so it's enforced here.
+  let parentId: string | null = null;
+  if (body.parent_id) {
+    const { data: parent, error: parentErr } = await admin
+      .from("shelf_comments")
+      .select("id, book_ts, parent_id")
+      .eq("id", String(body.parent_id))
+      .maybeSingle();
+    if (parentErr) return json({ error: parentErr.message }, 500);
+    if (!parent) return json({ error: "no such comment to reply to" }, 404);
+    if (parent.book_ts !== bookTs) return json({ error: "reply must be on the same book" }, 400);
+    if (parent.parent_id) return json({ error: "can't reply to a reply" }, 400);
+    parentId = parent.id;
+  }
+
   const { data: saved, error: insErr } = await admin
     .from("shelf_comments")
-    .insert({ book_ts: bookTs, user_id: userId, body: text })
+    .insert({ book_ts: bookTs, user_id: userId, body: text, parent_id: parentId })
     .select()
     .single();
   if (insErr) return json({ error: insErr.message }, 500);

@@ -607,6 +607,10 @@
   .bd-comment-form{ display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
   .bd-comment-form textarea{ min-height:48px; }
   .bd-comment-form button{ align-self:flex-end; }
+  .comment-reply-btn{ margin-left:auto; background:transparent; border:none; color:var(--ink-soft); cursor:pointer; font-size:11px; padding:0 4px; }
+  .comment-reply-btn:hover{ color:var(--brass); }
+  .bd-comment-replies{ display:flex; flex-direction:column; gap:12px; margin:8px 0 0 24px; padding-left:12px; border-left:2px solid var(--panel-border); }
+  .bd-comment-replies .bd-comment-form{ margin-top:2px; }
 
   /* Reviewers' corner superlatives */
   .sup-list{ display:flex; flex-direction:column; }
@@ -2001,19 +2005,28 @@ async function saveMyReview(bookTs, scores, note) {
 }
 
 // ---------- Discussion threads ----------
+// Threading is single-level: commentsFor gives top-level comments, repliesFor
+// gives a top-level comment's replies. Replies never have replies of their own.
 function commentsFor(bookTs) {
   return comments
-    .filter(c => c.book_ts === bookTs)
+    .filter(c => c.book_ts === bookTs && !c.parent_id)
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 }
-async function postComment(bookTs, text) {
+function repliesFor(commentId) {
+  return comments
+    .filter(c => c.parent_id === commentId)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+}
+// Which top-level comment currently has its reply box open (only one at a time).
+let replyingTo = null;
+async function postComment(bookTs, text, parentId = null) {
   text = (text || "").trim();
   if (!session || !bookTs || !text) return;
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/post-comment`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${session.access_token}` },
-      body: JSON.stringify({ book_ts: bookTs, body: text }),
+      body: JSON.stringify({ book_ts: bookTs, body: text, parent_id: parentId }),
     });
     if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error(t || res.statusText); }
     const body = await res.json();
@@ -2030,7 +2043,9 @@ async function deleteComment(id) {
       body: JSON.stringify({ delete_id: id }),
     });
     if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error(t || res.statusText); }
-    comments = comments.filter(c => c.id !== id);
+    // The DB cascade-deletes any replies too (parent_id -> on delete cascade);
+    // mirror that locally so orphaned replies don't linger until next refresh.
+    comments = comments.filter(c => c.id !== id && c.parent_id !== id);
     render();
   } catch (err) { setFlash("err", `Couldn't delete: ${err.message}`); render(); }
 }
@@ -3877,18 +3892,14 @@ function guildReviewHtml(h) {
   return html;
 }
 
-// The per-book discussion thread: existing comments + a compose box.
-function discussionHtml(bookTs) {
-  const cs = commentsFor(bookTs);
-  let html = `<div class="bd-block bd-discussion"><div class="bd-block-head">Discussion${cs.length ? ` · ${cs.length}` : ''}</div>`;
-  if (cs.length) {
-    html += `<div class="bd-comments">`;
-    for (const c of cs) {
-      const u = users.find(x => x.id === c.user_id);
-      const name = u?.discord_username || "Reader";
-      const av = u?.avatar_url;
-      const mine = session && c.user_id === session.user.id;
-      html += `<div class="bd-comment">
+// One comment or reply's markup (avatar, name, time, delete-if-mine, body,
+// reactions). Replies reuse this but omit the Reply button (single-level).
+function commentItemHtml(c, { isReply } = {}) {
+  const u = users.find(x => x.id === c.user_id);
+  const name = u?.discord_username || "Reader";
+  const av = u?.avatar_url;
+  const mine = session && c.user_id === session.user.id;
+  return `<div class="bd-comment${isReply ? ' bd-comment-reply' : ''}">
         <div class="bd-comment-head">
           ${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<a class="reader-link" href="${readerHref(c.user_id, name)}"><b>${esc(name)}</b></a>
           <span class="bd-comment-time" title="${attr(fmtDate(c.created_at))}">${esc(relTime(c.created_at))}</span>
@@ -3898,8 +3909,38 @@ function discussionHtml(bookTs) {
         <div class="react-bar">
           ${reactionSummary(c.id).map(r => `<button class="react-chip${r.mine ? ' mine' : ''}" data-react-comment="${attr(c.id)}" data-react-emoji="${attr(r.emoji)}" aria-label="${r.mine ? 'Remove' : 'Add'} ${attr(r.emoji)} reaction, ${r.count} total"><span class="react-emoji">${r.emoji}</span> ${r.count}</button>`).join("")}
           ${session ? `<details class="react-menu"><summary class="react-add" aria-label="Add a reaction">＋</summary><div class="react-palette">${REACTION_EMOJI.map(e => `<button class="react-opt" data-react-comment="${attr(c.id)}" data-react-emoji="${e}" aria-label="React ${e}">${e}</button>`).join("")}</div></details>` : ''}
+          ${!isReply && session ? `<button class="comment-reply-btn" data-comment-reply="${attr(c.id)}">Reply</button>` : ''}
         </div>
       </div>`;
+}
+
+// The per-book discussion thread: existing comments (+ single-level replies)
+// and a compose box.
+function discussionHtml(bookTs) {
+  const cs = commentsFor(bookTs);
+  const total = cs.reduce((n, c) => n + 1 + repliesFor(c.id).length, 0);
+  let html = `<div class="bd-block bd-discussion"><div class="bd-block-head">Discussion${total ? ` · ${total}` : ''}</div>`;
+  if (cs.length) {
+    html += `<div class="bd-comments">`;
+    for (const c of cs) {
+      html += commentItemHtml(c);
+      const replies = repliesFor(c.id);
+      if (replies.length || replyingTo === c.id) {
+        html += `<div class="bd-comment-replies">`;
+        for (const r of replies) html += commentItemHtml(r, { isReply: true });
+        if (replyingTo === c.id) {
+          html += `<div class="bd-comment-form">
+            <textarea id="reply-input" class="rubric-note" maxlength="2000" placeholder="Reply…"></textarea>
+            <div class="bd-comment-formfoot">
+              <span class="bd-comment-hint">⌘/Ctrl+Enter to post</span>
+              <span class="bd-comment-count" id="reply-count">0 / 2000</span>
+              <button class="btn-mini ghost" data-comment-reply-cancel="1">Cancel</button>
+              <button class="btn-mini" data-comment-post="${attr(bookTs)}" data-parent-id="${attr(c.id)}">Post</button>
+            </div>
+          </div>`;
+        }
+        html += `</div>`;
+      }
     }
     html += `</div>`;
   } else {
@@ -4550,29 +4591,59 @@ document.addEventListener("click", (e) => {
   if (openBtn) { setRatingsOpen(openBtn.dataset.openratingsTs, openBtn.dataset.open === "1"); return; }
   const cPost = e.target.closest("[data-comment-post]");
   if (cPost) {
-    const ta = document.getElementById("comment-input");
-    if (ta && ta.value.trim()) postComment(cPost.dataset.commentPost, ta.value);
+    const parentId = cPost.dataset.parentId || null;
+    const ta = document.getElementById(parentId ? "reply-input" : "comment-input");
+    if (ta && ta.value.trim()) {
+      document.activeElement?.blur?.();
+      postComment(cPost.dataset.commentPost, ta.value, parentId);
+      replyingTo = null;
+    }
     return;
   }
+  const cReply = e.target.closest("[data-comment-reply]");
+  if (cReply) {
+    document.activeElement?.blur?.();
+    replyingTo = replyingTo === cReply.dataset.commentReply ? null : cReply.dataset.commentReply;
+    render();
+    return;
+  }
+  const cReplyCancel = e.target.closest("[data-comment-reply-cancel]");
+  if (cReplyCancel) { document.activeElement?.blur?.(); replyingTo = null; render(); return; }
   const cDel = e.target.closest("[data-comment-delete]");
-  if (cDel && confirm("Delete this comment?")) { deleteComment(cDel.dataset.commentDelete); return; }
+  if (cDel) {
+    const id = cDel.dataset.commentDelete;
+    const n = repliesFor(id).length;
+    const msg = n ? `Delete this comment and its ${n} repl${n === 1 ? 'y' : 'ies'}?` : "Delete this comment?";
+    if (confirm(msg)) deleteComment(id);
+    return;
+  }
   const react = e.target.closest("[data-react-emoji]");
   if (react) { reactComment(react.dataset.reactComment, react.dataset.reactEmoji); return; }
 });
 
 // Comment composer niceties (delegated so they survive every re-render): a live
-// character count, and ⌘/Ctrl+Enter to post.
+// character count, and ⌘/Ctrl+Enter to post. Applies to both the top-level
+// composer (comment-input) and whichever reply box is open (reply-input).
 document.addEventListener("input", (e) => {
   if (e.target && e.target.id === "comment-input") {
     const c = document.getElementById("comment-count");
+    if (c) c.textContent = `${e.target.value.length} / 2000`;
+  }
+  if (e.target && e.target.id === "reply-input") {
+    const c = document.getElementById("reply-count");
     if (c) c.textContent = `${e.target.value.length} / 2000`;
   }
 });
 document.addEventListener("keydown", (e) => {
   if (e.target && e.target.id === "comment-input" && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
     e.preventDefault();
-    const post = document.querySelector("[data-comment-post]");
+    const post = document.querySelector("[data-comment-post]:not([data-parent-id])");
     if (post && e.target.value.trim()) postComment(post.dataset.commentPost, e.target.value);
+  }
+  if (e.target && e.target.id === "reply-input" && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    const post = document.querySelector("[data-comment-post][data-parent-id]");
+    if (post && e.target.value.trim()) { postComment(post.dataset.commentPost, e.target.value, post.dataset.parentId); replyingTo = null; }
   }
 });
 
