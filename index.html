@@ -572,7 +572,7 @@
   .bd-reviewers{ margin-top:14px; display:flex; flex-direction:column; gap:10px; }
   .bd-reviewer{ font-size:13px; }
   .bd-reviewer-head{ display:flex; align-items:center; gap:7px; }
-  .bd-reviewer-scores{ color:var(--ink-soft); font-family:'Courier Prime',monospace; font-size:11.5px; }
+  .bd-reviewer-scores{ color:var(--ink-soft); font-family:'Courier Prime',monospace; font-size:11.5px; margin-top:5px; }
   .bd-reviewer-note{ color:var(--ink-soft); font-style:italic; margin-top:2px; }
 
   /* Discussion thread */
@@ -2790,32 +2790,36 @@ function ratingTotal(h) {
 // The five rubric categories, in the order they appear on the Guild scorecard,
 // each with the descriptions for the four bands (from the Guild rubric) shown
 // as scoring guidance in the review wizard.
+// `short` is the compact one-word form used in the per-reviewer score
+// breakdown line (bd-reviewer-scores) — derived by hand rather than sliced
+// from `label`, since "Use of Language"/"Organization / Pacing"/"Themes /
+// Ideas" don't reduce to a sensible word by taking e.g. the first one.
 const RUBRIC = [
-  { key: "plot", label: "Plot", bands: {
+  { key: "plot", label: "Plot", short: "Plot", bands: {
     exc: "An exceptional, original, or deeply engaging story is consistently developed throughout the novel.",
     great: "An engaging story is developed throughout the novel. May contain exceptional or original moments.",
     good: "A sometimes engaging story is told. Plot may be underdeveloped or unoriginal.",
     bad: "The story is unengaging, plot points are nonsensical or uninteresting.",
   } },
-  { key: "characters", label: "Characters", bands: {
+  { key: "characters", label: "Characters", short: "Characters", bands: {
     exc: "Characters are extraordinarily well written and well developed.",
     great: "Overall, characters are well written and well developed.",
     good: "Some characters are well written and well developed. Some may lack depth or are otherwise poorly written.",
     bad: "Characters are uninspired or one dimensional.",
   } },
-  { key: "pacing", label: "Organization / Pacing", bands: {
+  { key: "pacing", label: "Organization / Pacing", short: "Pacing", bands: {
     exc: "Pacing feels appropriate throughout. Plot points come together in a very satisfying way, and do not feel forced.",
     great: "Pacing feels largely appropriate throughout. Plot points come together.",
     good: "Pacing feels somewhat appropriate. May feel rushed or dragged at times. Most plot points come together, but may be hard to follow or unsatisfying.",
     bad: "Lack of appropriate pacing. Often feels rushed or dragged out. Plot points are disconnected, hard to follow, or uninspired.",
   } },
-  { key: "language", label: "Use of Language", bands: {
+  { key: "language", label: "Use of Language", short: "Language", bands: {
     exc: "Prose is spectacular, extraordinarily beautiful, or otherwise deeply satisfying.",
     great: "Prose is engaging, beautiful, or otherwise satisfying.",
     good: "Prose is largely engaging, and may have memorable moments.",
     bad: "Prose takes away from the enjoyment of the novel. May be needlessly complex or simplistic.",
   } },
-  { key: "themes", label: "Themes / Ideas", bands: {
+  { key: "themes", label: "Themes / Ideas", short: "Themes", bands: {
     exc: "Themes or ideas are original, profound, or masterfully interwoven into the story. They invoked reflection or a strong emotional response.",
     great: "Themes or ideas have been thoughtfully interwoven into the story. They invoked reflection or an emotional response.",
     good: "Themes or ideas are at times effectively interwoven. They invoked some reflection and minimal emotional response.",
@@ -3745,7 +3749,7 @@ function guildReviewHtml(h) {
       const b = ratingBand(t);
       html += `<div class="bd-reviewer">
         <div class="bd-reviewer-head">${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<a class="reader-link" href="${readerHref(r.user_id, name)}"><b>${esc(name)}</b></a> · ${t}/100 <span class="score-pill ${b.cls}">${b.label}</span></div>
-        <div class="bd-reviewer-scores">${RUBRIC.map(({ key, label }) => `${esc(label.split(" ")[0])} ${r[key]}`).join(" · ")}</div>
+        <div class="bd-reviewer-scores">${RUBRIC.map(({ key, short }) => `${esc(short)} ${r[key]}`).join(" · ")}</div>
         ${r.note ? `<div class="bd-reviewer-note">“${esc(r.note)}”</div>` : ""}
       </div>`;
     }
