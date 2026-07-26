@@ -33,6 +33,11 @@
     --ink: #ece3cf;            /* primary text on the (now dark) cards */
     --ink-soft: #a8a088;       /* muted text on the dark cards */
     --stamp: #d5573f;          /* nudged brighter to read on dark panels */
+    --stamp-text: #e38e7e;     /* stamp, brightened for small/normal-weight text --
+                                   --stamp itself is ~4:1 on felt/panel, under the
+                                   4.5:1 AA floor for that text; borders/backgrounds/
+                                   large or bold text can stay on --stamp, since 3:1
+                                   is the relevant floor there and it already clears it */
     --green: #7f9c86;
     --brass: #e0b45a;
     --muted: #a29b7e;
@@ -45,6 +50,23 @@
 
   /* Keyboard focus: a visible ring for keyboard users (mouse clicks stay clean). */
   :focus-visible{ outline: 2px solid var(--brass); outline-offset: 2px; border-radius: 2px; }
+  /* Off-screen until focused, so a keyboard user tabbing in from the address
+     bar can jump straight past the header on every single page load. */
+  .skip-link{
+    position: absolute; left: -9999px; top: 0; z-index: 100;
+    background: var(--brass); color: var(--felt);
+    padding: 10px 16px; border-radius: 0 0 4px 0;
+    font-family: 'Courier Prime', monospace; font-weight: 700; font-size: 13px;
+    text-decoration: none;
+  }
+  .skip-link:focus{ left: 0; }
+  /* Standard visually-hidden-but-accessible pattern -- content a screen
+     reader announces but sighted users never see (the wheel's reader
+     roster, the spin-result announcement). */
+  .sr-only{
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
   /* Respect users who ask for less motion: drop transitions/animations. The
      wheel's JS spin is separately shortened in spinToWinner(). */
   @media (prefers-reduced-motion: reduce){
@@ -170,7 +192,7 @@
   .stamp-mark{
     display:inline-block;
     border: 2px solid var(--stamp);
-    color: var(--stamp);
+    color: var(--stamp-text);
     font-family: 'Fraunces', serif;
     font-weight: 700;
     font-size: 10px;
@@ -216,9 +238,9 @@
   .btn-ghost:hover:not(:disabled){ border-color: var(--brass); color: var(--brass); background: rgba(236,227,207,0.06); }
   .btn-mini.ghost:hover:not(:disabled){ background: rgba(236,227,207,0.08); border-color: var(--ink); filter: none; }
   .btn-mini{ background: var(--green); color: var(--card); padding: 6px 10px; font-size: 11px; }
-  .btn-mini.remove{ background: transparent; color: var(--stamp); border: 1px solid var(--stamp); }
+  .btn-mini.remove{ background: transparent; color: var(--stamp-text); border: 1px solid var(--stamp); }
   .btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
-  .btn-danger:hover:not(:disabled){ background: transparent; color: var(--stamp); }
+  .btn-danger:hover:not(:disabled){ background: transparent; color: var(--stamp-text); }
   .modal-actions button.btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
   .btn-discord{
     background: #5865F2; color: white;
@@ -231,7 +253,7 @@
   /* Submit form */
   .submit-form{ display: grid; gap: 8px; }
   .submit-form label{
-    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--stamp);
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--stamp-text);
     margin-top: 4px;
   }
   .submit-form input{ width: 100%; }
@@ -240,7 +262,7 @@
     font-size: 12px; color: var(--ink-soft); margin-top: 12px; font-style: italic;
   }
   .submit-warning{
-    background: rgba(162,62,47,0.12); color: var(--stamp);
+    background: rgba(162,62,47,0.12); color: var(--stamp-text);
     border-radius: 2px; padding: 8px 10px;
     font-size: 12.5px; margin-top: 10px;
   }
@@ -321,7 +343,7 @@
   .winner-banner .stampbig{
     display:inline-block;
     border: 3px solid var(--stamp);
-    color: var(--stamp);
+    color: var(--stamp-text);
     font-family:'Fraunces', serif;
     font-weight:700;
     letter-spacing:0.12em;
@@ -428,7 +450,7 @@
     background: rgba(236,227,207,0.06); border: 1px solid rgba(236,227,207,0.15);
     color: var(--ink-soft);
   }
-  .genre-tag b{ color: var(--stamp); font-weight: 700; font-size: 11px; }
+  .genre-tag b{ color: var(--stamp-text); font-weight: 700; font-size: 11px; }
   a.genre-tag{ text-decoration: none; }
   .genre-tag-link{ cursor: pointer; transition: border-color 0.12s, color 0.12s, background 0.12s; }
   .genre-tag-link:hover{ border-color: var(--brass); color: var(--ink); background: rgba(236,227,207,0.10); }
@@ -437,7 +459,7 @@
   /* Stats sub-cards: shared heading, superlatives, decade labels */
   .mini-head{
     font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
-    color: var(--stamp); margin-bottom: 10px;
+    color: var(--stamp-text); margin-bottom: 10px;
   }
   .sup-row{
     display: flex; align-items: center; gap: 10px;
@@ -466,7 +488,7 @@
   .band-exc{ color: var(--green); }
   .band-great{ color: var(--brass); }
   .band-good{ color: var(--muted); }
-  .band-bad{ color: var(--stamp); }
+  .band-bad{ color: var(--stamp-text); }
   .history-item .score-pill{ background: rgba(236,227,207,0.05); }
   button.score-pill{
     background: rgba(236,227,207,0.05); color: inherit; cursor: pointer;
@@ -500,7 +522,7 @@
   /* "Currently reading" / "Next up" stamp on the book detail page */
   .detail-stamp{
     display: inline-block; margin-bottom: 10px;
-    border: 3px solid var(--stamp); color: var(--stamp);
+    border: 3px solid var(--stamp); color: var(--stamp-text);
     font-family: 'Fraunces', serif; font-weight: 700; font-size: 13px;
     letter-spacing: 0.12em; text-transform: uppercase;
     padding: 4px 12px; border-radius: 4px; transform: rotate(-3deg);
@@ -580,7 +602,7 @@
   .bd-comment-head{ display:flex; align-items:center; gap:7px; font-size:12.5px; }
   .bd-comment-time{ color:var(--muted); font-size:11px; font-style:italic; }
   .comment-del{ margin-left:auto; background:transparent; border:none; color:var(--muted); cursor:pointer; font-size:16px; line-height:1; padding:0 4px; }
-  .comment-del:hover{ color:var(--stamp); }
+  .comment-del:hover{ color:var(--stamp-text); }
   .bd-comment-body{ font-size:13.5px; line-height:1.4; margin-top:3px; white-space:pre-wrap; word-break:break-word; }
   .bd-comment-form{ display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
   .bd-comment-form textarea{ min-height:48px; }
@@ -599,8 +621,10 @@
     .sup-item-label{ flex-basis: 100%; }
   }
 
-  /* Leaderboard search */
-  .lb-search{ width:100%; padding:9px 12px; margin-bottom:10px; font-size:13px;
+  /* Leaderboard search. Scoped to the id (rather than just .lb-search) so its
+     padding/font-size actually win over the base input[type=text] rule --
+     same CSS-specificity issue the search-icon overlap bug was. */
+  #lb-search.lb-search{ width:100%; padding:9px 12px; margin-bottom:10px; font-size:13px;
     font-family:'Courier Prime',monospace; background:var(--panel-2); color:var(--ink);
     border:1px solid var(--panel-border); border-radius:2px; }
 
@@ -617,8 +641,10 @@
   @media (max-width: 480px){ .bd-rubric-row{ grid-template-columns: 110px 1fr auto; } }
 
   /* Reader profile */
-  .reader-link{ color: inherit; text-decoration: none; cursor: pointer; }
-  .reader-link:hover{ color: var(--brass); text-decoration: underline; }
+  /* Same at-rest affordance as .book-link -- without it a reader name looks
+     like plain text until you hover, which is no signal at all on touch. */
+  .reader-link{ color: inherit; text-decoration: none; cursor: pointer; border-bottom: 1px solid rgba(236,227,207,0.32); }
+  .reader-link:hover{ color: var(--brass); border-bottom-color: var(--brass); }
   .reader-head{ display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
   .reader-avatar{ width: 60px; height: 60px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
   .reader-avatar-ph{ background: rgba(236,227,207,0.10); border: 1px solid var(--panel-border); }
@@ -661,7 +687,7 @@
 
   /* Clickable past-read titles + book detail page */
   .book-link{ color: inherit; text-decoration: none; border-bottom: 1px solid rgba(236,227,207,0.32); }
-  .book-link:hover{ color: var(--stamp); border-bottom-color: var(--stamp); }
+  .book-link:hover{ color: var(--stamp-text); border-bottom-color: var(--stamp); }
   .detail-back{
     display: inline-block; margin: 4px 0 14px; font-size: 12.5px;
     color: var(--muted); text-decoration: none; letter-spacing: 0.03em;
@@ -694,7 +720,7 @@
   .bd-block{ margin-top: 18px; }
   .bd-block-head{
     font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
-    color: var(--stamp); margin-bottom: 8px;
+    color: var(--stamp-text); margin-bottom: 8px;
   }
   .bd-extra{ font-size: 12.5px; color: var(--ink-soft); display: grid; gap: 5px; }
   .bd-extra .bd-k{ text-transform: uppercase; font-size: 10px; letter-spacing: 0.12em; color: var(--muted); margin-right: 5px; }
@@ -717,7 +743,7 @@
     text-align: left;
   }
   .stat-card .stat-label{
-    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--stamp);
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--stamp-text);
     margin-bottom: 6px;
   }
   .stat-card .stat-number{
@@ -795,12 +821,12 @@
     padding: 8px 10px; font-size: 12.5px; border-radius: 2px;
   }
   .row-menu-item:hover{ background: var(--panel-2); }
-  .row-menu-item.danger{ color: var(--stamp); }
+  .row-menu-item.danger{ color: var(--stamp-text); }
   .row-menu-item.danger:hover{ background: rgba(213,87,63,0.12); }
 
   .tools-label{
     font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
-    color: var(--stamp); margin-bottom: 10px;
+    color: var(--stamp-text); margin-bottom: 10px;
   }
 
   /* Compact My Book card */
@@ -808,13 +834,20 @@
   .my-book-row{ display: flex; gap: 8px; align-items: center; }
   .my-book-row input{ flex: 1; }
   .my-book-row button{ padding: 10px 16px; font-size: 12px; }
+  /* A longer title had almost no visible width next to the fixed-padding
+     Save button on phones -- stack them instead of squeezing side by side. */
+  @media (max-width: 480px){
+    .my-book-row{ flex-wrap: wrap; }
+    .my-book-row input{ flex-basis: 100%; }
+    .my-book-row button{ flex: 1; }
+  }
   .my-book-status{ font-size: 11.5px; margin-top: 8px; color: var(--ink-soft); font-style: italic; }
-  .my-book-status.waiting{ color: var(--stamp); font-style: normal; }
+  .my-book-status.waiting{ color: var(--stamp-text); font-style: normal; }
   .my-book-status.active{ color: var(--green); }
   .link-clear{
     background: none; border: none; padding: 0 0 0 4px;
     font: inherit; text-transform: none; letter-spacing: 0;
-    color: var(--stamp); text-decoration: underline; cursor: pointer;
+    color: var(--stamp-text); text-decoration: underline; cursor: pointer;
     font-weight: 400; font-size: inherit;
   }
 
@@ -828,7 +861,7 @@
     border-bottom: 1px dotted var(--brass);
   }
   .footer-link:hover{ color: var(--brass-soft, var(--brass)); border-bottom-color: currentColor; }
-  .setup .footer-link{ border-bottom-color: var(--stamp); color: var(--stamp); }
+  .setup .footer-link{ border-bottom-color: var(--stamp); color: var(--stamp-text); }
 
   .loading{ text-align:center; padding: 60px 0; color: var(--brass); font-family:'Fraunces',serif; font-style: italic; }
 
@@ -887,7 +920,7 @@
     border-radius: 2px 2px 0 0; transition: color 0.12s ease, background 0.12s ease;
   }
   .tab-btn:hover{ color: var(--ink); background: rgba(236,227,207,0.05); }
-  .tab-btn.on{ color: var(--stamp); border-bottom-color: var(--stamp); }
+  .tab-btn.on{ color: var(--stamp-text); border-bottom-color: var(--stamp); }
   .tab-btn.tab-admin{ color: var(--brass); }
   .tab-btn.tab-admin.on{ color: var(--brass); border-bottom-color: var(--brass); }
 
@@ -899,7 +932,7 @@
   .meeting-card:last-child{ border-bottom: none; }
   .meeting-phase{
     flex: 0 0 auto; font-family:'Fraunces',serif; font-weight: 700; font-size: 15px;
-    color: var(--stamp); width: 46px;
+    color: var(--stamp-text); width: 46px;
   }
   .meeting-body{ flex: 1; min-width: 0; }
   .meeting-book{ font-weight: 700; color: var(--ink); }
@@ -941,7 +974,7 @@
     width: 28px; height: 28px; border-radius: 2px; cursor: pointer;
     font-size: 17px; line-height: 1; padding: 0;
   }
-  .cal-nav:hover{ border-color: var(--stamp); color: var(--stamp); }
+  .cal-nav:hover{ border-color: var(--stamp); color: var(--stamp-text); }
   .cal-grid{ display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
   .cal-dow{
     text-align: center; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase;
@@ -994,12 +1027,12 @@
     text-decoration: none; cursor: pointer; border-bottom: 1px solid transparent;
     transition: color 0.12s ease, border-color 0.12s ease;
   }
-  .bm-label:hover{ color: var(--stamp); border-bottom-color: currentColor; }
+  .bm-label:hover{ color: var(--stamp-text); border-bottom-color: currentColor; }
   .bm-arrow{ font-size: 10px; opacity: 0.75; }
   .bm-row{ display:flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12.5px; padding: 2px 0; }
   .bm-row.past{ opacity: 0.45; }
   .bm-phase{
-    flex: 0 0 auto; min-width: 34px; font-weight: 700; color: var(--stamp);
+    flex: 0 0 auto; min-width: 34px; font-weight: 700; color: var(--stamp-text);
     font-family:'Courier Prime', monospace; font-size: 11.5px;
   }
   .bm-when{ color: var(--ink); }
@@ -1014,7 +1047,7 @@
     font-family: 'Courier Prime', monospace; background: var(--panel-2);
     border: 1px solid var(--panel-border); border-radius: 2px; color: var(--ink); outline: none;
   }
-  .gsearch-input::placeholder{ color: var(--ink-soft); opacity: 0.75; }
+  .global-search .gsearch-input::placeholder{ color: var(--ink-soft); opacity: 0.75; }
   .global-search .gsearch-input:focus{ border-color: var(--brass); }
   .gsearch-results{
     position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 35;
@@ -1043,7 +1076,7 @@
     padding: 3px 9px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
   .dash-status-in{ color: var(--green); }
   .dash-status-out{ color: var(--ink-soft); }
-  .dash-status-warn{ color: var(--stamp); }
+  .dash-status-warn{ color: var(--stamp-text); }
   .dash-welcome{ margin-top: 10px; font-size: 12.5px; color: var(--ink-soft); font-style: italic; }
   .dash-book{ display: flex; align-items: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
   .dash-k{ font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); }
@@ -1138,10 +1171,14 @@
 </style>
 </head>
 <body>
+<a class="skip-link" href="#app">Skip to content</a>
 <div id="refresh-bar" aria-hidden="true"></div>
-<div class="wrap" id="app">
+<!-- Persists across every render() (unlike #app's contents) so a spin
+     announcement isn't cut short by the tab switch that follows it. -->
+<div id="wheel-announce" class="sr-only" role="status" aria-live="polite"></div>
+<main class="wrap" id="app">
   <div class="loading">Pulling the ledger…</div>
-</div>
+</main>
 
 <script type="module">
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -1172,6 +1209,7 @@ let myUserRow = null;        // Current user's shelf_users row
 let spinning = false;
 let flashMsg = null;
 let pendingRender = false;
+let adminBusy = false;       // an admin-update call is in flight -- guards against a double-click firing the same action twice
 
 const setFlash = (kind, text) => {
   flashMsg = { kind, text };
@@ -1633,6 +1671,14 @@ const isLibrarianId = (id) => librarianIds.has(id);
 
 async function callAdmin(action, payload = {}) {
   if (!session) { setFlash("err", "Sign in first."); return; }
+  // Every admin action (except the wheel draw, which has its own "Choosing…"
+  // button-state) funnels through here with no busy feedback at all, so a
+  // fast double-click could fire the same action twice (double-undo,
+  // double-lock-in). One guard at the choke point covers every call site.
+  if (adminBusy) return;
+  adminBusy = true;
+  document.body.style.cursor = "wait";
+  setRefreshing(true);
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-update`, {
       method: "POST",
@@ -1662,15 +1708,64 @@ async function callAdmin(action, payload = {}) {
     render();
   } catch (err) {
     setFlash("err", `Network error: ${err.message}`);
+  } finally {
+    adminBusy = false;
+    document.body.style.cursor = "";
+    setRefreshing(false);
   }
 }
 
-function promptResetConfirmation() {
+// ---------- Modal helper ----------
+// Shared dialog semantics for the three custom modals (reset-confirm, the
+// rubric review wizard, the DNF modal): role=dialog/aria-modal, a Tab/Shift+Tab
+// focus trap that re-queries focusable elements live (so it keeps working
+// across the rubric wizard's repeated back.innerHTML rewrites between steps),
+// Escape-to-close, and restoring focus to whatever triggered the modal when
+// it closes. Each caller still owns its own markup/button wiring; this only
+// creates the backdrop + attaches the shared behavior and hands back
+// { back, close, focusFirst } for the caller to build on.
+function openModal({ labelledBy } = {}) {
+  const previouslyFocused = document.activeElement;
   const back = document.createElement("div");
   back.className = "modal-back";
+  back.setAttribute("role", "dialog");
+  back.setAttribute("aria-modal", "true");
+  if (labelledBy) back.setAttribute("aria-labelledby", labelledBy);
+  back.tabIndex = -1;
+
+  function focusables() {
+    return Array.from(back.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(el => el.offsetParent !== null);
+  }
+  function focusFirst() {
+    const f = focusables();
+    (f[0] || back).focus();
+  }
+  function close() {
+    if (!back.parentNode) return;
+    document.body.removeChild(back);
+    if (previouslyFocused && typeof previouslyFocused.focus === "function") previouslyFocused.focus();
+  }
+  back.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { close(); return; }
+    if (e.key !== "Tab") return;
+    const f = focusables();
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  back.addEventListener("click", (e) => { if (e.target === back) close(); });
+  document.body.appendChild(back);
+  return { back, close, focusFirst };
+}
+
+function promptResetConfirmation() {
+  const { back, close, focusFirst } = openModal({ labelledBy: "reset-confirm-title" });
   back.innerHTML = `
     <div class="modal">
-      <h3>Really wipe everything?</h3>
+      <h3 id="reset-confirm-title">Really wipe everything?</h3>
       <p>This erases <b>every past read</b>, <b>every winner</b>, and drops the round counter back to <b>Round 1</b>. Every reader's "I want to read" book will also be cleared. There is no undo.</p>
       <p>Type <b>RESET</b> below to confirm.</p>
       <input type="text" id="reset-confirm-input" autocomplete="off" placeholder="Type RESET" />
@@ -1680,16 +1775,13 @@ function promptResetConfirmation() {
       </div>
     </div>
   `;
-  document.body.appendChild(back);
   const input = back.querySelector("#reset-confirm-input");
   const goBtn = back.querySelector("#reset-confirm-go");
-  input.focus();
-  const close = () => { if (back.parentNode) document.body.removeChild(back); };
+  focusFirst();
   const isValid = () => input.value.trim() === "RESET";
   input.addEventListener("input", () => { goBtn.disabled = !isValid(); });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && isValid()) { close(); callAdmin("reset", {}); }
-    if (e.key === "Escape") close();
   });
   back.querySelector("#reset-confirm-cancel").addEventListener("click", close);
   goBtn.addEventListener("click", () => { close(); callAdmin("reset", {}); });
@@ -2006,11 +2098,7 @@ function openRubricModal(bookTs, bookTitle) {
   let note = mine?.note || "";
   let step = 0; // 0..4 = categories, then the summary page
 
-  const back = document.createElement("div");
-  back.className = "modal-back";
-  document.body.appendChild(back);
-  const close = () => { if (back.parentNode) document.body.removeChild(back); };
-  back.addEventListener("click", (e) => { if (e.target === back) close(); });
+  const { back, close } = openModal({ labelledBy: "rub-heading" });
 
   const title = esc(bookTitle || "this read");
 
@@ -2021,7 +2109,7 @@ function openRubricModal(bookTs, bookTitle) {
     back.innerHTML = `
       <div class="modal rubric-modal">
         <div class="rubric-progress">
-          <span class="rubric-step-label">${esc(label)}</span>
+          <span class="rubric-step-label" id="rub-heading" tabindex="-1">${esc(label)}</span>
           <span class="rubric-step-count">${step + 1} of ${RUBRIC.length}</span>
         </div>
         <div class="rubric-dots">${RUBRIC.map((_, i) => `<span class="${i === step ? 'on' : (i < step ? 'done' : '')}"></span>`).join("")}</div>
@@ -2054,6 +2142,7 @@ function openRubricModal(bookTs, bookTitle) {
     }));
     back.querySelector("#rub-back").addEventListener("click", () => { if (step === 0) close(); else { step--; renderStep(); } });
     back.querySelector("#rub-next").addEventListener("click", () => { step++; renderStep(); });
+    back.querySelector("#rub-heading").focus();
   }
 
   function renderSummary() {
@@ -2062,7 +2151,7 @@ function openRubricModal(bookTs, bookTitle) {
     const band = ratingBand(total);
     back.innerHTML = `
       <div class="modal rubric-modal">
-        <h3>Your review</h3>
+        <h3 id="rub-heading" tabindex="-1">Your review</h3>
         <p class="rubric-sub"><b>${title}</b></p>
         <div class="rubric-summary">
           ${RUBRIC.map(({ key, label }, i) => {
@@ -2091,6 +2180,7 @@ function openRubricModal(bookTs, bookTitle) {
       close();
       saveMyReview(bookTs, scores, note.trim());
     });
+    back.querySelector("#rub-heading").focus();
   }
 
   function renderStep() { if (step < RUBRIC.length) renderCategory(); else renderSummary(); }
@@ -2103,16 +2193,12 @@ function openDnfModal(bookTs, bookTitle) {
   const mine = myReviewFor(bookTs);
   let note = (mine && mine.dnf && mine.note) || "";
 
-  const back = document.createElement("div");
-  back.className = "modal-back";
-  document.body.appendChild(back);
-  const close = () => { if (back.parentNode) document.body.removeChild(back); };
-  back.addEventListener("click", (e) => { if (e.target === back) close(); });
+  const { back, close, focusFirst } = openModal({ labelledBy: "dnf-heading" });
 
   const title = esc(bookTitle || "this read");
   back.innerHTML = `
     <div class="modal rubric-modal">
-      <h3>Didn’t finish it?</h3>
+      <h3 id="dnf-heading">Didn’t finish it?</h3>
       <p class="rubric-sub">Mark <b>${title}</b> as a DNF instead of scoring it. You can still leave a note on why you set it down.</p>
       <textarea class="rubric-note" id="dnf-note" maxlength="500" placeholder="Optional — why you set it down">${esc(note)}</textarea>
       <div class="modal-actions">
@@ -2130,6 +2216,7 @@ function openDnfModal(bookTs, bookTitle) {
     close();
     saveMyReview(bookTs, "dnf", note.trim());
   });
+  focusFirst();
 }
 
 // ---------- Wheel ----------
@@ -2381,6 +2468,15 @@ async function runDraw() {
     spinning = false;
     const prevRound = state.roundNumber;
     if (body.state) state = normalizeState(body.state);
+    // The canvas spin itself is silent to a screen reader -- announce the
+    // result through a persistent aria-live region (see #wheel-announce),
+    // since the tab switch right after this would cut off a region that
+    // lived inside the re-rendered #app content instead.
+    const picked = state.history[0];
+    const announceEl = document.getElementById("wheel-announce");
+    if (picked && announceEl) {
+      announceEl.textContent = `${picked.winner_username || "A reader"} was picked to read "${picked.book || "a book"}".`;
+    }
     if (body.roundAdvanced && state.roundNumber > prevRound) {
       setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back on the shelf.`);
     }
@@ -3184,7 +3280,7 @@ function render() {
   ];
   if (!TABS.some(t => t.id === currentTab)) currentTab = "reading";
   html += `<nav class="tabs" role="tablist" aria-label="Sections">${TABS.map(t =>
-    `<button class="tab-btn ${t.adminTab ? 'tab-admin' : ''} ${currentTab === t.id ? 'on' : ''}" role="tab" aria-selected="${currentTab === t.id ? 'true' : 'false'}" data-tab="${t.id}">${t.label}</button>`
+    `<button class="tab-btn ${t.adminTab ? 'tab-admin' : ''} ${currentTab === t.id ? 'on' : ''}" id="tab-btn-${t.id}" role="tab" aria-selected="${currentTab === t.id ? 'true' : 'false'}" aria-controls="tab-panel" data-tab="${t.id}">${t.label}</button>`
   ).join("")}</nav>`;
 
   // ---- Global search (books + readers) ----
@@ -3196,7 +3292,7 @@ function render() {
 
   const tabSwitched = currentTab !== lastRenderedTab;
   lastRenderedTab = currentTab;
-  html += `<div class="tab-body${tabSwitched ? ' tab-enter' : ''}">`;
+  html += `<div class="tab-body${tabSwitched ? ' tab-enter' : ''}" id="tab-panel" role="tabpanel" aria-labelledby="tab-btn-${currentTab}" tabindex="0">`;
 
   // ---- Reading: Currently reading + Next up ----
   if (currentTab === "reading") {
@@ -3264,11 +3360,17 @@ function render() {
   if (eligibleCount === 0) {
     html += `<div class="wheel-empty">Add a book above to fill the shelf.</div>`;
   } else {
+    // The canvas has nothing for a screen reader to read beyond a static
+    // label, so describe it with the actual roster -- hidden visually,
+    // present in the DOM for anyone not looking at the spinning wheel.
     html += `
       <div class="wheel-holder">
         <div class="wheel-pointer"></div>
-        <canvas id="wheel-canvas" class="wheel-canvas" role="img" aria-label="Wheel of eligible readers"></canvas>
+        <canvas id="wheel-canvas" class="wheel-canvas" role="img" aria-label="Wheel of eligible readers" aria-describedby="wheel-reader-list"></canvas>
       </div>
+      <ul id="wheel-reader-list" class="sr-only">
+        ${eligibleSubs.map(e => `<li>${esc(e.name)} — ${esc(e.book)}</li>`).join("")}
+      </ul>
       <div class="spin-caption">${eligibleCount} book${eligibleCount === 1 ? '' : 's'} on the shelf</div>
     `;
   }
