@@ -2,7 +2,8 @@
 //
 // Librarian-gated writes for shelf_state. The caller's JWT is verified here
 // (deployed --no-verify-jwt so we can pull the user id out, same as set-book)
-// and must belong to a user present in shelf_librarians. Draw picks a random
+// and must have role = 'librarian' in club_members for DEFAULT_CLUB_ID --
+// club-scoped, not the global shelf_librarians table. Draw picks a random
 // eligible reader (from shelf_users where a book is set and their id isn't
 // already in eliminated). Round auto-advances when a pick empties the pool.
 //
@@ -411,9 +412,14 @@ Deno.serve(async (req) => {
     { auth: { persistSession: false } },
   );
 
-  const { data: lib } = await client
-    .from("shelf_librarians").select("user_id").eq("user_id", callerId).maybeSingle();
-  if (!lib) return json({ error: "not a librarian" }, 403);
+  // Club-scoped, not global: a shelf_librarians row makes someone a librarian
+  // everywhere, but club_members.role is per (club_id, user_id) -- this is the
+  // check that actually stops a librarian of one club from acting as one in
+  // another. shelf_librarians itself is untouched (still what the client's
+  // amLibrarian tab-gate reads; grant/revoke still dual-write both).
+  const { data: membership } = await client
+    .from("club_members").select("role").eq("club_id", DEFAULT_CLUB_ID).eq("user_id", callerId).maybeSingle();
+  if (membership?.role !== "librarian") return json({ error: "not a librarian" }, 403);
 
   let body: { action?: string; payload?: Record<string, unknown> };
   try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
