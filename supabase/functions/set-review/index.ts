@@ -3,7 +3,10 @@
 // Client-invoked endpoint that lets a signed-in reader submit (or clear) their
 // own rubric review for one past read. A review is five category scores (1..20)
 // from The Bibliomancer's Guild Review Rubric plus an optional short note. Rows
-// live in shelf_reviews, keyed by (book_ts, user_id).
+// live in shelf_reviews, keyed by (book_ts, user_id). A reader can instead
+// submit `dnf: true` to flag that they didn't finish the book -- a DNF row
+// skips the rubric scores entirely (they're stored null) rather than scoring
+// a book the reader didn't read to the end.
 //
 // Deploy:
 //   supabase functions deploy set-review --no-verify-jwt
@@ -52,6 +55,7 @@ Deno.serve(async (req) => {
   let body: {
     book_ts?: string;
     clear?: boolean;
+    dnf?: unknown;
     plot?: unknown; characters?: unknown; pacing?: unknown;
     language?: unknown; themes?: unknown; note?: unknown;
   };
@@ -101,11 +105,20 @@ Deno.serve(async (req) => {
     return json({ error: "ratings aren't open for this read yet" }, 403);
   }
 
-  let scores: Record<string, number>;
-  try {
-    scores = Object.fromEntries(CATEGORIES.map(c => [c, coerceScore((body as Record<string, unknown>)[c])]));
-  } catch (err) {
-    return json({ error: (err as Error).message }, 400);
+  const dnf = body.dnf === true;
+
+  // A DNF review carries no rubric scores -- the reader didn't finish the
+  // book, so there's nothing to score. A scored review still requires all
+  // five categories, same as before.
+  let scores: Record<string, number | null>;
+  if (dnf) {
+    scores = Object.fromEntries(CATEGORIES.map(c => [c, null]));
+  } else {
+    try {
+      scores = Object.fromEntries(CATEGORIES.map(c => [c, coerceScore((body as Record<string, unknown>)[c])]));
+    } catch (err) {
+      return json({ error: (err as Error).message }, 400);
+    }
   }
 
   const note = typeof body.note === "string" ? body.note.trim().slice(0, 500) : null;
@@ -116,6 +129,7 @@ Deno.serve(async (req) => {
       book_ts: bookTs,
       user_id: userId,
       ...scores,
+      dnf,
       note: note || null,
       updated_at: new Date().toISOString(),
     })
