@@ -1211,6 +1211,10 @@ let currentTab = "reading";  // active top-level tab in the main view
 let lastRenderedTab = null;  // currentTab as of the previous render() — lets us
                               // fade in tab content only on an actual tab switch,
                               // not on every background realtime refresh
+let lastRenderedHash = null; // location.hash as of the previous render() — lets us
+                              // scroll to top only on an actual route navigation,
+                              // not on every re-render of the same detail page
+                              // (e.g. replying to or reacting to a comment)
 let calendarMonth = null;    // { y, m } shown in the calendar grid; null = auto
 let session = null;          // Supabase auth session
 let myUserRow = null;        // Current user's shelf_users row
@@ -3230,6 +3234,12 @@ function render() {
   }
 
   const route = parseRoute();
+  // Scroll to top only on an actual navigation into a detail route (hash
+  // changed since the last render), not on every re-render of the same page
+  // triggered by a button click (reply, react, post/delete a comment, ...).
+  const routeHash = location.hash || "";
+  if (route.name !== "main" && routeHash !== lastRenderedHash) window.scrollTo(0, 0);
+  lastRenderedHash = routeHash;
   if (route.name === "book") {
     renderBookDetail(app, { kind: "past", round: route.round });
     return;
@@ -3686,7 +3696,6 @@ function recapReadRow(h) {
   </div>`;
 }
 function renderRecap(app, year) {
-  window.scrollTo(0, 0);
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
   const years = availableRecapYears();
   if (!years.length) {
@@ -3961,7 +3970,6 @@ function discussionHtml(bookTs) {
 }
 
 function renderBookDetail(app, ctx) {
-  window.scrollTo(0, 0);
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
 
   let book, eyebrow, metaLine, reviewHtml = "", discussionBlock = "", meetingsHtml = "", stampHtml = "";
@@ -4070,7 +4078,6 @@ async function decorateBookDetail(book) {
 // Tag page: past reads that carry a given subject (from "What we've been
 // reading"). tag is the normalized lowercase subject.
 function renderTagPage(app, tag) {
-  window.scrollTo(0, 0);
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
   app.innerHTML = `
     <header><div class="eyebrow">Tagged</div><h1>The Shelf</h1><div class="rule"></div></header>
@@ -4115,7 +4122,6 @@ async function decorateTagPage(tag) {
 // Reader profile: a picker's stats + their picks. key is a Discord id or
 // "name:<name>" for unlinked pickers.
 function renderReaderPage(app, key) {
-  window.scrollTo(0, 0);
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
 
   let name = "Reader", avatar = null, userId = null;
