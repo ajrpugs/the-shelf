@@ -204,15 +204,17 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     font-weight: 700;
-    transition: transform 0.1s ease;
+    transition: transform 0.1s ease, background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, filter 0.12s ease;
   }
-  button:active{ transform: scale(0.97); }
+  button:active:not(:disabled){ transform: scale(0.97); }
   button:disabled{ opacity: 0.4; cursor: not-allowed; }
   .btn-primary{ background: var(--stamp); color: var(--card); }
   .btn-primary:hover:not(:disabled){ filter: brightness(1.08); }
   .btn-mini:hover:not(:disabled){ filter: brightness(1.08); }
   .btn-mini.remove:hover:not(:disabled){ background: rgba(213,87,63,0.12); filter: none; }
   .btn-ghost{ background: transparent; color: var(--card); border: 1px solid rgba(255,255,255,0.25); }
+  .btn-ghost:hover:not(:disabled){ border-color: var(--brass); color: var(--brass); background: rgba(236,227,207,0.06); }
+  .btn-mini.ghost:hover:not(:disabled){ background: rgba(236,227,207,0.08); border-color: var(--ink); filter: none; }
   .btn-mini{ background: var(--green); color: var(--card); padding: 6px 10px; font-size: 11px; }
   .btn-mini.remove{ background: transparent; color: var(--stamp); border: 1px solid var(--stamp); }
   .btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
@@ -846,6 +848,7 @@
   .modal-actions button.btn-ghost{
     background: transparent; border: 1px solid var(--ink-soft); color: var(--ink-soft);
   }
+  .modal-actions button.btn-ghost:hover:not(:disabled){ border-color: var(--ink); color: var(--ink); background: rgba(236,227,207,0.06); }
 
   /* ---- Tab navigation ---- */
   .tabs{
@@ -1066,9 +1069,52 @@
     border-radius: 50%; cursor: pointer;
   }
   .react-opt:hover{ background: var(--panel-2); }
+
+  /* ---- Motion polish ---- */
+  /* Tab content fades/slides in only on an actual tab switch (see
+     `tabSwitched` in render()) — never on a background realtime refresh,
+     which reuses the same render() path but leaves lastRenderedTab unchanged. */
+  .tab-enter{ animation: tabIn 0.16s ease both; }
+  @keyframes tabIn{
+    from{ opacity: 0; transform: translateY(4px); }
+    to{ opacity: 1; transform: none; }
+  }
+  /* Modals are only ever inserted fresh (appendChild on open), so animating
+     their entrance never replays on unrelated re-renders. */
+  .modal-back{ animation: modalBackIn 0.15s ease both; }
+  .modal-back .modal{ animation: modalIn 0.18s cubic-bezier(.2,.8,.3,1.1) both; }
+  @keyframes modalBackIn{ from{ opacity: 0; } to{ opacity: 1; } }
+  @keyframes modalIn{
+    from{ opacity: 0; transform: translateY(10px) scale(0.97); }
+    to{ opacity: 1; transform: none; }
+  }
+
+  /* Thin indeterminate bar at the very top of the viewport while loadAll()
+     is in flight (initial load + every realtime-triggered refresh). Idle by
+     default (scaleX 0); toggled via #refresh-bar.active in loadAll(). */
+  #refresh-bar{
+    position: fixed; top: 0; left: 0; width: 100%; height: 2px;
+    z-index: 50; pointer-events: none;
+    background: var(--brass);
+    transform-origin: left;
+    transform: scaleX(0);
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  #refresh-bar.active{
+    opacity: 1;
+    animation: refreshSweep 1.1s ease-in-out infinite;
+  }
+  @keyframes refreshSweep{
+    0%{ transform: scaleX(0); transform-origin: left; }
+    45%{ transform: scaleX(1); transform-origin: left; }
+    55%{ transform: scaleX(1); transform-origin: right; }
+    100%{ transform: scaleX(0); transform-origin: right; }
+  }
 </style>
 </head>
 <body>
+<div id="refresh-bar" aria-hidden="true"></div>
 <div class="wrap" id="app">
   <div class="loading">Pulling the ledger…</div>
 </div>
@@ -1093,6 +1139,9 @@ let reactions = [];          // shelf_comment_reactions rows (emoji on comments)
 let leaderboardQuery = "";    // live filter text for the leaderboard
 let globalSearchQuery = "";   // live filter text for the header search
 let currentTab = "reading";  // active top-level tab in the main view
+let lastRenderedTab = null;  // currentTab as of the previous render() — lets us
+                              // fade in tab content only on an actual tab switch,
+                              // not on every background realtime refresh
 let calendarMonth = null;    // { y, m } shown in the calendar grid; null = auto
 let session = null;          // Supabase auth session
 let myUserRow = null;        // Current user's shelf_users row
@@ -1702,8 +1751,12 @@ async function signOut() {
 }
 
 // ---------- Data loading ----------
+function setRefreshing(on) {
+  document.getElementById("refresh-bar")?.classList.toggle("active", on);
+}
 async function loadAll() {
   if (!CONFIGURED) { render(); return; }
+  setRefreshing(true);
   try {
     const [{ data: sData, error: sErr }, { data: uData, error: uErr }, { data: rData, error: rErr }, { data: cData, error: cErr }, { data: readsData, error: readsErr }, { data: xData, error: xErr }] = await Promise.all([
       supabase.from("shelf_state").select("data").eq("id", 1).single(),
@@ -1739,6 +1792,7 @@ async function loadAll() {
   } catch (err) {
     setFlash("err", `Couldn't load: ${err.message}`);
   }
+  setRefreshing(false);
   render();
 }
 
@@ -3112,6 +3166,10 @@ function render() {
       <div id="global-search-results" class="gsearch-results">${globalSearchResultsHtml(globalSearchQuery)}</div>
     </div>`;
 
+  const tabSwitched = currentTab !== lastRenderedTab;
+  lastRenderedTab = currentTab;
+  html += `<div class="tab-body${tabSwitched ? ' tab-enter' : ''}">`;
+
   // ---- Reading: Currently reading + Next up ----
   if (currentTab === "reading") {
     // The rate pill lives on Currently reading — the book you finish and score.
@@ -3437,6 +3495,8 @@ function render() {
     </div>`;
     html += `</section>`;
   } // end admin tab
+
+  html += `</div>`; // end .tab-body
 
   // ---- Footer ----
   html += `<footer>`;
