@@ -247,6 +247,8 @@ Test harness for render + edge function logic. `reads` table replacing the `hist
 `clubs`, `club_members`, `profiles`, `club_secrets`. `club_id` on everything. New RLS + policy tests. Scope every query and the realtime subscriptions. Existing club migrates to club #1.
 **Exit:** two clubs coexist in the DB with no data bleed, proven by tests.
 
+Schema/RLS/dual-writes/query-scoping landed 2026-07-26. Isolation itself was verified manually the same day (no local Postgres/Docker in this environment, so no automated policy-test suite exists yet): a throwaway private second club + one real user as its only member were inserted directly via `supabase db query --linked`, then read back under `SET ROLE`/simulated JWT claims as (a) anon, (b) that member, (c) a real member of club #1 who is *not* a member of the test club, confirming (c) got zero rows from the test club while their own club's rows were unaffected — then the test club/member/rows were deleted. `profiles` and `club_secrets` are still not built; nothing depends on a second club existing yet, so this was a one-off proof, not regression coverage — a real automated policy-test suite is still owed before a second real club goes live.
+
 ### Phase 2 — Role-based librarian
 Retire `ADMIN_PASSWORD`. `admin-update` verifies JWT (pattern already exists in `set-book`) and checks `role = 'librarian'`.
 **Exit:** no shared secret anywhere; librarian rights are per-club.
