@@ -278,7 +278,7 @@ create table if not exists public.clubs (
 );
 
 insert into public.clubs (id, slug, name)
-values ('8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8', 'the-shelf', 'The Shelf')
+values ('8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8', 'the-shelf', 'The Guild')
 on conflict (id) do nothing;
 
 alter table public.clubs enable row level security;
@@ -532,3 +532,11 @@ alter table public.club_secrets enable row level security;
 insert into public.club_secrets (club_id)
 values ('8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8')
 on conflict (club_id) do nothing;
+
+-- 18. Rename the seeded club -----------------------------------------------
+-- "The Shelf" -> "The Guild" (the app itself keeps the name "The Shelf";
+-- see 20260727120000_rename_default_club.sql for the full rationale).
+
+update public.clubs
+set name = 'The Guild'
+where id = '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8';
