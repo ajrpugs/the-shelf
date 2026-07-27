@@ -259,9 +259,11 @@ Retire `ADMIN_PASSWORD`. `admin-update` verifies JWT (pattern already exists in 
 
 There was no literal `ADMIN_PASSWORD` by the time this landed — `shelf_librarians` (JWT-verified, role-based) already predated this plan. What this phase actually closed: `admin-update`'s authorization check read the *global* `shelf_librarians` table, so a librarian would have silently been a librarian in every club, not just their own. Landed 2026-07-26: the check now reads `club_members.role = 'librarian'` scoped to `DEFAULT_CLUB_ID` instead; `admin_grant_librarian`/`admin_revoke_librarian` dual-write both tables so `shelf_librarians` (still what the client's tab-gate reads) and `club_members.role` (what the server actually enforces) can't drift.
 
-### Phase 3 — Routing
+### Phase 3 — Routing — ✅ done
 No hosting move (see §1, decided 2026-07-26: staying on GitHub Pages). Add a `#/c/<slug>` hash router. Tabs get real (hash) URLs.
 **Exit:** deep links work on refresh; club resolves from the hash.
+
+Landed 2026-07-27: `index.html`'s tab bar now routes through `#/c/<slug>/<tab>` (`parseRoute()`/`goToTab()`) instead of an in-memory-only `currentTab`, so every tab has a real, refresh-safe, back-button-capable URL — closing the "`#tab=calendar` has no URL" gap called out in §1. `<slug>` is captured by `parseRoute()` but always `DEFAULT_CLUB_SLUG` ("the-shelf") for now; there's still no `clubs`-by-slug lookup anywhere in the client, so "club resolves from the hash" is only the URL *shape*, not real resolution — that part is genuinely Phase 4's job, once a second club actually exists to resolve to. The five pre-existing detail routes (`#book=`, `#shelf=`, `#tag=`, `#reader=`, `#recap`) are untouched.
 
 ### Phase 4 — Signup & lifecycle
 Create a club, invite codes, join, leave, transfer librarian, delete. Onboarding for an empty club.

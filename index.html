@@ -1194,9 +1194,12 @@ const SUPABASE_ANON_KEY = "sb_publishable_Ovyd_-OHfFzfUlT2mtirfw_73i3sYWv";
 const CONFIGURED = !SUPABASE_URL.startsWith("REPLACE_") && !SUPABASE_ANON_KEY.startsWith("REPLACE_");
 const supabase = CONFIGURED ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
-// Stand-in until per-club routing exists (Phase 3 of docs/multi-tenant-plan.md)
-// -- the only real club today. Matches the seeded row in supabase/schema.sql.
+// The only real club today. The #/c/<slug>/<tab> URL shape (Phase 3 of
+// docs/multi-tenant-plan.md) already exists -- see parseRoute()/goToTab()
+// below -- but real slug-to-club resolution is still Phase 4, so every
+// query stays hardcoded to this id regardless of what's in the hash.
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
+const DEFAULT_CLUB_SLUG = "the-shelf"; // matches the seeded clubs row
 
 // ---------- State ----------
 const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
@@ -2506,8 +2509,7 @@ async function runDraw() {
       setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back on the shelf.`);
     }
     // The wheel's result shows up as a banner on the Reading tab — go there.
-    currentTab = "reading";
-    render();
+    goToTab("reading");
   } catch (err) {
     spinning = false;
     setFlash("err", `Network error: ${err.message}`);
@@ -3234,6 +3236,7 @@ function render() {
   }
 
   const route = parseRoute();
+  if (route.tab) currentTab = route.tab;
   // Scroll to top only on an actual navigation into a detail route (hash
   // changed since the last render), not on every re-render of the same page
   // triggered by a button click (reply, react, post/delete a comment, ...).
@@ -3762,7 +3765,27 @@ function parseRoute() {
   if (reader) return { name: "reader", key: decodeURIComponent(reader[1]) };
   const recap = hash.match(/^#recap(?:=(\d{4}))?$/);
   if (recap) return { name: "recap", year: recap[1] ? parseInt(recap[1], 10) : null };
-  return { name: "main" };
+  // clubSlug is captured but intentionally unused for now (single-club
+  // stand-in, see DEFAULT_CLUB_ID above) -- parsing it now means this format
+  // won't need to change again once Phase 4 makes it meaningful.
+  const club = hash.match(/^#\/c\/([^/]+)\/?([a-z]*)$/);
+  if (club) return { name: "main", clubSlug: decodeURIComponent(club[1]), tab: club[2] || null };
+  return { name: "main", clubSlug: null, tab: null };
+}
+
+function tabHash(id) {
+  return `#/c/${DEFAULT_CLUB_SLUG}/${id}`;
+}
+
+function goToTab(id) {
+  const target = tabHash(id);
+  if (location.hash === target) {
+    // Already there -- hashchange won't fire, so drive the render ourselves.
+    currentTab = id;
+    render();
+  } else {
+    location.hash = target;
+  }
 }
 
 function renderDetailMissing(app, back, loading, msg) {
@@ -4340,8 +4363,7 @@ function wireUp() {
       // render() defers while an input holds focus (Safari doesn't focus
       // buttons on click), so drop focus before switching.
       document.activeElement?.blur?.();
-      currentTab = id;
-      render();
+      goToTab(id);
     });
   });
 
@@ -4566,14 +4588,12 @@ document.addEventListener("click", (e) => {
     if (gi) gi.value = "";
     if (gr) gr.innerHTML = "";
   }
-  // Jump to a tab from anywhere — including a book detail page, which is a hash
-  // route, so we clear the hash and let hashchange do the render.
+  // Jump to a tab from anywhere — including a book detail page, which is a
+  // hash route, so this goes through the URL too (goToTab).
   const goto = e.target.closest("[data-goto-tab]");
   if (goto) {
     e.preventDefault();
-    currentTab = goto.dataset.gotoTab;
-    if (location.hash && location.hash !== "#") location.hash = "";
-    else render();
+    goToTab(goto.dataset.gotoTab);
     window.scrollTo(0, 0);
     return;
   }
