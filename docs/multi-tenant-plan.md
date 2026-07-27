@@ -1,7 +1,7 @@
 # Multi-tenant plan — "The Shelf" as a product
 
 **Status:** Phases 0–2 (harden, tenancy foundation, per-club librarian role) are implemented and live in production. Phases 3–7 (routing/hosting move, signup/invites, more auth providers, per-club settings, frontend restructure) are still proposal — see §8 for what's actually landed vs. what isn't.
-**Goal:** anyone can sign up at a custom domain, create a book club, invite members, and run the wheel/meetings/reviews flow independently of every other club. That goal itself hasn't been committed to yet (see §10, still unanswered) — what's landed so far is the correctness/security foundation that both "stay single-club forever" and "open it up" need either way.
+**Goal (decided 2026-07-26, see §10):** friends can create private book clubs at `sh3lf.net`, invite members, and run the wheel/meetings/reviews flow independently of every other club — free, invite-only (not open public signup), Discord optional per club rather than required.
 
 This builds on the feasibility findings: the blocker isn't difficulty, it's that the data model changes under everything at once, and there are currently no tests to catch what breaks.
 
@@ -221,17 +221,17 @@ Upgrade to **Supabase Pro** for reliability, not capacity:
 
 ## 7. Open-signup consequences
 
-Going from "my club" to "anyone's club" adds product surface that has nothing to do with books:
+**Narrowed by §10:** this is invite-only for friends, not open public signup — no discovery surface, no anonymous strangers creating clubs. That drops the spam/abuse-vector items below to non-issues and lightens moderation/legal, but the lifecycle basics still apply since clubs are still genuinely multi-tenant (multiple independent friend groups, each private):
 
-- **Club creation limits** — rate-limit per user per day, or it's a spam vector.
-- **Slug rules** — validation, reserved words (`admin`, `api`, `c`, `new`…), squatting.
-- **Lifecycle** — leave a club; transfer librarian; last librarian leaving must promote or archive, not orphan.
+- ~~**Club creation limits**~~ — not needed without open signup; still worth a sane per-user cap so one person can't accidentally spin up dozens.
+- **Slug rules** — still needed for `/c/<slug>` routing: validation, reserved words (`admin`, `api`, `c`, `new`…).
+- **Lifecycle** — leave a club; transfer librarian; last librarian leaving must promote or archive, not orphan. Still needed — friend groups disband and reform too.
 - **Deletion** — delete a club, delete an account, with cascades that actually work.
-- **Moderation** — comments are user content. Public clubs are world-readable. Needs at minimum a delete path and a way to reach you.
-- **Legal** — Terms + Privacy once you hold other people's accounts and content. Account deletion must genuinely delete.
+- **Moderation** — lighter: clubs are private by default, so comments are only visible to invited members, not world-readable. Still worth a delete path for a bad actor within a friend group.
+- **Legal** — lighter than an open product, but still holding other people's accounts/content — a minimal Terms + Privacy is still owed once friends outside the original circle join.
 - **Support** — someone will lock themselves out of librarian mode.
 
-None is hard. Together they're comparable in size to the tenancy work itself, and they're easy to under-budget.
+Smaller than the original open-signup scope, but not zero. The tenancy work in §1–6 doesn't change either way.
 
 ---
 
@@ -245,11 +245,13 @@ Test harness for render + edge function logic. `reads` table replacing the `hist
 
 Landed before the tenancy work below started. `supabase/functions/_shared/shelf-logic.mjs` holds the pure draw/undo/rating/meeting logic, covered by `node --test`; `reads` is the live source of truth for history; `shelf_state.version` guards every admin write. This was the baseline Phase 1 built on.
 
-### Phase 1 — Tenancy foundation — ✅ done (schema/RLS/scoping); ⬜ automated isolation tests, `profiles`, `club_secrets`
+### Phase 1 — Tenancy foundation — ✅ done
 `clubs`, `club_members`, `profiles`, `club_secrets`. `club_id` on everything. New RLS + policy tests. Scope every query and the realtime subscriptions. Existing club migrates to club #1.
 **Exit:** two clubs coexist in the DB with no data bleed, proven by tests.
 
-Schema/RLS/dual-writes/query-scoping landed 2026-07-26. Isolation itself was verified manually the same day (no local Postgres/Docker in this environment, so no automated policy-test suite exists yet): a throwaway private second club + one real user as its only member were inserted directly via `supabase db query --linked`, then read back under `SET ROLE`/simulated JWT claims as (a) anon, (b) that member, (c) a real member of club #1 who is *not* a member of the test club, confirming (c) got zero rows from the test club while their own club's rows were unaffected — then the test club/member/rows were deleted. `profiles` and `club_secrets` are still not built; nothing depends on a second club existing yet, so this was a one-off proof, not regression coverage — a real automated policy-test suite is still owed before a second real club goes live.
+Schema/RLS/dual-writes/query-scoping landed 2026-07-26. Isolation itself was first verified manually the same day (no local Postgres/Docker in this environment, so no automated policy-test suite existed yet): a throwaway private second club + one real user as its only member were inserted directly via `supabase db query --linked`, then read back under `SET ROLE`/simulated JWT claims as (a) anon, (b) that member, (c) a real member of club #1 who is *not* a member of the test club, confirming (c) got zero rows from the test club while their own club's rows were unaffected — then the test club/member/rows were deleted. `profiles` and `club_secrets` did not exist yet at that point.
+
+All three gaps closed 2026-07-26: `profiles` (identity separate from any one club, one-time backfill from `shelf_users`, not yet consumed by anything — see `supabase/migrations/20260726200000_add_profiles_table.sql`) and `club_secrets` (per-club Discord webhook + calendar token, service-role only, no RLS policies at all — `supabase/migrations/20260726210000_add_club_secrets_table.sql`) are both additive, same as every other Phase 1 slice. The manual isolation check above is now automated and checked in as `supabase/tests/rls-isolation.test.mjs` (`node --test supabase/tests/rls-isolation.test.mjs`) — same technique (throwaway private club, `SET ROLE`/JWT-claims simulation, cleans up after itself), but now covering all six club-scoped tables (`reads`, `shelf_state`, `shelf_reviews`, `shelf_comments`, `shelf_comment_reactions`, `club_members`) instead of a one-off subset, and repeatable on demand rather than a single manual proof.
 
 ### Phase 2 — Role-based librarian — ✅ done
 Retire `ADMIN_PASSWORD`. `admin-update` verifies JWT (pattern already exists in `set-book`) and checks `role = 'librarian'`.
@@ -286,13 +288,13 @@ Name, tagline, timezone (retire the hardcoded `America/Toronto`), cadence, own D
 
 ---
 
-## 10. Decisions needed before Phase 0
+## 10. Decisions needed before Phase 0 — ✅ answered 2026-07-26
 
-1. **Domain name?** Everything downstream (branding, emails, OAuth redirect URIs) keys off it.
-2. **Are clubs public or private by default?** Private is the safer default and simplifies moderation. Public unlocks discovery.
-3. **Is Discord still first-class,** or one integration among several? Affects how much of the current bot surface survives.
-4. **Free forever, or eventually paid?** Doesn't change Phase 0–2, but changes whether billing needs designing into the club model.
-5. **Is this a product you want to support,** with the moderation and support load in §7? That's the real question — the engineering is the easy half.
+1. **Domain name?** `sh3lf.net` — already owned and already the `CNAME` for the current single-club GitHub Pages deployment. Phase 3's move to Cloudflare Pages keeps this domain; only the host and its DNS records change (GitHub Pages' A/CNAME records → Cloudflare Pages').
+2. **Are clubs public or private by default?** Private. The one seeded club (`the-shelf`, `visibility = 'public'`) stays as-is — new clubs default to `private`.
+3. **Is Discord still first-class,** or one integration among several? **Not first-class.** Some clubs won't use it at all, so Discord becomes fully optional per club (§4/§9: no webhook configured = no Discord integration, `/mybook` and the winner ping degrade gracefully when a member has no `discord_id`).
+4. **Free forever, or eventually paid?** Free. No billing/plan model needed anywhere in the club schema.
+5. **Is this a product you want to support?** Yes, but scoped down from "anyone can sign up" to **multi-tenant for friends** — invite-based clubs, not open public signup. This narrows §7: no discovery, no spam-vector club-creation limits, lighter moderation/legal load than an open product would need, since membership stays invite-only among people who know each other. Still needs the leave/transfer-librarian/delete lifecycle basics — those aren't specific to public signup.
 
 ---
 

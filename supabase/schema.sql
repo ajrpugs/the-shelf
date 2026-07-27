@@ -472,3 +472,63 @@ create policy "club_members read for all"
 
 alter table public.shelf_comments
   add column if not exists parent_id uuid references public.shelf_comments(id) on delete cascade;
+
+-- 16. profiles ------------------------------------------------------------
+-- Phase 1 of docs/multi-tenant-plan.md: identity separate from any one club.
+-- Additive only -- a one-time snapshot backfill from shelf_users, not a live
+-- mirror; shelf_users stays the live source of truth until something
+-- (Phase 5, more auth providers) actually consumes this table. See
+-- 20260726200000_add_profiles_table.sql for the full rationale.
+
+create table if not exists public.profiles (
+  id           uuid primary key references auth.users(id) on delete cascade,
+  display_name text not null default 'Reader',
+  avatar_url   text,
+  discord_id   text unique,
+  updated_at   timestamptz default now()
+);
+
+alter table public.profiles enable row level security;
+
+drop policy if exists "profiles read for all" on public.profiles;
+create policy "profiles read for all"
+  on public.profiles for select
+  to anon, authenticated
+  using (true);
+
+drop policy if exists "profiles insert self" on public.profiles;
+create policy "profiles insert self"
+  on public.profiles for insert
+  to authenticated
+  with check (auth.uid() = id);
+
+drop policy if exists "profiles update self" on public.profiles;
+create policy "profiles update self"
+  on public.profiles for update
+  to authenticated
+  using (auth.uid() = id)
+  with check (auth.uid() = id);
+
+insert into public.profiles (id, display_name, avatar_url, discord_id)
+select id, discord_username, avatar_url, discord_id
+from public.shelf_users
+on conflict (id) do nothing;
+
+-- 17. club_secrets --------------------------------------------------------
+-- Phase 1 of docs/multi-tenant-plan.md: per-club secrets (Discord webhook,
+-- calendar token), unreachable from anon/authenticated -- no RLS policies at
+-- all, service-role only. Additive only -- nothing reads discord_webhook_url
+-- or calendar_token yet (Phase 6). See
+-- 20260726210000_add_club_secrets_table.sql for the full rationale.
+
+create table if not exists public.club_secrets (
+  club_id             uuid primary key references public.clubs(id),
+  discord_webhook_url text,
+  calendar_token      text not null unique default gen_random_uuid()::text
+);
+
+alter table public.club_secrets enable row level security;
+
+insert into public.club_secrets (club_id)
+values ('8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8')
+on conflict (club_id) do nothing;
