@@ -278,7 +278,7 @@ create table if not exists public.clubs (
 );
 
 insert into public.clubs (id, slug, name)
-values ('8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8', 'the-shelf', 'The Guild')
+values ('8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8', 'the-guild', 'The Guild')
 on conflict (id) do nothing;
 
 alter table public.clubs enable row level security;
@@ -539,4 +539,12 @@ on conflict (club_id) do nothing;
 
 update public.clubs
 set name = 'The Guild'
+where id = '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8';
+
+-- 19. Rename the seeded club's slug ----------------------------------------
+-- 'the-shelf' -> 'the-guild', to match the name change above. See
+-- 20260727130000_rename_default_club_slug.sql for the full rationale.
+
+update public.clubs
+set slug = 'the-guild'
 where id = '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8';
