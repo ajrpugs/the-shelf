@@ -1,7 +1,7 @@
 # Multi-tenant plan — "The Shelf" as a product
 
 **Status:** Phases 0–2 (harden, tenancy foundation, per-club librarian role) are implemented and live in production. Phases 3–7 (routing/hosting move, signup/invites, more auth providers, per-club settings, frontend restructure) are still proposal — see §8 for what's actually landed vs. what isn't.
-**Goal (decided 2026-07-26, see §10):** friends can create private book clubs at `sh3lf.net`, invite members, and run the wheel/meetings/reviews flow independently of every other club — free, invite-only (not open public signup), Discord optional per club rather than required.
+**Goal (decided 2026-07-26, revised 2026-07-27, see §10):** anyone can sign up at `sh3lf.net`, create their own private book club (no invite needed to create one), invite members, and run the wheel/meetings/reviews flow independently of every other club — free, open signup, Discord optional per club rather than required.
 
 This builds on the feasibility findings: the blocker isn't difficulty, it's that the data model changes under everything at once, and there are currently no tests to catch what breaks.
 
@@ -221,17 +221,17 @@ Upgrade to **Supabase Pro** for reliability, not capacity:
 
 ## 7. Open-signup consequences
 
-**Narrowed by §10:** this is invite-only for friends, not open public signup — no discovery surface, no anonymous strangers creating clubs. That drops the spam/abuse-vector items below to non-issues and lightens moderation/legal, but the lifecycle basics still apply since clubs are still genuinely multi-tenant (multiple independent friend groups, each private):
+**Reopened in full by §10 (revised 2026-07-27):** briefly scoped down to invite-only friends for one day, reverted back to open signup — anyone can register and create their own club, with no invite required to create one. This is real product surface that has nothing to do with books:
 
-- ~~**Club creation limits**~~ — not needed without open signup; still worth a sane per-user cap so one person can't accidentally spin up dozens.
-- **Slug rules** — still needed for `/c/<slug>` routing: validation, reserved words (`admin`, `api`, `c`, `new`…).
-- **Lifecycle** — leave a club; transfer librarian; last librarian leaving must promote or archive, not orphan. Still needed — friend groups disband and reform too.
+- **Club creation limits** — rate-limit per user per day, or it's a spam vector.
+- **Slug rules** — validation, reserved words (`admin`, `api`, `c`, `new`…), squatting. Needed regardless for `/c/<slug>` routing, but squatting specifically only matters once strangers (not just people you know) can claim any slug they want.
+- **Lifecycle** — leave a club; transfer librarian; last librarian leaving must promote or archive, not orphan.
 - **Deletion** — delete a club, delete an account, with cascades that actually work.
-- **Moderation** — lighter: clubs are private by default, so comments are only visible to invited members, not world-readable. Still worth a delete path for a bad actor within a friend group.
-- **Legal** — lighter than an open product, but still holding other people's accounts/content — a minimal Terms + Privacy is still owed once friends outside the original circle join.
+- **Moderation** — clubs still default to `private` (§10 item 2), so most content stays invite-only-visible even under open signup — but a stranger's account and a stranger's club are no longer the same trust level as a friend's. Needs at minimum a delete path and a way to reach you; a club explicitly marked public is now world-readable to anyone, including people you've never met.
+- **Legal** — Terms + Privacy once you hold accounts/content for people you don't personally know. Account deletion must genuinely delete.
 - **Support** — someone will lock themselves out of librarian mode.
 
-Smaller than the original open-signup scope, but not zero. The tenancy work in §1–6 doesn't change either way.
+None is hard. Together they're comparable in size to the tenancy work itself, and they're easy to under-budget. The tenancy work in §1–6 doesn't change either way.
 
 ---
 
@@ -266,7 +266,7 @@ No hosting move (see §1, decided 2026-07-26: staying on GitHub Pages). Add a `#
 Landed 2026-07-27: `index.html`'s tab bar now routes through `#/c/<slug>/<tab>` (`parseRoute()`/`goToTab()`) instead of an in-memory-only `currentTab`, so every tab has a real, refresh-safe, back-button-capable URL — closing the "`#tab=calendar` has no URL" gap called out in §1. `<slug>` is captured by `parseRoute()` but always `DEFAULT_CLUB_SLUG` ("the-guild" — renamed the same day from "the-shelf" to match the club's display name, "The Guild") for now; there's still no `clubs`-by-slug lookup anywhere in the client, so "club resolves from the hash" is only the URL *shape*, not real resolution — that part is genuinely Phase 4's job, once a second club actually exists to resolve to. The five pre-existing detail routes (`#book=`, `#shelf=`, `#tag=`, `#reader=`, `#recap`) are untouched.
 
 ### Phase 4 — Signup & lifecycle
-Create a club, invite codes, join, leave, transfer librarian, delete. Onboarding for an empty club.
+Create a club, invite codes, join, leave, transfer librarian, delete. Onboarding for an empty club. Since §7 is open in full again (open signup, revised 2026-07-27), this phase also owns club-creation rate limiting and slug validation/reserved words — not just the lifecycle actions.
 **Exit:** a stranger can go from landing page to a running club without you.
 
 ### Phase 5 — Auth providers
@@ -296,7 +296,7 @@ Name, tagline, timezone (retire the hardcoded `America/Toronto`), cadence, own D
 2. **Are clubs public or private by default?** Private. The one seeded club (`the-guild`, `visibility = 'public'`) stays as-is — new clubs default to `private`.
 3. **Is Discord still first-class,** or one integration among several? **Not first-class.** Some clubs won't use it at all, so Discord becomes fully optional per club (§4/§9: no webhook configured = no Discord integration, `/mybook` and the winner ping degrade gracefully when a member has no `discord_id`).
 4. **Free forever, or eventually paid?** Free. No billing/plan model needed anywhere in the club schema.
-5. **Is this a product you want to support?** Yes, but scoped down from "anyone can sign up" to **multi-tenant for friends** — invite-based clubs, not open public signup. This narrows §7: no discovery, no spam-vector club-creation limits, lighter moderation/legal load than an open product would need, since membership stays invite-only among people who know each other. Still needs the leave/transfer-librarian/delete lifecycle basics — those aren't specific to public signup.
+5. **Is this a product you want to support?** Yes — **revised 2026-07-27: open signup.** Originally scoped down to invite-only friends (2026-07-26), reconsidered the next day back to the plan's original framing: anyone can create an account and spin up their own new club with no invite from anyone. Clubs themselves still default to `private` (item 2, unchanged) — open signup is about who can register and create a club, not about clubs being publicly discoverable; a club is still only reachable by whoever holds its slug/invite unless someone explicitly flips it to public. This reopens §7 in full: club-creation limits, slug/reserved-word validation, and heavier moderation/legal footing all matter again, since accounts and content can now come from unvetted strangers, not just people you personally invited.
 
 ---
 
