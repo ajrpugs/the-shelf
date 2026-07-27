@@ -11,23 +11,23 @@ This builds on the feasibility findings: the blocker isn't difficulty, it's that
 
 | Concern | Today | Target |
 |---|---|---|
-| Hosting | GitHub Pages | Cloudflare Pages (free, custom domain, SPA rewrites) |
-| URL | `ajrpugs.github.io/the-shelf/` | `<domain>/c/<club-slug>` |
+| Hosting | GitHub Pages | GitHub Pages (unchanged — see below) |
+| URL | `sh3lf.net/` | `sh3lf.net/#/c/<club-slug>` |
 | Auth | Discord only | Email magic link + Google + Discord |
 | Club state | `shelf_state` row `id=1` | `club_state` row per club |
 | Past reads | jsonb array inside that row | `reads` table |
 | Librarian | one shared `ADMIN_PASSWORD` | `club_members.role = 'librarian'` |
 | Reads/writes | unscoped `select("*")` | scoped by `club_id` everywhere |
 
-### Routing: path-based, not subdomains
+### Routing: hash-based, staying on GitHub Pages — decided 2026-07-26
 
-Use `/c/<slug>` (e.g. `theshelf.club/c/bibliomancers`). Subdomains (`bibliomancers.theshelf.club`) look nicer but need wildcard DNS + wildcard certs + per-tenant host handling — not worth it at this stage. Path routing needs one cert and one SPA rewrite rule.
+**Decision:** stay on GitHub Pages; route with `#/c/<slug>` (e.g. `sh3lf.net/#/c/bibliomancers`) instead of a real path (`sh3lf.net/c/bibliomancers`).
 
-This finally forces a real router, which also fixes the tab-linking problem we've hit three times (`#tab=calendar` has no URL today).
+GitHub Pages serves static files only — it has no way to say "serve `index.html` for any path," so a direct link or refresh on a real `/c/bibliomancers` path would 404. Moving to Cloudflare Pages (or Netlify/Vercel) would fix that with a `_redirects` rule (`/* /index.html 200`), but for a free, invite-only, friends-scale product that migration isn't worth it just for cosmetically cleaner URLs — GitHub Pages never even sees the part of the URL after `#`, so hash routing needs zero hosting changes at all.
 
-### Hosting: move off GitHub Pages
+Tradeoff accepted: hash URLs work fine for people clicking links but don't give a server-side redirect or a link-preview bot a real path to read, and look slightly less clean. Neither matters for this product's actual audience.
 
-Pages *does* support a custom domain, but it can't do SPA path rewrites — `/c/foo` would 404 on refresh. Cloudflare Pages (or Netlify/Vercel) gives a `_redirects` rule (`/* /index.html 200`), free custom domain + TLS, and is a drop-in for a static file. No build step required to move.
+This still forces a real router (just hash-based instead of path-based), which fixes the tab-linking problem hit three times already (`#tab=calendar` has no URL today) — same win as path routing would have given, without the hosting move.
 
 ---
 
@@ -213,7 +213,7 @@ Upgrade to **Supabase Pro** for reliability, not capacity:
 |---|---|
 | Supabase Pro | ~$25/mo *(verify current pricing)* |
 | Domain | ~$12/yr |
-| Cloudflare Pages | $0 |
+| GitHub Pages | $0 |
 
 ≈ **$26/mo**. Fine as a hobby; needs a funding answer if it grows.
 
@@ -259,9 +259,9 @@ Retire `ADMIN_PASSWORD`. `admin-update` verifies JWT (pattern already exists in 
 
 There was no literal `ADMIN_PASSWORD` by the time this landed — `shelf_librarians` (JWT-verified, role-based) already predated this plan. What this phase actually closed: `admin-update`'s authorization check read the *global* `shelf_librarians` table, so a librarian would have silently been a librarian in every club, not just their own. Landed 2026-07-26: the check now reads `club_members.role = 'librarian'` scoped to `DEFAULT_CLUB_ID` instead; `admin_grant_librarian`/`admin_revoke_librarian` dual-write both tables so `shelf_librarians` (still what the client's tab-gate reads) and `club_members.role` (what the server actually enforces) can't drift.
 
-### Phase 3 — Routing + hosting
-Move to Cloudflare Pages, custom domain, `/c/<slug>` router. Tabs get real URLs.
-**Exit:** deep links work on refresh; club resolves from the path.
+### Phase 3 — Routing
+No hosting move (see §1, decided 2026-07-26: staying on GitHub Pages). Add a `#/c/<slug>` hash router. Tabs get real (hash) URLs.
+**Exit:** deep links work on refresh; club resolves from the hash.
 
 ### Phase 4 — Signup & lifecycle
 Create a club, invite codes, join, leave, transfer librarian, delete. Onboarding for an empty club.
@@ -290,7 +290,7 @@ Name, tagline, timezone (retire the hardcoded `America/Toronto`), cadence, own D
 
 ## 10. Decisions needed before Phase 0 — ✅ answered 2026-07-26
 
-1. **Domain name?** `sh3lf.net` — already owned and already the `CNAME` for the current single-club GitHub Pages deployment. Phase 3's move to Cloudflare Pages keeps this domain; only the host and its DNS records change (GitHub Pages' A/CNAME records → Cloudflare Pages').
+1. **Domain name?** `sh3lf.net` — already owned and already the `CNAME` for the current single-club GitHub Pages deployment. Phase 3 (decided 2026-07-26) stays on GitHub Pages with hash-based routing instead of moving hosts, so nothing about the domain/DNS changes at all.
 2. **Are clubs public or private by default?** Private. The one seeded club (`the-shelf`, `visibility = 'public'`) stays as-is — new clubs default to `private`.
 3. **Is Discord still first-class,** or one integration among several? **Not first-class.** Some clubs won't use it at all, so Discord becomes fully optional per club (§4/§9: no webhook configured = no Discord integration, `/mybook` and the winner ping degrade gracefully when a member has no `discord_id`).
 4. **Free forever, or eventually paid?** Free. No billing/plan model needed anywhere in the club schema.
