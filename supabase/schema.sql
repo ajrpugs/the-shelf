@@ -621,3 +621,86 @@ alter table public.shelf_reviews add primary key (club_id, book_ts, user_id);
 
 create index if not exists shelf_comments_club_book_idx
   on public.shelf_comments (club_id, book_ts, created_at);
+
+-- 23. Phase 4: club lifecycle ---------------------------------------------
+-- Creating a club, invites, leaving, deleting. See
+-- 20260809160000_club_lifecycle.sql for the full rationale, including the two
+-- things the original tables never had: a default on clubs.id, and ON DELETE
+-- CASCADE on the club_id foreign keys (so a club could actually be deleted).
+
+alter table public.clubs alter column id set default gen_random_uuid();
+
+alter table public.clubs
+  add column if not exists created_by uuid references auth.users(id) on delete set null;
+create index if not exists clubs_created_by_idx on public.clubs (created_by, created_at desc);
+
+alter table public.clubs drop constraint if exists clubs_slug_shape_chk;
+alter table public.clubs
+  add constraint clubs_slug_shape_chk
+  check (slug ~ '^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$' and slug !~ '--');
+
+create or replace function public.is_librarian(club uuid)
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.club_members
+    where club_id = club and user_id = auth.uid() and role = 'librarian'
+  );
+$$;
+
+create table if not exists public.club_invites (
+  code       text primary key,
+  club_id    uuid not null references public.clubs(id) on delete cascade,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz,
+  max_uses   int check (max_uses is null or max_uses > 0),
+  uses       int not null default 0,
+  revoked    boolean not null default false
+);
+create index if not exists club_invites_club_idx on public.club_invites (club_id, created_at desc);
+
+alter table public.club_invites enable row level security;
+
+-- Librarian-only, not member-only: an invite code is a credential.
+drop policy if exists "club_invites read for librarians" on public.club_invites;
+create policy "club_invites read for librarians"
+  on public.club_invites for select
+  to authenticated
+  using (is_librarian(club_id));
+
+-- Every club_id foreign key cascades, so deleting a club is possible at all.
+do $$
+declare r record;
+begin
+  for r in
+    select c.conname, c.conrelid::regclass::text as tbl
+    from pg_constraint c
+    where c.confrelid = 'public.clubs'::regclass
+      and c.contype = 'f'
+      and c.confdeltype <> 'c'
+  loop
+    execute format('alter table %s drop constraint %I', r.tbl, r.conname);
+    execute format(
+      'alter table %s add constraint %I foreign key (club_id) references public.clubs(id) on delete cascade',
+      r.tbl, r.conname
+    );
+  end loop;
+end $$;
+
+-- 24. Privileges ----------------------------------------------------------
+-- RLS decides which rows; privileges decide whether the role may touch the
+-- table at all. Production only had these because the original tables were
+-- created through the SQL editor -- see 20260809150000.
+
+grant usage on schema public to anon, authenticated, service_role;
+grant all on all tables    in schema public to anon, authenticated, service_role;
+grant all on all sequences in schema public to anon, authenticated, service_role;
+grant all on all functions in schema public to anon, authenticated, service_role;
+alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
+alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+alter default privileges in schema public grant all on functions to anon, authenticated, service_role;

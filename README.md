@@ -20,6 +20,8 @@ Single-page HTML frontend + Supabase backend (Postgres + Realtime + Edge Functio
   - Set/clear a read's Guild score, open or close member reviews for it, bulk-import reviews, and schedule (or re-announce) its 50%/100% discussion meetings.
   - Grant or revoke the librarian role for other readers.
 
+- **Anyone signed in** can start their own club from `#/new` (up to 3 a day). New clubs are private: only people holding the link or an invite can see them. A librarian creates invite links from the Admin tab; joining is `#/join/<code>`. You can leave a club from the footer — unless you're its last librarian, in which case promote someone or delete the club. Deleting a club removes everything in it.
+
 There is no explicit roster — the pool is whoever has a book set. Once you're picked, you sit out until the pool empties (the round auto-advances) or the librarian starts a new round manually.
 
 Each reader's book lives on their account (`shelf_users`), so it persists across rounds until they change it. When a book is set/changed, the wheel picks a winner, a read's discussion dates change, or a read gets a committed score, an embed is posted to the configured Discord channel.
@@ -31,7 +33,7 @@ The app is organized into tabs: **Reading** (what's currently being read / up ne
 ### 1. Supabase project
 
 1. Create a free project at [supabase.com](https://supabase.com).
-2. Open the **SQL editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates all eleven tables (`shelf_state`, `reads`, `shelf_users`, `shelf_reviews`, `shelf_comments`, `shelf_comment_reactions`, `shelf_librarians`, `clubs`, `club_members`, `profiles`, `club_secrets`), their RLS policies, and hooks seven of them into realtime. `clubs`/`club_members` are the groundwork for eventually supporting more than one club (see [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md)) — everything below still just runs your one club, seeded automatically by the schema.
+2. Open the **SQL editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates all twelve tables (`shelf_state`, `reads`, `shelf_users`, `shelf_reviews`, `shelf_comments`, `shelf_comment_reactions`, `shelf_librarians`, `clubs`, `club_members`, `club_invites`, `profiles`, `club_secrets`), their RLS policies, and hooks seven of them into realtime. The app is multi-club as of Phase 4 (see [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md)): the schema seeds one club, and readers can create their own from `#/new`.
 
 ### 2. Discord OAuth (sign-in)
 
@@ -47,7 +49,7 @@ You need the [Supabase CLI](https://supabase.com/docs/guides/cli) installed and 
 ```bash
 supabase link --project-ref <your-project-ref>
 
-# Deploy all six functions (each needs --no-verify-jwt — every one of them
+# Deploy all seven functions (each needs --no-verify-jwt — every one of them
 # verifies the caller itself instead of relying on Supabase's built-in check)
 supabase functions deploy admin-update --no-verify-jwt
 supabase functions deploy set-book --no-verify-jwt
@@ -55,6 +57,7 @@ supabase functions deploy discord-interactions --no-verify-jwt
 supabase functions deploy set-review --no-verify-jwt
 supabase functions deploy post-comment --no-verify-jwt
 supabase functions deploy calendar-feed --no-verify-jwt
+supabase functions deploy club-admin --no-verify-jwt
 ```
 
 `--no-verify-jwt` matters: these functions are called with the anon key from the browser (or, for `discord-interactions`, directly by Discord; or, for `calendar-feed`, directly by a calendar client with no auth header at all). Each does its own auth check.
@@ -64,6 +67,7 @@ supabase functions deploy calendar-feed --no-verify-jwt
 - **`discord-interactions`** — backs the `/mybook` slash command (optional; see below).
 - **`set-review`** — lets a signed-in reader submit or clear their own rubric review of the current read.
 - **`post-comment`** — lets a signed-in reader post or delete their own comment on a book's discussion thread.
+- **`club-admin`** — creating a club, invite links, joining, leaving, deleting (Phase 4).
 - **`calendar-feed`** — public, read-only `.ics` feed of one club's scheduled meetings, for subscribing in Google/Apple/Outlook calendars. Takes an optional `?token=<club_secrets.calendar_token>` to pick the club; without one it serves the seeded club.
 
 ### 4. Discord posts & slash command (optional)

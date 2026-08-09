@@ -1,6 +1,6 @@
 # Multi-tenant plan — "The Shelf" as a product
 
-**Status:** Phases 0–3 (harden, tenancy foundation, per-club librarian role, hash routing) plus Phase 3.5 (the scoping cleanup Phase 1 deferred) are implemented and live in production. Phases 4–7 (signup/invites, more auth providers, per-club settings, frontend restructure) are still proposal — see §8 for what's actually landed vs. what isn't.
+**Status:** Phases 0–4 are implemented and live in production — harden, tenancy foundation, per-club librarian role, hash routing, the Phase 3.5 scoping cleanup, and the Phase 4 lifecycle (create a club, invites, join, leave, delete, onboarding). Phases 5–7 (more auth providers, per-club settings, frontend restructure) are still proposal. See §8 for what's landed vs. what isn't, including what Phase 4 deliberately left open.
 **Goal (decided 2026-07-26, revised 2026-07-27, see §10):** anyone can sign up at `sh3lf.net`, create their own private book club (no invite needed to create one), invite members, and run the wheel/meetings/reviews flow independently of every other club — free, open signup, Discord optional per club rather than required.
 
 This builds on the feasibility findings: the blocker isn't difficulty, it's that the data model changes under everything at once, and (as of writing) there were no tests to catch what breaks. That second half is now addressed — see §5.
@@ -320,7 +320,27 @@ Two things had to be true before writing a line of Phase 4, neither of them in t
 
 2. **There had to be somewhere other than production to work.** Phase 4 is *about creating clubs*; you can't develop that against the live book club. `supabase db reset` now replays all 21 migrations into a local Postgres, via `00000000000000_bootstrap_base_tables.sql` (the `shelf_state`/`shelf_users` the chain always assumed, recorded on production as already-applied rather than run) plus a guard on the hardcoded production librarian id that used to abort the chain with a foreign-key error on any other database. `supabase start` needs `-x vector` under Colima.
 
-**Slices:** 4a prep ✅ · 4b club from the URL ✅ · 4c `create-club` (rows created atomically, slug validation, reserved words, rate limit) · 4d invites + join, retiring `join_default_club()` · 4e leave / transfer / delete, with a last-librarian guard · 4f onboarding an empty club.
+**Slices:** 4a prep ✅ · 4b club from the URL ✅ · 4c create a club ✅ · 4d invites + join ✅ · 4e leave / delete ✅ · 4f onboarding ✅
+
+#### 4c–4f — the lifecycle — ✅ done 2026-08-09
+
+All of it lives in one new edge function, `club-admin`, deliberately separate from `admin-update`: that one is gated on "you are a librarian of this club", which is the wrong question for half of these — `create_club` has no club yet, and `join_with_invite` is by definition performed by someone who isn't a member. Each action states its own gate.
+
+- **4c create.** `#/new`. Any signed-in reader, **3 clubs per rolling day** (§7's "club creation limits"). Slug rules: 3–32 chars, lowercase alphanumerics, single inner hyphens, plus a ~55-word reserved list covering route collisions (`api`, `new`, `join`, `c`…) and impersonation (`admin`, `official`, `support`). Enforced in the function for the error message and by a `clubs_slug_shape_chk` constraint as a backstop. New clubs default to **private** (§10 item 2). The club, its `shelf_state` row, its founding librarian and its `club_secrets` row are created together — and because PostgREST has no cross-statement transaction, a failure part-way **deletes the club it just made**, so a half-built club can't squat a slug forever.
+- **4d invites.** `club_invites`, keyed by a 12-char Crockford-ish base32 code (no I/L/O/U, so a code read aloud can't become a different valid one). Optional expiry and use cap; revocable. Librarians create/copy/revoke from the Admin tab. Read policy is `is_librarian()`, **not** `is_member()` — a code is a credential, and any member being able to list them would make invite-only meaningless. That's the first RLS policy in the app that asks about a role, so it's also what finally needed `is_librarian()`, sketched back in §3 and deferred through Phase 2. Joining is `#/join/<code>`; every unusable-invite case returns one identical message so a stranger probing codes learns nothing.
+- **4e lifecycle.** Leave from the footer; **the last librarian is refused** and must promote someone or delete the club. Delete requires librarian *and* typing the club's name, re-checked server-side. `shelf_users` rows survive a deletion — identity isn't owned by a club.
+- **4f onboarding.** A three-step checklist (invite readers → set books → spin) replaces the Reading tab of a club that has no other members, no books and no history. It ticks itself off and disappears.
+
+Plus a club switcher in the footer once you're in more than one, and `#/new` reachable from everywhere.
+
+Two things the schema had never actually had, both found by trying to use it rather than by reading it:
+
+- **`clubs.id` had no default.** The seeded row's uuid was hardcoded, so nothing ever needed one; creating a club failed with a not-null violation. The plan's §2 sketch had `default gen_random_uuid()` all along.
+- **No `club_id` foreign key cascaded.** §2 claimed reviews and comments would get cascade deletes "for free" with the `reads` table; they never did, and `delete_club` failed with a 23503 on the first child table. Now every FK pointing at `clubs` is rewritten to `on delete cascade`, discovered from the catalog rather than named, so a table added later that forgets gets picked up.
+
+Verified over real HTTP against locally-served functions with two users: six slug rejections each with their own message, a duplicate slug 409, the rate limit tripping on the 4th club, a non-librarian refused an invite, a bogus code and a spent code both refused identically, a **member reopening a spent invite still landing in the club** (the first cut got this wrong — the validity check ran before the membership check, so a single-use invite told its own successful user it was invalid), the last librarian refused when leaving, a plain member leaving cleanly, delete refused without the exact name, and a delete cascading away reads/reviews/members/invites/state/secrets while leaving the identity row intact.
+
+**Exit:** a stranger can go from landing page to a running club without you. ✅ — with the caveat below.
 
 #### 4b — club resolved from the URL — ✅ done 2026-08-09
 
@@ -331,6 +351,14 @@ The slug in `#/c/<slug>/<tab>` had been parsed since Phase 3 and ignored. Now:
 - `discord-interactions` is deliberately **not** parameterized: a slash command carries a guild and a Discord user, no club. Mapping guild → club needs `clubs` to know its guild id, which is Phase 6.
 
 Verified against a local database with two real clubs, over real HTTP to locally-served functions: a member of club A got 403 `not a member of this club` from `set-book`/`set-review`/`post-comment` on club B; a librarian of B got past `admin-update`'s gate on B and 403 `not a librarian` on A; a bad `club_id` got 400; an omitted one still worked. Then club B ran a **full draw of its own** — picked its book, advanced to round 2 — while club A stayed at round 1 with its reads and eliminated list untouched. That's the plan's Phase 1 exit criterion ("two clubs coexist with no data bleed") finally demonstrated by two clubs actually *running*, not just by isolation queries.
+
+#### What Phase 4 leaves open
+
+- **Sign-up is still Discord-only**, so "a stranger can start a club" means "a stranger with a Discord account". Phase 5 is what makes the sentence fully true.
+- **`join_default_club()` still exists and still runs on every sign-in**, so anyone who signs in is added to the seeded club. That was the app's behavior long before Phase 4 and this preserves it rather than changing the existing club's terms mid-flight — but it is the one remaining "open door", and retiring it is a one-line change plus a decision about what a brand-new signed-in reader with no clubs should see.
+- **Transferring the librarian role** is `admin_grant_librarian`/`admin_revoke_librarian` in `admin-update`, which existed already; there's no single "transfer ownership" action, and `clubs.created_by` is recorded but never consulted for permissions.
+- **Moderation, Terms/Privacy, and account deletion** (§7) are untouched. Open signup plus other people's content is exactly the situation that makes them matter, and none of it is engineering-blocked.
+- `/mybook` still only works for the seeded club — see the note in `discord-interactions`; guild → club is Phase 6.
 
 ### Phase 5 — Auth providers
 Magic link + Google, identity normalization, account linking.

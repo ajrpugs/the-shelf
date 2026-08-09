@@ -239,6 +239,25 @@
   .btn-mini.ghost:hover:not(:disabled){ background: rgba(236,227,207,0.08); border-color: var(--ink); filter: none; }
   .btn-mini{ background: var(--green); color: var(--card); padding: 6px 10px; font-size: 11px; }
   .btn-mini.remove{ background: transparent; color: var(--stamp-text); border: 1px solid var(--stamp); }
+  /* Phase 4: club creation, invites, club switcher */
+  .field{ display:block; margin:12px 0; }
+  .field-label{ display:block; font-size:0.78rem; letter-spacing:0.06em; text-transform:uppercase; opacity:0.75; margin-bottom:4px; }
+  .field input{ width:100%; max-width:420px; }
+  .field-hint{ display:block; font-size:0.82rem; opacity:0.7; margin-top:4px; }
+  .field-inline{ display:flex; gap:8px; align-items:flex-start; margin:12px 0; font-size:0.9rem; }
+  .field-inline input{ margin-top:3px; }
+  .mono-code{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:0.12em; font-size:1.1rem; }
+  .inv-opt{ font-size:0.85rem; opacity:0.8; display:inline-flex; gap:5px; align-items:center; }
+  .invite-list{ margin-top:8px; }
+  .invite-row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:6px 0; border-top:1px solid var(--rule); }
+  .invite-row.dead{ opacity:0.5; }
+  .invite-code{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:0.1em; }
+  .invite-meta{ font-size:0.82rem; opacity:0.75; }
+  .invite-actions{ margin-left:auto; display:flex; gap:4px; }
+  .empty-note{ font-size:0.88rem; opacity:0.72; margin-top:8px; }
+  .club-switch{ display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .club-switch a{ font-size:0.85rem; padding:2px 8px; border:1px solid var(--rule); border-radius:999px; text-decoration:none; }
+  .club-switch a.on{ background:var(--ink); color:var(--card); border-color:var(--ink); }
   .btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
   .btn-danger:hover:not(:disabled){ background: transparent; color: var(--stamp-text); }
   .modal-actions button.btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
@@ -1211,6 +1230,9 @@ const DEFAULT_CLUB_SLUG = "the-guild"; // matches the seeded clubs row
 //                 "ask for an invite" is Phase 4d.
 let club = null;
 let clubStatus = "loading";
+let myClubs = [];            // every club this reader belongs to (club switcher)
+let invites = [];            // club_invites for this club, librarians only
+let clubBusy = false;        // a club-admin call is in flight
 const clubId = () => club?.id ?? DEFAULT_CLUB_ID;
 const clubSlug = () => club?.slug ?? DEFAULT_CLUB_SLUG;
 const clubName = () => club?.name ?? "The Shelf";
@@ -1843,11 +1865,114 @@ async function onSignedIn() {
   // Which club we're on has to be settled before anything club-scoped runs --
   // membership, the librarian gate and loadAll all key off clubId().
   await resolveClubFromRoute();
-  if (clubStatus !== "ok") { render(); return; }
+  // Needed even on the failure paths: the "not in this club" page offers the
+  // clubs you *are* in, and there's no other way to know them.
+  if (clubStatus !== "ok") { await loadMyClubs(); render(); return; }
   await ensureClubMembership();
   await loadLibrarianStatus();
   await loadAll();
   subscribeRealtime();
+}
+
+// ---------- Club lifecycle (Phase 4 slices 4c-4e) ----------
+// Every action lives in the club-admin edge function, which owns the rules the
+// client must not be trusted with: slug validation and reserved words, the
+// creation rate limit, invite validity, and "the last librarian can't leave".
+// This is a thin caller -- it never pre-judges any of those.
+async function callClubAdmin(action, payload = {}) {
+  if (!session) { setFlash("err", "Sign in first."); return null; }
+  if (clubBusy) return null;
+  clubBusy = true;
+  document.body.style.cursor = "wait";
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/club-admin`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ action, ...payload }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) { setFlash("err", body.error || res.statusText); return null; }
+    return body;
+  } catch (err) {
+    setFlash("err", `Network error: ${err.message}`);
+    return null;
+  } finally {
+    clubBusy = false;
+    document.body.style.cursor = "";
+  }
+}
+
+// Every club this reader is in, for the switcher and the "you have no clubs yet"
+// landing state. Read directly: club_members is readable for your own clubs, and
+// `clubs` is readable outright.
+async function loadMyClubs() {
+  try {
+    const { data, error } = await supabase
+      .from("club_members")
+      .select("role, clubs:club_id ( id, slug, name, visibility )");
+    if (error) throw error;
+    myClubs = (data || [])
+      .map(r => ({ ...(r.clubs || {}), role: r.role }))
+      .filter(c => c.id)
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  } catch (err) {
+    console.warn("club list failed:", err.message);
+    myClubs = [];
+  }
+}
+
+// Invite codes for this club. RLS returns rows only to a librarian of it, so an
+// empty list is the normal answer for everyone else -- no need to gate the call.
+async function loadInvites() {
+  if (!club) { invites = []; return; }
+  try {
+    const { data, error } = await supabase
+      .from("club_invites")
+      .select("code, uses, max_uses, expires_at, revoked, created_at")
+      .eq("club_id", club.id)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    invites = data || [];
+  } catch {
+    invites = [];
+  }
+}
+
+const inviteLink = (code) => `${location.origin}${location.pathname}#/join/${code}`;
+
+// Clipboard, with the older fallback: navigator.clipboard needs a secure context
+// and can be refused outright, and an invite you can't copy is useless.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+  } catch { /* fall through */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
+
+// An invite is spent when it's revoked, past its expiry, or out of uses -- the
+// same three conditions club-admin checks at join time. Mirrored here only to
+// label the list; the server decides.
+function inviteState(i) {
+  if (i.revoked) return { label: "revoked", dead: true };
+  if (i.expires_at && new Date(i.expires_at).getTime() < Date.now()) return { label: "expired", dead: true };
+  if (i.max_uses != null && i.uses >= i.max_uses) return { label: "used up", dead: true };
+  if (i.max_uses != null) return { label: `${i.max_uses - i.uses} left`, dead: false };
+  return { label: "unlimited", dead: false };
 }
 
 // Resolve the slug in #/c/<slug>/... to a real `clubs` row. A bare URL (or any
@@ -2032,6 +2157,9 @@ async function loadAll() {
     comments = (!cErr && cData) ? cData : [];
     if (xErr) console.warn("shelf_comment_reactions unavailable:", xErr.message);
     reactions = (!xErr && xData) ? xData : [];
+    // Club switcher + invite list. Non-critical: a failure here degrades the
+    // Phase 4 chrome, it doesn't stop the shelf from rendering.
+    await Promise.all([loadMyClubs(), loadInvites()]);
     if (session) myUserRow = users.find(u => u.id === session.user.id) || myUserRow;
   } catch (err) {
     setFlash("err", `Couldn't load: ${err.message}`);
@@ -3358,12 +3486,20 @@ function render() {
     return;
   }
 
+  // Creating and joining come before club resolution -- neither has a club yet.
+  const preRoute = parseRoute();
+  if (preRoute.name === "new-club") { app.innerHTML = renderNewClub(); wireNewClub(); return; }
+  if (preRoute.name === "join") { app.innerHTML = renderJoin(preRoute.code); wireJoin(preRoute.code); return; }
+
   // A club that couldn't be resolved gets its own page rather than an empty
   // shelf, which would look like a working club with nothing in it.
   if (clubStatus === "not_found" || clubStatus === "not_member") {
     app.innerHTML = renderClubProblem();
     document.querySelector("[data-go-default-club]")?.addEventListener("click", () => {
       location.hash = `#/c/${DEFAULT_CLUB_SLUG}/reading`;
+    });
+    document.querySelectorAll("[data-go-club]").forEach(el => {
+      el.addEventListener("click", () => goToClub(el.dataset.goClub));
     });
     return;
   }
@@ -3463,6 +3599,9 @@ function render() {
 
   // ---- Reading: Currently reading + Next up ----
   if (currentTab === "reading") {
+    // A brand-new club gets the three-step checklist instead of a stack of empty
+    // states (4f). It stops appearing as soon as a reader joins or a book is set.
+    if (clubNeedsOnboarding()) html += renderClubOnboarding();
     // The rate pill lives on Currently reading — the book you finish and score.
     if (currentlyReading) {
       html += bannerHtml(currentlyReading, { stamp: "Currently reading", admin, showRate: true });
@@ -3784,11 +3923,42 @@ function render() {
       });
     }
     html += `</div>`;
+    // ---- Invites (4d) ----
+    html += `<div class="card no-rule" style="margin-top:10px;">
+      <div class="tools-label">Invitations</div>
+      <div class="tool-row">
+        <button class="btn" id="inv-new">New invite link</button>
+        <label class="inv-opt">uses <input id="inv-max" type="number" min="1" max="500" placeholder="∞" style="width:64px"></label>
+        <label class="inv-opt">expires in <input id="inv-days" type="number" min="1" max="365" placeholder="never" style="width:74px"> days</label>
+      </div>`;
+    if (!invites.length) {
+      html += `<div class="empty-note">No invites yet. Anyone with a link can join this club, so treat them like keys.</div>`;
+    } else {
+      html += `<div class="invite-list">`;
+      invites.forEach(i => {
+        const st = inviteState(i);
+        html += `<div class="invite-row ${st.dead ? 'dead' : ''}">
+          <code class="invite-code">${esc(i.code)}</code>
+          <span class="invite-meta">${esc(st.label)}${i.uses ? ` · used ${i.uses}×` : ''}</span>
+          <span class="invite-actions">
+            ${st.dead ? '' : `<button class="row-menu-item" data-inv-copy="${attr(i.code)}">Copy link</button>`}
+            ${st.dead ? '' : `<button class="row-menu-item danger" data-inv-revoke="${attr(i.code)}">Revoke</button>`}
+          </span>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+    html += `</div>`;
+
     html += `<div class="card no-rule" style="margin-top:10px;">
       <div class="tools-label">Danger zone</div>
       <div class="tool-row">
         <button class="btn-danger" id="reset-btn">Reset the shelf</button>
         <span class="tool-row-desc">Wipes history, every book, and the round counter. No undo.</span>
+      </div>
+      <div class="tool-row">
+        <button class="btn-danger" id="delete-club-btn">Delete this club</button>
+        <span class="tool-row-desc">Removes ${esc(clubName())} and everything in it — reads, reviews, comments, members. No undo.</span>
       </div>
     </div>`;
     html += `</section>`;
@@ -3798,7 +3968,19 @@ function render() {
 
   // ---- Footer ----
   html += `<footer>`;
-  html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="https://discord.gg/4YeGJgs8u" target="_blank" rel="noopener" class="footer-link">Join the Discord</a>`;
+  // Club switcher (4c/4d): only worth showing once a reader is in more than one.
+  if (myClubs.length > 1) {
+    html += `<div class="club-switch" style="margin-bottom:8px;">`;
+    myClubs.forEach(c => {
+      html += `<a href="#/c/${esc(c.slug)}/reading" class="${c.id === clubId() ? 'on' : ''}">${esc(c.name)}</a>`;
+    });
+    html += `</div>`;
+  }
+  html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="#/new" class="footer-link">Start a club</a>`;
+  // Leaving is offered to everyone; club-admin refuses the last librarian, who
+  // has to promote someone or delete the club instead.
+  html += ` · <a href="#" class="footer-link" id="leave-club">Leave ${esc(clubName())}</a>`;
+  html += ` · <a href="https://discord.gg/4YeGJgs8u" target="_blank" rel="noopener" class="footer-link">Join the Discord</a>`;
   html += `</footer>`;
 
   app.innerHTML = html;
@@ -3898,6 +4080,11 @@ function parseRoute() {
   if (reader) return { name: "reader", key: decodeURIComponent(reader[1]) };
   const recap = hash.match(/^#recap(?:=(\d{4}))?$/);
   if (recap) return { name: "recap", year: recap[1] ? parseInt(recap[1], 10) : null };
+  // Phase 4: creating and joining are routes of their own, matched before the
+  // club route so /c/new and a club slugged "join" can't collide with them.
+  if (/^#\/new\/?$/.test(hash)) return { name: "new-club" };
+  const join = hash.match(/^#\/join\/([A-Za-z0-9]+)\/?$/);
+  if (join) return { name: "join", code: join[1].toUpperCase() };
   // clubSlug is resolved against the `clubs` table as of Phase 4 slice 4b --
   // see resolveClubFromRoute(). A route with no slug (including every older
   // #book=/#shelf=/#reader= detail route) means "the default club".
@@ -3921,6 +4108,92 @@ function goToTab(id) {
   }
 }
 
+// ---------- Create a club (4c) ----------
+// The slug field only *hints* at the rules; club-admin is what enforces them,
+// including the reserved-word list this deliberately doesn't duplicate.
+function renderNewClub() {
+  return `
+    <header><div class="eyebrow">Start a club</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <a href="#/c/${esc(clubSlug())}/reading" class="detail-back">← Back</a>
+    <div class="setup">
+      <h2>Start a book club</h2>
+      <p>You'll be its librarian: you spin the wheel, schedule the meetings and invite the readers.</p>
+      <label class="field">
+        <span class="field-label">Club name</span>
+        <input id="nc-name" type="text" maxlength="80" placeholder="The Bibliomancers" autocomplete="off">
+      </label>
+      <label class="field">
+        <span class="field-label">Link</span>
+        <input id="nc-slug" type="text" maxlength="32" placeholder="bibliomancers" autocomplete="off" spellcheck="false">
+        <span class="field-hint">sh3lf.net/#/c/<b id="nc-preview">your-club</b> — lowercase letters, numbers and hyphens.</span>
+      </label>
+      <label class="field-inline">
+        <input id="nc-public" type="checkbox">
+        <span>List this club publicly. Leave it off and only people with the link or an invite can see it.</span>
+      </label>
+      <p><button class="btn" id="nc-go">Create the club</button></p>
+    </div>`;
+}
+
+function wireNewClub() {
+  const name = document.getElementById("nc-name");
+  const slug = document.getElementById("nc-slug");
+  const preview = document.getElementById("nc-preview");
+  // Suggest a slug from the name until the reader edits the slug themselves.
+  let slugTouched = false;
+  const suggest = () => (name.value || "").toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-{2,}/g, "-").slice(0, 32);
+  const sync = () => { preview.textContent = (slug.value || suggest() || "your-club"); };
+  name.addEventListener("input", () => { if (!slugTouched) slug.value = suggest(); sync(); });
+  slug.addEventListener("input", () => { slugTouched = true; sync(); });
+  sync();
+  document.getElementById("nc-go").addEventListener("click", async (e) => {
+    e.currentTarget.blur();
+    const body = await callClubAdmin("create_club", {
+      name: name.value.trim(),
+      slug: (slug.value || suggest()).trim(),
+      visibility: document.getElementById("nc-public").checked ? "public" : "private",
+    });
+    if (!body?.club) { render(); return; }
+    setFlash("info", `“${body.club.name}” is yours. Invite some readers.`);
+    await loadMyClubs();
+    goToClub(body.club.slug);
+  });
+}
+
+// ---------- Join with an invite (4d) ----------
+function renderJoin(code) {
+  return `
+    <header><div class="eyebrow">Invitation</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <div class="setup">
+      <h2>You've been invited</h2>
+      <p>Accept to join this book club. You can leave again whenever you like.</p>
+      <p class="mono-code">${esc(code)}</p>
+      <p><button class="btn" id="join-go">Accept the invitation</button></p>
+      <p><a href="#/c/${esc(DEFAULT_CLUB_SLUG)}/reading" class="detail-back">No thanks</a></p>
+    </div>`;
+}
+
+function wireJoin(code) {
+  document.getElementById("join-go").addEventListener("click", async (e) => {
+    e.currentTarget.blur();
+    const body = await callClubAdmin("join_with_invite", { code });
+    if (!body?.club) { render(); return; }
+    setFlash("info", body.already ? `You're already in ${body.club.name}.` : `Welcome to ${body.club.name}.`);
+    await loadMyClubs();
+    goToClub(body.club.slug);
+  });
+}
+
+// Switch clubs by URL, then let the hashchange handler re-resolve and reload.
+// Going through the hash (rather than setting `club` directly) keeps one code
+// path for "which club am I looking at" -- see the note on goToTab.
+function goToClub(slug) {
+  const target = `#/c/${slug}/reading`;
+  if (location.hash === target) { resolveClubFromRoute().then(() => loadAll()); return; }
+  location.hash = target;
+}
+
 // Shown when the slug in the URL doesn't resolve to a club we can operate on.
 function renderClubProblem() {
   const wanted = parseRoute().clubSlug || DEFAULT_CLUB_SLUG;
@@ -3931,10 +4204,63 @@ function renderClubProblem() {
       <h2>${notFound ? "No such club" : "You're not in this club"}</h2>
       <p>${notFound
         ? `Nothing is registered at <b>${esc(wanted)}</b>. Check the link, or ask whoever sent it for an invite.`
-        : `<b>${esc(clubName())}</b> exists, but you're not a member — so there's nothing here to show you. Ask a librarian of that club to add you.`}</p>
-      <p><button class="btn" data-go-default-club>Go to ${esc(DEFAULT_CLUB_SLUG)}</button></p>
+        : `<b>${esc(clubName())}</b> exists, but you're not a member — so there's nothing here to show you. Ask a librarian of that club for an invite link.`}</p>
+      <p>
+        ${myClubs.length
+          ? myClubs.map(c => `<button class="btn" data-go-club="${attr(c.slug)}">Go to ${esc(c.name)}</button>`).join(" ")
+          : `<button class="btn" data-go-default-club>Go to ${esc(DEFAULT_CLUB_SLUG)}</button>`}
+        <a href="#/new" class="footer-link" style="margin-left:8px;">or start your own club</a>
+      </p>
     </div>`;
 }
+
+// ---------- Empty-club onboarding (4f) ----------
+// A brand-new club has no members but its founder, no books and no history, so
+// every tab is an empty state at once. This replaces the Reading tab's body with
+// the two things that actually move a new club forward: get readers in, and get
+// books on the shelf. It disappears on its own once either has happened.
+function renderClubOnboarding() {
+  const others = users.length - 1;
+  const withBooks = users.filter(u => (u.book || "").trim()).length;
+  const steps = [
+    {
+      done: others > 0,
+      title: "Invite your readers",
+      body: others > 0
+        ? `${others} other ${others === 1 ? "reader has" : "readers have"} joined.`
+        : `Create an invite link in the <b>Admin</b> tab and send it to them. Anyone with the link can join.`,
+    },
+    {
+      done: withBooks > 0,
+      title: "Everyone picks a book",
+      body: withBooks > 0
+        ? `${withBooks} book${withBooks === 1 ? "" : "s"} on the shelf.`
+        : `Each reader sets one book on <b>The Shelf</b> tab. That's the pool the wheel picks from.`,
+    },
+    {
+      done: false,
+      title: "Spin the wheel",
+      body: `Once there are books, <b>The Wheel</b> picks whose book the club reads next.`,
+    },
+  ];
+  return `
+    <div class="card no-rule">
+      <div class="mini-head">Welcome to ${esc(clubName())}</div>
+      <p style="margin:6px 0 12px; opacity:0.8;">Three things and you're running.</p>
+      ${steps.map((s, i) => `
+        <div class="invite-row ${s.done ? 'dead' : ''}" style="align-items:flex-start;">
+          <span class="invite-code">${s.done ? "✓" : i + 1}</span>
+          <span style="flex:1 1 240px;">
+            <b>${esc(s.title)}</b><br>
+            <span style="font-size:0.88rem; opacity:0.8;">${s.body}</span>
+          </span>
+        </div>`).join("")}
+    </div>`;
+}
+
+// A club is "new" while nobody but the founder is in it and no book is set.
+const clubNeedsOnboarding = () =>
+  users.length <= 1 && !users.some(u => (u.book || "").trim()) && !state.history.length;
 
 function renderDetailMissing(app, back, loading, msg) {
   app.innerHTML = `
@@ -4659,6 +4985,70 @@ function wireUp() {
       callAdmin("admin_remove_user", { user_id: uid });
     });
   });
+  // ---- Leave this club (4e) ----
+  document.getElementById("leave-club")?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    if (!confirm(`Leave ${clubName()}? Your past picks stay in its ledger, but you'll come off the shelf. You can rejoin with a new invite.`)) return;
+    document.activeElement?.blur?.();
+    const body = await callClubAdmin("leave_club", { club_id: clubId() });
+    if (!body?.ok) { render(); return; }   // e.g. 409, last librarian
+    setFlash("info", `You left ${clubName()}.`);
+    club = null; clubStatus = "loading";
+    await loadMyClubs();
+    goToClub(myClubs[0]?.slug || DEFAULT_CLUB_SLUG);
+  });
+
+  // ---- Invites (4d) ----
+  document.getElementById("inv-new")?.addEventListener("click", async (e) => {
+    e.currentTarget.blur();
+    const max = document.getElementById("inv-max")?.value;
+    const days = document.getElementById("inv-days")?.value;
+    const body = await callClubAdmin("create_invite", {
+      club_id: clubId(),
+      max_uses: max === "" ? null : max,
+      expires_in_days: days === "" ? 0 : days,
+    });
+    if (!body?.invite) { render(); return; }
+    await copyText(inviteLink(body.invite.code));
+    setFlash("info", "Invite link created and copied to your clipboard.");
+    await loadInvites();
+    render();
+  });
+  document.querySelectorAll("[data-inv-copy]").forEach(el => {
+    el.addEventListener("click", async () => {
+      const ok = await copyText(inviteLink(el.dataset.invCopy));
+      setFlash(ok ? "info" : "err", ok ? "Invite link copied." : "Couldn't copy — long-press the code instead.");
+      render();
+    });
+  });
+  document.querySelectorAll("[data-inv-revoke]").forEach(el => {
+    el.addEventListener("click", async () => {
+      const code = el.dataset.invRevoke;
+      if (!confirm(`Revoke invite ${code}? Anyone still holding that link won't be able to join.`)) return;
+      document.activeElement?.blur?.();
+      if (await callClubAdmin("revoke_invite", { club_id: clubId(), code })) {
+        setFlash("info", "Invite revoked.");
+        await loadInvites();
+      }
+      render();
+    });
+  });
+
+  // ---- Delete this club (4e) ----
+  document.getElementById("delete-club-btn")?.addEventListener("click", async (e) => {
+    e.currentTarget.blur();
+    // Typing the name is the server's requirement too -- it re-checks, so this
+    // prompt is a speed bump, not the guard.
+    const typed = prompt(`This deletes ${clubName()} and everything in it — permanently.\n\nType the club's name to confirm:`);
+    if (typed === null) return;
+    const body = await callClubAdmin("delete_club", { club_id: clubId(), confirm_name: typed.trim() });
+    if (!body?.ok) { render(); return; }
+    setFlash("info", `${clubName()} was deleted.`);
+    club = null; clubStatus = "loading";
+    await loadMyClubs();
+    goToClub(myClubs[0]?.slug || DEFAULT_CLUB_SLUG);
+  });
+
   document.querySelectorAll("[data-admin-grant-lib]").forEach(el => {
     el.addEventListener("click", async () => {
       const uid = el.dataset.adminGrantLib;
@@ -4826,9 +5216,9 @@ document.addEventListener("keydown", (e) => {
 // the new club's chrome over the old club's rows.
 window.addEventListener("hashchange", async () => {
   const wanted = parseRoute().clubSlug;
-  if (session && wanted && club && wanted !== club.slug) {
+  if (session && wanted && (!club || wanted !== club.slug)) {
     await resolveClubFromRoute();
-    if (clubStatus !== "ok") { render(); return; }
+    if (clubStatus !== "ok") { await loadMyClubs(); render(); return; }
     await loadLibrarianStatus();
     await loadAll();
     return; // loadAll renders
