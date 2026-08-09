@@ -1194,12 +1194,27 @@ const SUPABASE_ANON_KEY = "sb_publishable_Ovyd_-OHfFzfUlT2mtirfw_73i3sYWv";
 const CONFIGURED = !SUPABASE_URL.startsWith("REPLACE_") && !SUPABASE_ANON_KEY.startsWith("REPLACE_");
 const supabase = CONFIGURED ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
-// The only real club today. The #/c/<slug>/<tab> URL shape (Phase 3 of
-// docs/multi-tenant-plan.md) already exists -- see parseRoute()/goToTab()
-// below -- but real slug-to-club resolution is still Phase 4, so every
-// query stays hardcoded to this id regardless of what's in the hash.
+// The club a bare URL lands on. Phase 4 slice 4b: the slug in #/c/<slug>/<tab>
+// is now RESOLVED against the `clubs` table (resolveClubFromRoute below) rather
+// than ignored, and every query goes through clubId() instead of the constant.
+// This id remains the default landing club and the pre-resolution fallback.
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 const DEFAULT_CLUB_SLUG = "the-guild"; // matches the seeded clubs row
+
+// The resolved `clubs` row for the slug in the URL, plus how resolution went.
+//   loading     -- no answer yet; don't query club-scoped tables
+//   ok          -- `club` is populated and usable
+//   not_found   -- no club with that slug (or not visible to this reader)
+//   unavailable -- a real club, but not the seeded one. All six edge functions
+//                  still hardcode DEFAULT_CLUB_ID, so reads would come from the
+//                  club in the URL while every write went to the default one.
+//                  Refusing outright beats a half-wired club; lifted in the
+//                  next slice, when the functions take a club_id.
+let club = null;
+let clubStatus = "loading";
+const clubId = () => club?.id ?? DEFAULT_CLUB_ID;
+const clubSlug = () => club?.slug ?? DEFAULT_CLUB_SLUG;
+const clubName = () => club?.name ?? "The Shelf";
 
 // ---------- State ----------
 const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
@@ -1826,10 +1841,43 @@ async function initAuth() {
 
 async function onSignedIn() {
   await ensureUserRow(session.user);
+  // Which club we're on has to be settled before anything club-scoped runs --
+  // membership, the librarian gate and loadAll all key off clubId().
+  await resolveClubFromRoute();
+  if (clubStatus !== "ok") { render(); return; }
   await ensureClubMembership();
   await loadLibrarianStatus();
   await loadAll();
   subscribeRealtime();
+}
+
+// Resolve the slug in #/c/<slug>/... to a real `clubs` row. A bare URL (or any
+// of the older #book=/#reader=/... detail routes, which carry no slug) resolves
+// the default club, so existing links keep working.
+//
+// Reads `clubs` directly: it's the one table whose select policy is still
+// unscoped `using (true)`, precisely so a reader can discover the club they were
+// pointed at before anyone knows whether they're a member of it. A private club
+// a stranger isn't in resolves fine here and then yields empty club-scoped
+// queries under RLS -- which is Phase 4's job to turn into a real "ask for an
+// invite" page rather than an empty shelf.
+async function resolveClubFromRoute() {
+  const wanted = parseRoute().clubSlug || DEFAULT_CLUB_SLUG;
+  if (club && club.slug === wanted && clubStatus === "ok") return;
+  clubStatus = "loading";
+  try {
+    const { data, error } = await supabase
+      .from("clubs").select("id, slug, name, visibility").eq("slug", wanted).maybeSingle();
+    if (error) throw error;
+    if (!data) { club = null; clubStatus = "not_found"; return; }
+    club = data;
+    clubStatus = data.id === DEFAULT_CLUB_ID ? "ok" : "unavailable";
+  } catch (err) {
+    console.warn("club resolve failed:", err.message);
+    // Fall back to the default club rather than locking the app out on a blip.
+    club = { id: DEFAULT_CLUB_ID, slug: DEFAULT_CLUB_SLUG, name: "The Shelf", visibility: "public" };
+    clubStatus = "ok";
+  }
 }
 
 // Make sure the signed-in reader has a club_members row, since that table (not
@@ -1857,7 +1905,7 @@ async function loadLibrarianStatus() {
     const { data } = await supabase
       .from("club_members")
       .select("user_id")
-      .eq("club_id", DEFAULT_CLUB_ID)
+      .eq("club_id", clubId())
       .eq("role", "librarian");
     librarianIds = new Set((data || []).map(r => r.user_id));
   } catch {
@@ -1911,21 +1959,24 @@ function setRefreshing(on) {
 }
 async function loadAll() {
   if (!CONFIGURED) { render(); return; }
+  // Never query club-scoped tables before the club is settled -- clubId() would
+  // fall back to the default and load the wrong club's rows.
+  if (clubStatus !== "ok") { render(); return; }
   setRefreshing(true);
   try {
     const [{ data: sData, error: sErr }, { data: mData, error: mErr }, { data: rData, error: rErr }, { data: cData, error: cErr }, { data: readsData, error: readsErr }, { data: xData, error: xErr }] = await Promise.all([
       // Keyed by club_id, not the old fixed `id = 1` singleton.
-      supabase.from("shelf_state").select("data").eq("club_id", DEFAULT_CLUB_ID).single(),
+      supabase.from("shelf_state").select("data").eq("club_id", clubId()).single(),
       // Membership + book + role for this club. Replaces the unscoped
       // `shelf_users.select("*")`, which pulled every reader of every club.
-      supabase.from("club_members").select("user_id, role, book").eq("club_id", DEFAULT_CLUB_ID),
-      supabase.from("shelf_reviews").select("*").eq("club_id", DEFAULT_CLUB_ID),
-      supabase.from("shelf_comments").select("*").eq("club_id", DEFAULT_CLUB_ID),
+      supabase.from("club_members").select("user_id, role, book").eq("club_id", clubId()),
+      supabase.from("shelf_reviews").select("*").eq("club_id", clubId()),
+      supabase.from("shelf_comments").select("*").eq("club_id", clubId()),
       supabase.from("reads")
         .select("round, winner_id, winner_username, book, ts, rating, ratingsOpen:ratings_open, meetings")
-        .eq("club_id", DEFAULT_CLUB_ID)
+        .eq("club_id", clubId())
         .order("ts", { ascending: false }),
-      supabase.from("shelf_comment_reactions").select("comment_id, user_id, emoji").eq("club_id", DEFAULT_CLUB_ID),
+      supabase.from("shelf_comment_reactions").select("comment_id, user_id, emoji").eq("club_id", clubId()),
     ]);
     if (sErr && sErr.code !== "PGRST116") throw sErr;
     if (mErr) throw mErr;
@@ -1981,7 +2032,7 @@ async function loadAll() {
 
 function subscribeRealtime() {
   if (!CONFIGURED) return;
-  const clubFilter = `club_id=eq.${DEFAULT_CLUB_ID}`;
+  const clubFilter = `club_id=eq.${clubId()}`;
   supabase.channel("shelf-live")
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_state", filter: clubFilter }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "club_members", filter: clubFilter }, () => queueRefresh())
@@ -3297,6 +3348,16 @@ function render() {
     return;
   }
 
+  // A club that couldn't be resolved gets its own page rather than an empty
+  // shelf, which would look like a working club with nothing in it.
+  if (clubStatus === "not_found" || clubStatus === "unavailable") {
+    app.innerHTML = renderClubProblem();
+    document.querySelector("[data-go-default-club]")?.addEventListener("click", () => {
+      location.hash = `#/c/${DEFAULT_CLUB_SLUG}/reading`;
+    });
+    return;
+  }
+
   const route = parseRoute();
   if (route.tab) currentTab = route.tab;
   // Scroll to top only on an actual navigation into a detail route (hash
@@ -3827,16 +3888,16 @@ function parseRoute() {
   if (reader) return { name: "reader", key: decodeURIComponent(reader[1]) };
   const recap = hash.match(/^#recap(?:=(\d{4}))?$/);
   if (recap) return { name: "recap", year: recap[1] ? parseInt(recap[1], 10) : null };
-  // clubSlug is captured but intentionally unused for now (single-club
-  // stand-in, see DEFAULT_CLUB_ID above) -- parsing it now means this format
-  // won't need to change again once Phase 4 makes it meaningful.
+  // clubSlug is resolved against the `clubs` table as of Phase 4 slice 4b --
+  // see resolveClubFromRoute(). A route with no slug (including every older
+  // #book=/#shelf=/#reader= detail route) means "the default club".
   const club = hash.match(/^#\/c\/([^/]+)\/?([a-z]*)$/);
   if (club) return { name: "main", clubSlug: decodeURIComponent(club[1]), tab: club[2] || null };
   return { name: "main", clubSlug: null, tab: null };
 }
 
 function tabHash(id) {
-  return `#/c/${DEFAULT_CLUB_SLUG}/${id}`;
+  return `#/c/${clubSlug()}/${id}`;
 }
 
 function goToTab(id) {
@@ -3848,6 +3909,21 @@ function goToTab(id) {
   } else {
     location.hash = target;
   }
+}
+
+// Shown when the slug in the URL doesn't resolve to a club we can operate on.
+function renderClubProblem() {
+  const wanted = parseRoute().clubSlug || DEFAULT_CLUB_SLUG;
+  const notFound = clubStatus === "not_found";
+  return `
+    <header><div class="eyebrow">Book club</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <div class="setup">
+      <h2>${notFound ? "No such club" : "That club isn't ready yet"}</h2>
+      <p>${notFound
+        ? `Nothing is registered at <b>${esc(wanted)}</b>. Check the link, or ask whoever sent it for an invite.`
+        : `<b>${esc(clubName())}</b> exists, but this build can only run the original club — multi-club support is still being wired up.`}</p>
+      <p><button class="btn" data-go-default-club>Go to ${esc(DEFAULT_CLUB_SLUG)}</button></p>
+    </div>`;
 }
 
 function renderDetailMissing(app, back, loading, msg) {
@@ -4735,7 +4811,20 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-window.addEventListener("hashchange", () => render());
+// A hash change can switch clubs, not just tabs. Re-resolve first when the slug
+// actually differs, then reload that club's data -- otherwise render() would draw
+// the new club's chrome over the old club's rows.
+window.addEventListener("hashchange", async () => {
+  const wanted = parseRoute().clubSlug;
+  if (session && wanted && club && wanted !== club.slug) {
+    await resolveClubFromRoute();
+    if (clubStatus !== "ok") { render(); return; }
+    await loadLibrarianStatus();
+    await loadAll();
+    return; // loadAll renders
+  }
+  render();
+});
 window.addEventListener("focus", () => { if (session) queueRefresh(); });
 </script>
 </body>
