@@ -146,8 +146,9 @@ scripts/rehearse-migrations.sh supabase/migrations/<file>.sql
 
 Two gotchas worth knowing before you reach for the obvious commands:
 
-- **`supabase db reset` does not work here**, and you can't bootstrap a fresh project from `supabase/migrations/` alone. The first migration alters `shelf_users`, but no migration creates it — the base schema comes from step 2 above (`supabase/schema.sql` in the SQL editor), and migrations layer on top. `schema.sql` is maintained by hand, so a new migration must also be mirrored into it as a new numbered section.
+- **A local database needs `supabase start -x vector`.** The `vector` container bind-mounts the Docker socket, which Colima's forwarded socket can't satisfy (`operation not supported`), and without the flag startup fails *after* applying every migration. Then `supabase db reset` replays the schema from scratch.
 - **`node --test <directory>` fails** on Node ≥23 (it treats a bare directory as a module). Glob the files, as above.
+- `supabase/schema.sql` is maintained by hand, so a new migration must also be mirrored into it as a new numbered section. (It's no longer needed to bootstrap a fresh database — `00000000000000_bootstrap_base_tables.sql` covers that — but it remains the readable, top-to-bottom description of the schema.)
 
 Hand-run rollback scripts for schema changes live in `supabase/rollback/`, deliberately outside `supabase/migrations/` so `db push` can never apply them.
 

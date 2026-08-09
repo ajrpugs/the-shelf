@@ -304,13 +304,23 @@ Two things that are now possible and weren't:
 - `scripts/rehearse-migrations.sh` — applies pending migrations to production inside `BEGIN … ROLLBACK`. Phase 3.5's three migrations were rehearsed this way before being pushed: all four objects created, the old global `reads_ts_key` dropped, the new 3-column review PK in place, and **row counts identical** (12 members / 10 books / 1 librarian / 17 reads / 80 reviews), then discarded.
 - `scripts/backup.sh` — see §6. This is what turned up the fact that the project has no backups at all.
 
-Also discovered: **`supabase db reset` does not work on this repo**, and a fresh project can't be bootstrapped from `migrations/` alone — the first migration alters `shelf_users` but nothing ever creates it, because the base schema comes from running `schema.sql` in the SQL editor. Any future "spin up a second environment" work (Phase 4 will want one) has to solve that first.
+Also discovered: **`supabase db reset` did not work on this repo**, and a fresh project couldn't be bootstrapped from `migrations/` alone — the first migration altered `shelf_users` but nothing ever created it, because the base schema came from running `schema.sql` in the SQL editor. Fixed in Phase 4 prep (see below), since Phase 4 needs somewhere other than the live club to create test clubs.
 
 ### Phase 4 — Signup & lifecycle
 Create a club, invite codes, join, leave, transfer librarian, delete. Onboarding for an empty club. Since §7 is open in full again (open signup, revised 2026-07-27), this phase also owns club-creation rate limiting and slug validation/reserved words — not just the lifecycle actions.
 **Exit:** a stranger can go from landing page to a running club without you.
 
-Unblocked by Phase 3.5, which cleared the prerequisites: a new club now has somewhere to keep its game state, its own reader pool, and its own calendar feed. What this phase still owns on the tenancy side: resolving `parseRoute()`'s captured slug to a real club (the client still hardcodes `DEFAULT_CLUB_ID`/`DEFAULT_CLUB_SLUG`, as do all five edge functions), creating the `clubs` + `shelf_state` + `club_secrets` + founding-librarian rows together, and replacing `join_default_club()` with an invite-gated join.
+Unblocked by Phase 3.5, which cleared the prerequisites: a new club now has somewhere to keep its game state, its own reader pool, and its own calendar feed. What this phase still owns on the tenancy side: resolving `parseRoute()`'s captured slug to a real club (the client still hardcodes `DEFAULT_CLUB_ID`/`DEFAULT_CLUB_SLUG`, as do all six edge functions — **52 references in total**, 25 of them in `admin-update`, so 4b is more mechanical churn than "mostly mechanical" suggests), creating the `clubs` + `shelf_state` + `club_secrets` + founding-librarian rows together, and replacing `join_default_club()` with an invite-gated join.
+
+#### Prep — ✅ done 2026-08-09
+
+Two things had to be true before writing a line of Phase 4, neither of them in the original plan:
+
+1. **Backups had to actually happen.** Phase 4 means holding strangers' clubs, and "there were no backups" reads differently when the lost data isn't yours. `scripts/backup.sh` existed but nothing ran it; there is now a daily LaunchAgent (`net.sh3lf.backup`, `scripts/install-backup-agent.sh`), verified end to end under launchd from a cold Colima. Testing it there — rather than only from a shell — turned up that `backup.sh` had been parsing a response shape that only existed inside the tooling wrapper it had been run through, so the committed script would have failed in a plain terminal. Pro's PITR is still the real answer (§6).
+
+2. **There had to be somewhere other than production to work.** Phase 4 is *about creating clubs*; you can't develop that against the live book club. `supabase db reset` now replays all 21 migrations into a local Postgres, via `00000000000000_bootstrap_base_tables.sql` (the `shelf_state`/`shelf_users` the chain always assumed, recorded on production as already-applied rather than run) plus a guard on the hardcoded production librarian id that used to abort the chain with a foreign-key error on any other database. `supabase start` needs `-x vector` under Colima.
+
+**Slices:** 4a prep (done) · 4b resolve `#/c/<slug>` to a real club · 4c `create-club` (rows created atomically, slug validation, reserved words, rate limit) · 4d invites + join, retiring `join_default_club()` · 4e leave / transfer / delete, with a last-librarian guard · 4f onboarding an empty club.
 
 ### Phase 5 — Auth providers
 Magic link + Google, identity normalization, account linking.

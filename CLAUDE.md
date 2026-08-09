@@ -117,11 +117,13 @@ scripts/rehearse-migrations.sh supabase/migrations/<new>.sql
 # Apply schema / migrations
 supabase db push
 
-# Run the RLS cross-tenant isolation check. Hits the LINKED live project, not a
-# local one -- `supabase db reset` can't bootstrap this repo (see Backups), so
-# there is no local database to test against even with Docker running. Creates a
-# throwaway private club and deletes it in a finally block. Requires the
-# migrations to already be applied.
+# Local database (needs Colima; -x vector is required -- see "Local database")
+supabase start -x vector
+supabase db reset          # replays every migration from scratch
+
+# Run the RLS cross-tenant isolation check. Hits the LINKED live project (it
+# needs real members to simulate JWTs for), creates a throwaway private club and
+# deletes it in a finally block. Requires the migrations to already be applied.
 node --test supabase/tests/rls-isolation.test.mjs
 ```
 
@@ -153,9 +155,17 @@ Until then, `scripts/backup.sh` is the restore point:
 
 Reversing a schema change is separate from restoring data: hand-run rollback scripts live in `supabase/rollback/` (deliberately outside `supabase/migrations/` so `db push` can't apply them).
 
-**`supabase/migrations/` is not a complete history, and `supabase db reset` does not work.** The first migration (`20260714021113`) does `alter table public.shelf_users`, but no migration ever *creates* that table — the base schema came from running `supabase/schema.sql` in the SQL editor (README step 2), and migrations layer on top. So a from-scratch apply (local `db reset`, or bootstrapping a fresh project from `migrations/` alone) fails immediately on migration 1. A fresh project needs `schema.sql` first. Note `schema.sql` is maintained by hand alongside each migration — it is the bootstrap document, not generated output, so a new migration must be mirrored into it as a new numbered section.
+Note `schema.sql` is maintained by hand alongside each migration — it is the bootstrap document, not generated output, so a new migration must be mirrored into it as a new numbered section.
 
-That's why pre-deploy validation uses `scripts/rehearse-migrations.sh` (BEGIN … ROLLBACK against production) rather than a local database.
+## Local database
+
+`supabase start -x vector` then `supabase db reset` gives a local Postgres with the full schema (verified: 11 tables, 21 policies, `is_member`/`join_default_club`, the Phase 3.5 constraints, seeded club). Use it for anything that would otherwise mean creating throwaway rows in the live club. Needs Colima running.
+
+- **`-x vector` is required with Colima.** The `supabase_vector` container bind-mounts the Docker socket, and Colima's socket is a forwarded file it can't mount: `operation not supported`. Without the flag, `supabase start` fails after applying every migration.
+- This only works because of `00000000000000_bootstrap_base_tables.sql`. `supabase/migrations/` was never a complete history — the first real migration does `alter table public.shelf_users`, but nothing created it (the base schema came from pasting `schema.sql` into the SQL editor), so a from-scratch apply died on migration 1. The bootstrap migration supplies `shelf_state`/`shelf_users` as they were *before* that migration, and is recorded on production as already-applied via `supabase migration repair --status applied 00000000000000` rather than run.
+- `20260724120000_add_shelf_librarians.sql` seeds a hardcoded **production** user id as the first librarian. It's now guarded by an `auth.users` lookup, because on any other database that FK aborted the whole chain with a 23503. On a fresh local DB you get no librarian — create one by hand (see "Librarian is a role" above).
+
+Pre-deploy validation still uses `scripts/rehearse-migrations.sh` (BEGIN … ROLLBACK against production) as well as the local DB: the local one proves a migration *applies*, the rehearsal proves it applies **to the real data** without changing row counts.
 
 ## Secrets & config
 

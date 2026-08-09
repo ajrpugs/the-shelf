@@ -18,6 +18,16 @@ create policy "shelf_librarians read own"
   using (auth.uid() = user_id);
 
 -- Seed the first librarian (adampugs). Idempotent.
+--
+-- Guarded by an auth.users lookup as of Phase 4 prep: this is a hardcoded
+-- PRODUCTION user id with a foreign key to auth.users, so on any other database
+-- (a local `supabase db reset`, a second environment) it aborted the whole
+-- migration chain with a 23503. Where that user exists this behaves exactly as
+-- before; where they don't, it's a no-op and the bootstrap librarian is created
+-- by hand instead (see "Librarian is a role" in CLAUDE.md).
 insert into public.shelf_librarians (user_id)
-values ('bc3263ee-4dc6-4025-9de7-440340a0dc77')
+select 'bc3263ee-4dc6-4025-9de7-440340a0dc77'
+where exists (
+  select 1 from auth.users where id = 'bc3263ee-4dc6-4025-9de7-440340a0dc77'
+)
 on conflict (user_id) do nothing;

@@ -3,16 +3,14 @@
 # and roll back, proving they work against the real schema and the real data
 # without committing anything.
 #
-# Why not a local database: `supabase db reset` cannot bootstrap this project from
-# scratch. supabase/migrations/ is not a complete history -- the first migration
-# (20260714021113) does `alter table public.shelf_users`, but no migration ever
-# creates that table; the base schema came from running supabase/schema.sql in the
-# SQL editor (README step 2). A from-scratch local apply fails on migration 1.
+# This complements a local `supabase db reset` rather than replacing it. The local
+# DB proves a migration APPLIES; this proves it applies TO THE REAL DATA without
+# changing anything -- real schema, real row counts, real constraint contents, and
+# any backfill running over the actual rows. BEGIN/ROLLBACK means nothing is kept,
+# including on failure, where Postgres aborts the transaction for us.
 #
-# So this rehearses against production instead, which is strictly better evidence
-# anyway: real schema, real row counts, real constraint contents. BEGIN/ROLLBACK
-# means nothing is kept -- including on failure, where Postgres aborts the
-# transaction for us.
+# Run both. A migration that's clean locally can still surprise you on production
+# data (a backfill that overwrites, a constraint an outlier row violates).
 #
 # It is still a WRITE to production for the life of the transaction. It takes
 # ordinary row locks while it runs. Don't run it mid-spin.
