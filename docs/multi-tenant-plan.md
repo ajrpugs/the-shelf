@@ -1,6 +1,6 @@
 # Multi-tenant plan — "The Shelf" as a product
 
-**Status:** Phases 0–4 are implemented and live in production — harden, tenancy foundation, per-club librarian role, hash routing, the Phase 3.5 scoping cleanup, and the Phase 4 lifecycle (create a club, invites, join, leave, delete, onboarding). Phases 5–7 (more auth providers, per-club settings, frontend restructure) are still proposal. See §8 for what's landed vs. what isn't, including what Phase 4 deliberately left open.
+**Status:** Phases 0–4 are implemented and live in production — harden, tenancy foundation, per-club librarian role, hash routing, the Phase 3.5 scoping cleanup, and the Phase 4 lifecycle (create a club, invites, join, leave, delete, onboarding). Phases 5–7 (standard auth, per-club settings, frontend restructure) are still proposal — Phase 5 was rescoped 2026-08-09 from "add providers" to a conventional sign-in/create-account page, keeping identity providers first-class alongside email. See §8 for what's landed vs. what isn't, including what Phase 4 deliberately left open.
 **Goal (decided 2026-07-26, revised 2026-07-27, see §10):** anyone can sign up at `sh3lf.net`, create their own private book club (no invite needed to create one), invite members, and run the wheel/meetings/reviews flow independently of every other club — free, open signup, Discord optional per club rather than required.
 
 This builds on the feasibility findings: the blocker isn't difficulty, it's that the data model changes under everything at once, and (as of writing) there were no tests to catch what breaks. That second half is now addressed — see §5.
@@ -13,7 +13,7 @@ This builds on the feasibility findings: the blocker isn't difficulty, it's that
 |---|---|---|
 | Hosting | GitHub Pages | GitHub Pages (unchanged — see below) |
 | URL | `sh3lf.net/` | `sh3lf.net/#/c/<club-slug>` |
-| Auth | Discord only | Email magic link + Google + Discord |
+| Auth | Discord only ("Sign in with Discord" is the whole page) | Standard sign-in / create-account page: email accounts **plus** Discord and Google as first-class options |
 | Club state | `shelf_state` row `id=1` | `club_state` row per club |
 | Past reads | jsonb array inside that row | `reads` table |
 | Librarian | one shared `ADMIN_PASSWORD` | `club_members.role = 'librarian'` |
@@ -174,13 +174,24 @@ Writes continue to go through edge functions with the service role. `club_secret
 
 ## 4. Auth
 
-Add **email magic link** (Supabase built-in) and **Google**; keep Discord. Magic link matters most — requiring Discord to join a book club is a hard sell for a general audience.
+**Requirement sharpened 2026-08-09:** this isn't just "add more providers." The sign-in screen has to become a **conventional web-app auth page** — sign in to an existing account, or create a new one — instead of the single "Sign in with Discord" button that is the entire entry point today. That shape is right for a Discord-native club of twelve friends and wrong for a product a stranger is expected to sign up for.
 
-Work involved:
-- `displayNameFromMeta` normalizer per provider (each nests name/avatar differently).
-- Identity linking so one human signing in with Google *and* Discord isn't two accounts.
-- Discord features degrade gracefully: `/mybook` and the winner @-ping key off `discord_id`. Users without one still work — the webhook already falls back to a plain announcement.
-- Discord becomes **optional per club**: a club supplies its own webhook or gets no Discord integration.
+**Identity providers stay first-class, not a fallback.** Email accounts are *added alongside* Discord and Google, not in place of them: anyone who prefers to sign in with a provider should keep doing exactly that, and every existing Discord reader must be unaffected — no migration, no re-auth, no change to how they get in. The point is that email is *available*, not that it's preferred. A conventional page presents both together — provider buttons and an email form on the same screen — with neither buried.
+
+Concretely, the auth surface needs:
+- **Email accounts as an equal path.** An email field, a password (or a magic link — see the decision below), a "Create account" path distinct from "Sign in", and a forgot-password flow, sharing the screen with the provider buttons.
+- **A display name step.** Everything today gets a name and avatar from Discord metadata via `displayNameFromMeta`. An email signup has neither, so it currently lands as "Reader". Somebody signing up needs to be asked what to call them, which is the first thing that genuinely has to write to `profiles` rather than `shelf_users`.
+- **`displayNameFromMeta` normalizer per provider** — each nests name/avatar differently, and email has nothing to nest.
+- **Identity linking**, so one human signing in with Google *and* Discord isn't two accounts (Supabase `linkIdentity`). This gets *more* important once both paths are equally used, not less: the common case becomes someone who signed up with `you@gmail.com` and later clicks "Sign in with Google" for the same address, or a Discord reader who later wants a password. Supabase's behavior here depends on whether same-email linking is enabled, and the two settings fail in opposite directions — one silently merges accounts, the other creates a duplicate person with an empty shelf. Needs a decision and a test, not a default.
+- **Discord degrades gracefully.** `/mybook` and the winner @-ping key off `discord_id`; readers without one already work, and the webhook already falls back to a plain announcement. Discord also becomes **optional per club** (a club supplies its own webhook or gets no integration) — that half is Phase 6.
+
+Three things this drags in that the original one-line plan didn't account for:
+
+1. **Transactional email becomes infrastructure.** Supabase's built-in SMTP is rate-limited to a handful of messages an hour and explicitly not for production. Confirmations, magic links and password resets all need a real provider (Resend / Postmark / SES) plus a verified sending domain on `sh3lf.net`. This is the first hard external dependency and the first thing on the running-cost table (§6) that isn't Supabase.
+2. **Email confirmation collides with invite links.** If confirmation is on, a new reader can't act until they've clicked a link in their inbox — so "click invite → sign up → land in the club" becomes a flow that leaves the browser and comes back. The invite code has to survive that round trip. (It doesn't survive the *current* OAuth round trip either — see the bug noted in §8 Phase 4.)
+3. **Bot signups become possible.** Open signup with email is a spam vector in a way Discord OAuth wasn't. Supabase supports hCaptcha/Turnstile on sign-up, and sign-in attempts want rate limiting. This is §7's "club creation limits" problem arriving one layer earlier, at account creation.
+
+**Decision needed: password or magic link?** Passwords are what "standard auth" means to most people and work offline from email once set, but bring reset flows, strength rules and credential-stuffing exposure. Magic links delete the whole password surface but make every sign-in depend on email delivery and read as unusual to some users. Supabase does both; the honest middle is passwords as the default with magic link as a "email me a link instead" option, at the cost of building both.
 
 ---
 
@@ -224,8 +235,9 @@ Partial stopgap in place, not a substitute: `scripts/backup.sh` takes a verified
 | Supabase Pro | ~$25/mo *(verify current pricing)* |
 | Domain | ~$12/yr |
 | GitHub Pages | $0 |
+| Transactional email (Phase 5) | $0 → ~$20/mo *(free tiers cover a club's volume; a paid plan is about deliverability and a verified domain, not send count)* |
 
-≈ **$26/mo**. Fine as a hobby; needs a funding answer if it grows.
+≈ **$26/mo** today, and the same until Phase 5 needs email. Fine as a hobby; needs a funding answer if it grows.
 
 ---
 
@@ -354,15 +366,29 @@ Verified against a local database with two real clubs, over real HTTP to locally
 
 #### What Phase 4 leaves open
 
-- **Sign-up is still Discord-only**, so "a stranger can start a club" means "a stranger with a Discord account". Phase 5 is what makes the sentence fully true.
+- **Sign-up is still Discord-only**, so "a stranger can start a club" means "a stranger with a Discord account" — and the entry point is a single provider button, not an account page. Phase 5 (rescoped, see below) is what makes the sentence fully true; Discord stays a first-class way in either way.
 - **`join_default_club()` still exists and still runs on every sign-in**, so anyone who signs in is added to the seeded club. That was the app's behavior long before Phase 4 and this preserves it rather than changing the existing club's terms mid-flight — but it is the one remaining "open door", and retiring it is a one-line change plus a decision about what a brand-new signed-in reader with no clubs should see.
 - **Transferring the librarian role** is `admin_grant_librarian`/`admin_revoke_librarian` in `admin-update`, which existed already; there's no single "transfer ownership" action, and `clubs.created_by` is recorded but never consulted for permissions.
 - **Moderation, Terms/Privacy, and account deletion** (§7) are untouched. Open signup plus other people's content is exactly the situation that makes them matter, and none of it is engineering-blocked.
 - `/mybook` still only works for the seeded club — see the note in `discord-interactions`; guild → club is Phase 6.
 
-### Phase 5 — Auth providers
-Magic link + Google, identity normalization, account linking.
-**Exit:** a club can run with zero Discord users.
+### Phase 5 — Standard auth
+Rescoped 2026-08-09 (see §4). Not just "more providers": a conventional sign-in / create-account page, with **identity providers kept as first-class options alongside email** — Discord unchanged for everyone already using it, Google added, email accounts new.
+**Exit:** a stranger can create an account with an email address, an existing Discord reader notices no difference, and a club can run with zero Discord users.
+
+**Slices:**
+
+- **5a — email accounts.** Sign in / create account / forgot password against Supabase email auth, on one screen with the provider buttons. Requires a real SMTP provider first (see below) — without it, confirmations and resets silently don't arrive.
+- **5b — display names.** An email signup arrives with no name and no avatar, so it currently lands as "Reader". Ask for a display name at sign-up and on first sign-in if it's missing. **This is the first thing that has a real reason to write `profiles`** rather than `shelf_users` — identity that isn't provider-shaped — so it's where the table added back in Phase 1 finally earns its place, and where `shelf_users` starts becoming the legacy half.
+- **5c — Google.** Cheap on its own once 5a's screen exists; `displayNameFromMeta` gains a third shape.
+- **5d — identity linking.** One human, one account, across email + Discord + Google. Decide the same-email policy deliberately (§4) and test both directions; getting it wrong either merges two people or splits one.
+- **5e — abuse controls.** Turnstile/hCaptcha on sign-up and rate limiting on sign-in. Email sign-up is a bot vector in a way Discord OAuth wasn't; this is §7's spam problem arriving at account creation rather than club creation.
+
+**Prerequisite, not a slice: transactional email.** A verified sending domain on `sh3lf.net` plus Resend/Postmark/SES. Supabase's built-in SMTP is rate-limited to a handful of messages an hour and explicitly not for production, so *every* email-shaped feature here is blocked on it. First hard external dependency the project has had, and the first line on the cost table (§6) that isn't Supabase.
+
+**Do first, independently of this phase:** the invite/redirect bug in §8's Phase 4 notes. `signIn()` strips the hash before the OAuth round trip, so a signed-out person clicking `#/join/<code>` loses the code and lands in the seeded club instead. Phase 5 makes this strictly worse — email confirmation adds a second round trip through the user's inbox, and both have to preserve where the person was going. Worth fixing as its own small change rather than inside a big auth rewrite.
+
+**Also worth deciding here:** signed-out visitors currently see nothing but the sign-in gate — there is no public landing page, and a `public` club isn't actually readable without an account even though RLS allows it. A conventional signup flow usually has something to sign up *from*.
 
 ### Phase 6 — Per-club settings
 Name, tagline, timezone (retire the hardcoded `America/Toronto`), cadence, own Discord webhook, per-club ICS token.
