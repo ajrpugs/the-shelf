@@ -548,3 +548,76 @@ where id = '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8';
 update public.clubs
 set slug = 'the-guild'
 where id = '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8';
+
+-- 20. Phase 3.5: shelf_state per club -------------------------------------
+-- shelf_state stops being the fixed `id = 1` singleton -- club_id becomes the
+-- real key, and `id` gets a sequence default so a club-creation path can insert
+-- a state row without inventing one. See
+-- 20260809120000_shelf_state_per_club.sql.
+
+alter table public.shelf_state
+  drop constraint if exists shelf_state_club_id_key;
+alter table public.shelf_state
+  add constraint shelf_state_club_id_key unique (club_id);
+
+create sequence if not exists public.shelf_state_id_seq owned by public.shelf_state.id;
+select setval(
+  'public.shelf_state_id_seq',
+  greatest(coalesce((select max(id) from public.shelf_state), 0), 1)
+);
+alter table public.shelf_state
+  alter column id set default nextval('public.shelf_state_id_seq');
+
+-- 21. Phase 3.5: club_members is the source of truth ----------------------
+-- Membership, role, and a reader's current book all come from club_members now.
+-- The draw pool used to be read from shelf_users, which has no club_id at all.
+-- join_default_club() is the narrow self-join RPC that replaces the missing
+-- insert policy until Phase 4's invite flow. See
+-- 20260809130000_club_members_source_of_truth.sql.
+
+insert into public.club_members (club_id, user_id, role, book, joined_at)
+select
+  '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8',
+  su.id,
+  case when sl.user_id is not null then 'librarian' else 'member' end,
+  su.book,
+  su.updated_at
+from public.shelf_users su
+left join public.shelf_librarians sl on sl.user_id = su.id
+on conflict (club_id, user_id) do update
+  set role = excluded.role,
+      book = excluded.book;
+
+create or replace function public.join_default_club()
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  insert into public.club_members (club_id, user_id, role)
+  select '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8', auth.uid(), 'member'
+  where auth.uid() is not null
+  on conflict (club_id, user_id) do nothing;
+$$;
+
+revoke all on function public.join_default_club() from public, anon;
+grant execute on function public.join_default_club() to authenticated;
+
+alter publication supabase_realtime add table public.club_members;
+
+-- 22. Phase 3.5: per-club read keys ---------------------------------------
+-- `reads.ts` and shelf_reviews' primary key were global; both are now scoped by
+-- club_id, so one club's read can't collide with (or block) another's. The plan's
+-- original read_id-UUID fix is off the table -- `reads.ts` is load-bearing as a
+-- byte-for-byte join key. See 20260809140000_scope_read_keys_per_club.sql,
+-- including its note on deploying set-review/admin-update right after.
+
+alter table public.reads drop constraint if exists reads_ts_key;
+create unique index if not exists reads_club_ts_key on public.reads (club_id, ts);
+create index if not exists reads_club_ts_desc_idx on public.reads (club_id, ts desc);
+
+alter table public.shelf_reviews drop constraint if exists shelf_reviews_pkey;
+alter table public.shelf_reviews add primary key (club_id, book_ts, user_id);
+
+create index if not exists shelf_comments_club_book_idx
+  on public.shelf_comments (club_id, book_ts, created_at);

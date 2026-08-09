@@ -91,9 +91,12 @@ test("RLS isolates a private club's data from everyone but its own members", asy
       values ('${testClubId}', '${userA}', 'member');
     insert into reads (club_id, round, winner_id, winner_username, book, ts)
       values ('${testClubId}', 1, '${userA}', 'Test', '__rls_isolation_test__', '${testTs}');
-    insert into shelf_state (id, club_id, data)
-      select coalesce(max(id), 0) + 1, '${testClubId}', '{"eliminated":[],"roundNumber":1}'::jsonb
-      from shelf_state;
+    -- No explicit id: shelf_state stopped being the id=1 singleton in Phase 3.5
+    -- and its id column now defaults off a sequence, so a club's state row is
+    -- created by naming only its club_id. Inserting without an id is itself
+    -- part of what is under test here.
+    insert into shelf_state (club_id, data)
+      values ('${testClubId}', '{"eliminated":[],"roundNumber":1}'::jsonb);
     insert into shelf_reviews (book_ts, user_id, club_id, dnf)
       values ('${testTs}', '${userA}', '${testClubId}', true);
     insert into shelf_comments (id, book_ts, user_id, club_id, body)
@@ -148,6 +151,70 @@ test("RLS isolates a private club's data from everyone but its own members", asy
       delete from shelf_state where club_id = '${testClubId}';
       delete from club_members where club_id = '${testClubId}';
       delete from clubs where id = '${testClubId}';
+    `);
+  }
+});
+
+// Phase 3.5: the keys that identify a club's state and its reads are per-club,
+// not global. Two throwaway clubs (the real club is never written to) prove that
+// one club can neither block nor be confused with another.
+test("club state and read keys are scoped per club", async (t) => {
+  const clubOne = randomUUID();
+  const clubTwo = randomUUID();
+  const sharedTs = `key-scoping-test-${randomUUID()}`;
+
+  runSql(`
+    insert into clubs (id, slug, name, visibility) values
+      ('${clubOne}', 'key-scoping-one-${clubOne}', 'Key scoping one', 'private'),
+      ('${clubTwo}', 'key-scoping-two-${clubTwo}', 'Key scoping two', 'private');
+    insert into shelf_state (club_id) values ('${clubOne}'), ('${clubTwo}');
+  `);
+
+  try {
+    await t.test("two clubs can hold a read with the same ts", () => {
+      // Previously `reads.ts` was globally unique, so whichever club drew second
+      // in a given millisecond got a hard insert failure from the other's row.
+      runSql(`
+        insert into reads (club_id, round, winner_username, book, ts) values
+          ('${clubOne}', 1, 'Test', '__key_scoping_one__', '${sharedTs}'),
+          ('${clubTwo}', 1, 'Test', '__key_scoping_two__', '${sharedTs}');
+      `);
+      const [row] = runSql(`select count(*) as n from reads where ts = '${sharedTs}';`);
+      assert.equal(Number(row.n), 2);
+    });
+
+    await t.test("one club can hold a read with that ts only once", () => {
+      assert.throws(() => runSql(`
+        insert into reads (club_id, round, winner_username, book, ts)
+          values ('${clubOne}', 1, 'Test', '__key_scoping_dupe__', '${sharedTs}');
+      `));
+    });
+
+    await t.test("a club can only have one state row", () => {
+      assert.throws(() => runSql(`insert into shelf_state (club_id) values ('${clubOne}');`));
+    });
+
+    await t.test("the same reader can review each club's same-ts read", () => {
+      const [{ user_a: userA }] = runSql(`
+        select (array_agg(user_id order by user_id))[1] as user_a
+        from club_members where club_id = '${DEFAULT_CLUB_ID}';
+      `);
+      // shelf_reviews used to be primary-keyed (book_ts, user_id) alone, so the
+      // second of these was a key collision across two unrelated clubs.
+      runSql(`
+        insert into shelf_reviews (club_id, book_ts, user_id, dnf) values
+          ('${clubOne}', '${sharedTs}', '${userA}', true),
+          ('${clubTwo}', '${sharedTs}', '${userA}', true);
+      `);
+      const [row] = runSql(`select count(*) as n from shelf_reviews where book_ts = '${sharedTs}';`);
+      assert.equal(Number(row.n), 2);
+    });
+  } finally {
+    runSql(`
+      delete from shelf_reviews where book_ts = '${sharedTs}';
+      delete from reads where ts = '${sharedTs}';
+      delete from shelf_state where club_id in ('${clubOne}', '${clubTwo}');
+      delete from clubs where id in ('${clubOne}', '${clubTwo}');
     `);
   }
 });

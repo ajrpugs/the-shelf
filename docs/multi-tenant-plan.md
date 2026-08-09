@@ -1,9 +1,9 @@
 # Multi-tenant plan — "The Shelf" as a product
 
-**Status:** Phases 0–2 (harden, tenancy foundation, per-club librarian role) are implemented and live in production. Phases 3–7 (routing/hosting move, signup/invites, more auth providers, per-club settings, frontend restructure) are still proposal — see §8 for what's actually landed vs. what isn't.
+**Status:** Phases 0–3 (harden, tenancy foundation, per-club librarian role, hash routing) plus Phase 3.5 (the scoping cleanup Phase 1 deferred) are implemented and live in production. Phases 4–7 (signup/invites, more auth providers, per-club settings, frontend restructure) are still proposal — see §8 for what's actually landed vs. what isn't.
 **Goal (decided 2026-07-26, revised 2026-07-27, see §10):** anyone can sign up at `sh3lf.net`, create their own private book club (no invite needed to create one), invite members, and run the wheel/meetings/reviews flow independently of every other club — free, open signup, Discord optional per club rather than required.
 
-This builds on the feasibility findings: the blocker isn't difficulty, it's that the data model changes under everything at once, and there are currently no tests to catch what breaks.
+This builds on the feasibility findings: the blocker isn't difficulty, it's that the data model changes under everything at once, and (as of writing) there were no tests to catch what breaks. That second half is now addressed — see §5.
 
 ---
 
@@ -190,7 +190,13 @@ These are pre-existing weaknesses that multi-tenancy would amplify:
 
 - **Lost updates.** `shelf_state.data` is read-modify-write with no locking. One librarian per club makes collisions nearly impossible today; with more librarians, two concurrent admin actions silently clobber each other. Add the `version` column and a `where version = $expected` guard.
 - **`normalizeState` is duplicated** in `index.html` and `admin-update` and rebuilds history items field-by-field — any new field must be added to both or it's silently wiped. Moving history to `reads` largely retires this.
-- **No tests.** The only harness is the ad-hoc headless DOM stub used during the calendar work. A refactor of this size without tests is where things break quietly.
+- **No tests.** ✅ addressed. At the time of writing the only harness was the ad-hoc headless DOM stub from the calendar work. There are now four layers, all runnable on demand (see CLAUDE.md → Common commands):
+  - `node --test supabase/functions/_shared/*.test.mjs` — 16 offline unit tests over the pure draw/undo/rating/meeting logic (Phase 0).
+  - `deno check supabase/functions/*/index.ts` — typechecks all six edge functions. **This is the only thing that typechecks them**; the Supabase deploy pipeline transpiles without checking, which is how 15 pre-existing type errors sat undetected until the tooling was installed 2026-08-09.
+  - `node --test supabase/tests/rls-isolation.test.mjs` — cross-tenant RLS isolation against the linked project (Phase 1).
+  - `scripts/rehearse-migrations.sh` — applies pending migrations to production inside `BEGIN … ROLLBACK`, proving them against real schema and real data without committing.
+
+  Still uncovered: `render()` and the ~3,500-line client module (nothing beyond a parse check), and the edge functions' request handling end-to-end. Phase 7 is where a real frontend harness becomes worth it.
 
 ---
 
@@ -200,12 +206,16 @@ Supabase will not be the bottleneck. A club's state is a few KB; a thousand club
 
 **Two things must be right from day one**, or cost scales with *total users across all clubs* rather than per club:
 
-1. **Scope `loadAll`.** It currently does `select("*")` on users, reviews, and comments with no filter. Every client would download every club's data on every refresh.
-2. **Filter realtime.** The four `postgres_changes` subscriptions have no filter, so Club A's activity re-renders Club B. Add `filter: 'club_id=eq.<id>'`.
+1. **Scope `loadAll`.** ✅ done — reviews/comments/reads/reactions in Phase 1 slice 3; the last unscoped sweep (`shelf_users.select("*")`) in Phase 3.5, which replaced it with this club's `club_members` plus an `.in("id", memberIds)` identity fetch.
+2. **Filter realtime.** ✅ done — every `postgres_changes` subscription carries `filter: 'club_id=eq.<id>'` except `shelf_users`, which has no `club_id` to filter on and is now only watched for display-name/avatar changes (books, joins and role changes arrive via `club_members`).
 
 Upgrade to **Supabase Pro** for reliability, not capacity:
 - Free projects **pause after ~a week of inactivity** — unacceptable once others depend on it.
 - **No daily backups on free** — one bad `reset` from losing every club's history.
+
+**Confirmed 2026-08-09, and worse than "no daily backups" implies.** `supabase backups list` on the live project returns `pitr_enabled: false` with an **empty** backup array — there is no restore point of any kind, and never has been. A single `reset` (or a bad migration) loses 17 reads, 80 reviews and 5 comments permanently. This is the largest standing risk to the club's data and it is entirely independent of the tenancy work.
+
+Partial stopgap in place, not a substitute: `scripts/backup.sh` takes a verified logical backup on demand (pg_dump schema/data/roles via Docker, plus a row-count-verified public-data snapshot that works without it) into `~/the-shelf-backups/`. It is **manual** — nothing runs it on a schedule, so the club is only ever as protected as the last time someone remembered. Pro's PITR is still the actual fix; a cron/launchd job around `backup.sh` is the cheap interim one.
 
 ### Running cost
 
@@ -265,9 +275,42 @@ No hosting move (see §1, decided 2026-07-26: staying on GitHub Pages). Add a `#
 
 Landed 2026-07-27: `index.html`'s tab bar now routes through `#/c/<slug>/<tab>` (`parseRoute()`/`goToTab()`) instead of an in-memory-only `currentTab`, so every tab has a real, refresh-safe, back-button-capable URL — closing the "`#tab=calendar` has no URL" gap called out in §1. `<slug>` is captured by `parseRoute()` but always `DEFAULT_CLUB_SLUG` ("the-guild" — renamed the same day from "the-shelf" to match the club's display name, "The Guild") for now; there's still no `clubs`-by-slug lookup anywhere in the client, so "club resolves from the hash" is only the URL *shape*, not real resolution — that part is genuinely Phase 4's job, once a second club actually exists to resolve to. The five pre-existing detail routes (`#book=`, `#shelf=`, `#tag=`, `#reader=`, `#recap`) are untouched.
 
+### Phase 3.5 — Scoping cleanup *(no user-visible change)* — ✅ done
+
+Not in the original plan. Added 2026-08-09, after a readiness review for Phase 4 found that several things Phase 1 explicitly deferred as "only matters once a person can join a second club" are load-bearing the moment Phase 4 lets anyone *create* a second club — and four of them were cross-tenant data bugs rather than missing features. All of it is invisible to the existing club, so it shipped against the live single club the way Phase 0 did.
+
+What landed:
+
+1. **`shelf_state` stopped being a singleton.** It carried a `club_id` column from Phase 1 slice 1 but was still *addressed* as the fixed `id = 1` row, so club #2 would have shared club #1's `eliminated` list and `roundNumber`. `unique (club_id)` plus a sequence default on `id` makes club_id the real key; `admin-update` and `loadAll` both address it that way now.
+2. **`club_members` became the source of truth for membership, role, and book.** `draw` pulled its eligible pool straight from `shelf_users`, which has no `club_id` at all — club #2's wheel would have spun up every reader of every club, and one person could only ever hold one book across all their clubs. The book now lives on the membership row; `shelf_users` is identity only (display name, avatar, `discord_id`), and its `book` column is a legacy mirror nothing reads. `join_default_club()` — a narrow security-definer RPC that can only add *the caller* to *the seeded club* — stands in for the insert policy `club_members` deliberately lacks, until Phase 4's invite flow replaces it.
+3. **Every edge-function query is club-scoped.** Most consequentially `reset`, whose `reads` delete and book-clear were both table-wide (`.neq("id", <zero uuid>)`) — one librarian's reset would have destroyed every club's history. Same for the four `ts`-keyed actions (`admin_set_rating`, `admin_set_ratings_open`, `admin_set_meeting`, `admin_announce_meeting`), `undo_last_spin`, `admin_import_reviews`, `set-review`, and `post-comment`. `admin_remove_user` now deletes the *membership* rather than the global `shelf_users` identity row, which would have removed the person from every club they belong to.
+4. **`calendar-feed` resolves one club.** It was a single unfiltered query over `reads`, so every subscriber would have received every club's schedule (§9's do-not-defer item). It now takes `?token=<club_secrets.calendar_token>` — finally consuming the column Phase 1 added for exactly this. A token-less request falls back to the seeded club rather than to "all clubs", so members already subscribed to the original URL keep working; Phase 6 drops the fallback once the app can surface a real token.
+5. **The client's Admin gate reads `club_members.role`.** Phase 2 fixed the server, so a cross-club librarian already got a 403 — but the UI read the global `shelf_librarians` table and would still have handed them the Admin tab and controls in a club they don't run. `shelf_librarians` is now a mirror too, written by grant/revoke and read by nothing.
+
+Also folded in, because they're the same bug class as (3): `reads.ts` is unique per `(club_id, ts)` rather than globally (a global unique means one club's draw can hard-fail another's), and `shelf_reviews` is primary-keyed `(club_id, book_ts, user_id)`. This is the "`book_ts` is not unique across clubs" hazard from §2 — closed by scoping the constraints, *not* by the read_id-UUID swap the section originally proposed, which is off the table now that `reads.ts` is load-bearing as a byte-for-byte join key.
+
+**Exit:** two clubs can coexist and run independently — separate state, separate reader pools, separate books, separate resets, separate calendar feeds — with no query in the codebase able to reach across clubs.
+
+#### Verification tooling landed alongside it
+
+The repo had no way to run its own documented checks — no `node`, no `deno`, no Docker on the machine. Installing them (`brew install node deno colima docker`) immediately surfaced three defects that no amount of reading would have caught, which is the argument for doing it before Phase 4 rather than after:
+
+- **15 pre-existing type errors** across `admin-update` (10) and `discord-interactions` (5), confirmed against HEAD. Root cause: `type X = ReturnType<typeof createClient>` resolves supabase-js's generic defaults to `never`/`unknown`, so every helper rejected the real client and `.upsert()` rejected every object literal against a `never` schema. Plus a `Uint8Array<ArrayBufferLike>` vs `BufferSource` mismatch in the Ed25519 verification. None ever broke production because **the Supabase deploy pipeline transpiles without typechecking** — meaning these functions had never been typechecked at all.
+- **A syntax error in new test code** — a SQL comment containing backticks inside a JS template literal, which made `rls-isolation.test.mjs` unparseable.
+- **`node --test <dir>` no longer works** (Node ≥23 treats a bare directory as a module). The command CLAUDE.md documented had silently stopped working.
+
+Two things that are now possible and weren't:
+
+- `scripts/rehearse-migrations.sh` — applies pending migrations to production inside `BEGIN … ROLLBACK`. Phase 3.5's three migrations were rehearsed this way before being pushed: all four objects created, the old global `reads_ts_key` dropped, the new 3-column review PK in place, and **row counts identical** (12 members / 10 books / 1 librarian / 17 reads / 80 reviews), then discarded.
+- `scripts/backup.sh` — see §6. This is what turned up the fact that the project has no backups at all.
+
+Also discovered: **`supabase db reset` does not work on this repo**, and a fresh project can't be bootstrapped from `migrations/` alone — the first migration alters `shelf_users` but nothing ever creates it, because the base schema comes from running `schema.sql` in the SQL editor. Any future "spin up a second environment" work (Phase 4 will want one) has to solve that first.
+
 ### Phase 4 — Signup & lifecycle
 Create a club, invite codes, join, leave, transfer librarian, delete. Onboarding for an empty club. Since §7 is open in full again (open signup, revised 2026-07-27), this phase also owns club-creation rate limiting and slug validation/reserved words — not just the lifecycle actions.
 **Exit:** a stranger can go from landing page to a running club without you.
+
+Unblocked by Phase 3.5, which cleared the prerequisites: a new club now has somewhere to keep its game state, its own reader pool, and its own calendar feed. What this phase still owns on the tenancy side: resolving `parseRoute()`'s captured slug to a real club (the client still hardcodes `DEFAULT_CLUB_ID`/`DEFAULT_CLUB_SLUG`, as do all five edge functions), creating the `clubs` + `shelf_state` + `club_secrets` + founding-librarian rows together, and replacing `join_default_club()` with an invite-gated join.
 
 ### Phase 5 — Auth providers
 Magic link + Google, identity normalization, account linking.
@@ -284,7 +327,7 @@ Name, tagline, timezone (retire the hardcoded `America/Toronto`), cadence, own D
 
 ## 9. Security items not to defer
 
-- **ICS feed is public and unauthenticated.** Per-club feeds keyed by `club_id` would let anyone enumerate other clubs' schedules. Use `calendar_token` in the URL.
+- **ICS feed is public and unauthenticated.** ✅ addressed in Phase 3.5 — `calendar-feed` takes `?token=<calendar_token>`, and a token-less request serves only the seeded club (never all clubs). The remaining gap is that the app can't yet *show* a member their club's token, so nobody is using a real one; Phase 6 surfaces it and drops the fallback.
 - **Discord webhook URLs are credentials** — anyone holding one can post to that channel. Hence `club_secrets`, service-role only.
 - **RLS is the only thing between tenants.** Test it like it matters.
 

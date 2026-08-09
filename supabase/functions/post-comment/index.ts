@@ -15,6 +15,10 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// Stand-in until per-club routing exists (Phase 4 of docs/multi-tenant-plan.md).
+// Every query below is scoped by it -- a `book_ts` is only unique within a club.
+const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
@@ -46,6 +50,7 @@ Deno.serve(async (req) => {
     const { error: delErr } = await admin
       .from("shelf_comments")
       .delete()
+      .eq("club_id", DEFAULT_CLUB_ID)
       .eq("id", String(body.delete_id))
       .eq("user_id", userId);
     if (delErr) return json({ error: delErr.message }, 500);
@@ -62,6 +67,7 @@ Deno.serve(async (req) => {
   const { data: match, error: readsErr } = await admin
     .from("reads")
     .select("ts")
+    .eq("club_id", DEFAULT_CLUB_ID)
     .eq("ts", bookTs)
     .maybeSingle();
   if (readsErr) return json({ error: readsErr.message }, 500);
@@ -75,6 +81,7 @@ Deno.serve(async (req) => {
     const { data: parent, error: parentErr } = await admin
       .from("shelf_comments")
       .select("id, book_ts, parent_id")
+      .eq("club_id", DEFAULT_CLUB_ID)
       .eq("id", String(body.parent_id))
       .maybeSingle();
     if (parentErr) return json({ error: parentErr.message }, 500);
@@ -86,7 +93,7 @@ Deno.serve(async (req) => {
 
   const { data: saved, error: insErr } = await admin
     .from("shelf_comments")
-    .insert({ book_ts: bookTs, user_id: userId, body: text, parent_id: parentId })
+    .insert({ club_id: DEFAULT_CLUB_ID, book_ts: bookTs, user_id: userId, body: text, parent_id: parentId })
     .select()
     .single();
   if (insErr) return json({ error: insErr.message }, 500);

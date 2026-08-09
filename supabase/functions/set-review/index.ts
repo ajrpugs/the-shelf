@@ -22,6 +22,10 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// Stand-in until per-club routing exists (Phase 4 of docs/multi-tenant-plan.md).
+// Every query below is scoped by it -- a `book_ts` is only unique within a club.
+const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
+
 const CATEGORIES = ["plot", "characters", "pacing", "language", "themes"] as const;
 
 // A category score must be an integer 1..20.
@@ -74,6 +78,7 @@ Deno.serve(async (req) => {
   const { data: allReads, error: readsErr } = await admin
     .from("reads")
     .select("ts, rating, ratings_open")
+    .eq("club_id", DEFAULT_CLUB_ID)
     .order("ts", { ascending: false });
   if (readsErr) return json({ error: readsErr.message }, 500);
   type Read = { ts: string; rating?: { total?: number } | null; ratings_open?: boolean };
@@ -86,6 +91,7 @@ Deno.serve(async (req) => {
     const { error: delErr } = await admin
       .from("shelf_reviews")
       .delete()
+      .eq("club_id", DEFAULT_CLUB_ID)
       .eq("book_ts", bookTs)
       .eq("user_id", userId);
     if (delErr) return json({ error: delErr.message }, 500);
@@ -126,13 +132,14 @@ Deno.serve(async (req) => {
   const { data: saved, error: upErr } = await admin
     .from("shelf_reviews")
     .upsert({
+      club_id: DEFAULT_CLUB_ID,
       book_ts: bookTs,
       user_id: userId,
       ...scores,
       dnf,
       note: note || null,
       updated_at: new Date().toISOString(),
-    })
+    }, { onConflict: "club_id,book_ts,user_id" })
     .select()
     .single();
   if (upErr) return json({ error: upErr.message }, 500);

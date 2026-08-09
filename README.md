@@ -31,7 +31,7 @@ The app is organized into tabs: **Reading** (what's currently being read / up ne
 ### 1. Supabase project
 
 1. Create a free project at [supabase.com](https://supabase.com).
-2. Open the **SQL editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates all nine tables (`shelf_state`, `reads`, `shelf_users`, `shelf_reviews`, `shelf_comments`, `shelf_comment_reactions`, `shelf_librarians`, `clubs`, `club_members`), their RLS policies, and hooks six of them into realtime. `clubs`/`club_members` are groundwork for eventually supporting more than one club (see [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md)) — everything below still just runs your one club, seeded automatically by the schema.
+2. Open the **SQL editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates all eleven tables (`shelf_state`, `reads`, `shelf_users`, `shelf_reviews`, `shelf_comments`, `shelf_comment_reactions`, `shelf_librarians`, `clubs`, `club_members`, `profiles`, `club_secrets`), their RLS policies, and hooks seven of them into realtime. `clubs`/`club_members` are the groundwork for eventually supporting more than one club (see [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md)) — everything below still just runs your one club, seeded automatically by the schema.
 
 ### 2. Discord OAuth (sign-in)
 
@@ -64,7 +64,7 @@ supabase functions deploy calendar-feed --no-verify-jwt
 - **`discord-interactions`** — backs the `/mybook` slash command (optional; see below).
 - **`set-review`** — lets a signed-in reader submit or clear their own rubric review of the current read.
 - **`post-comment`** — lets a signed-in reader post or delete their own comment on a book's discussion thread.
-- **`calendar-feed`** — public, read-only `.ics` feed of scheduled meetings, for subscribing in Google/Apple/Outlook calendars.
+- **`calendar-feed`** — public, read-only `.ics` feed of one club's scheduled meetings, for subscribing in Google/Apple/Outlook calendars. Takes an optional `?token=<club_secrets.calendar_token>` to pick the club; without one it serves the seeded club.
 
 ### 4. Discord posts & slash command (optional)
 
@@ -101,25 +101,61 @@ If you're serving from a custom domain (this repo's live instance is `sh3lf.net`
 
 ### 6. Make your first librarian
 
-There's no signup flow for this — insert rows directly once you have a real `auth.users` id (sign in once first, then find your id in the Supabase dashboard's **Authentication → Users**, or `select id from auth.users;`). You need **both** of these — the actual authorization check is the second one; the first is what the Admin tab's UI reads to know who's a librarian:
+There's no signup flow for this — insert the row directly once you have a real `auth.users` id (sign in once first, then find your id in the Supabase dashboard's **Authentication → Users**, or `select id from auth.users;`). The role lives on your club membership, and both the server's authorization check and the Admin tab's UI read it from there:
 
 ```sql
-insert into shelf_librarians (user_id) values ('<your auth user id>');
 insert into club_members (club_id, user_id, role) values ('8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8', '<your auth user id>', 'librarian')
   on conflict (club_id, user_id) do update set role = 'librarian';
 ```
 
-After that, librarians can grant/revoke the role for other readers from the **Admin** tab — no more SQL needed (it writes both tables for you).
+After that, librarians can grant/revoke the role for other readers from the **Admin** tab — no more SQL needed.
 
 ## Local dev
 
-Just open `index.html` in a browser (or serve it with any static server — `python3 -m http.server`, `npx serve`, etc.). Because Supabase is doing all the persistence, there's nothing to run locally.
+Just open `index.html` in a browser (or serve it with any static server — `python3 -m http.server`, `npx serve`, etc.). Because Supabase is doing all the persistence, there's nothing to build and nothing to run locally.
+
+### Tests, typechecking, and backups
+
+Optional toolchain — needed only to verify changes and take backups, never to run or deploy the app:
+
+```bash
+brew install node deno          # tests + typechecking the edge functions
+brew install colima docker      # only for pg_dump-based backups
+colima start                    # headless Docker VM; `colima stop` when done
+
+# Unit tests for the shared wheel/rating/meeting logic (offline, no network)
+node --test supabase/functions/_shared/*.test.mjs
+
+# Typecheck the edge functions. Worth doing: the Supabase deploy pipeline only
+# transpiles, so this is the ONLY thing that catches type errors in them.
+deno check --no-lock supabase/functions/*/index.ts
+
+# Cross-tenant RLS isolation check. Runs against the LINKED live project (there's
+# no local Postgres here) and cleans up the throwaway rows it creates.
+node --test supabase/tests/rls-isolation.test.mjs
+
+# Back up production. THIS PROJECT HAS NO AUTOMATIC BACKUPS — `supabase backups
+# list` reports no PITR and an empty backup list — so this is the only restore
+# point that exists. Run it before every `supabase db push`.
+scripts/backup.sh
+
+# Dry-run a migration against real production schema + data, then roll back.
+# Nothing is committed.
+scripts/rehearse-migrations.sh supabase/migrations/<file>.sql
+```
+
+Two gotchas worth knowing before you reach for the obvious commands:
+
+- **`supabase db reset` does not work here**, and you can't bootstrap a fresh project from `supabase/migrations/` alone. The first migration alters `shelf_users`, but no migration creates it — the base schema comes from step 2 above (`supabase/schema.sql` in the SQL editor), and migrations layer on top. `schema.sql` is maintained by hand, so a new migration must also be mirrored into it as a new numbered section.
+- **`node --test <directory>` fails** on Node ≥23 (it treats a bare directory as a module). Glob the files, as above.
+
+Hand-run rollback scripts for schema changes live in `supabase/rollback/`, deliberately outside `supabase/migrations/` so `db push` can never apply them.
 
 ## Security notes
 
 - The anon key + RLS mean anyone with the URL can **read** state (including reviews and comments). That's intentional — the seeded club defaults to `visibility = 'public'` in the `clubs` table, which is what actually grants anonymous read access under RLS (not a blanket policy anymore).
 - Writes are locked down by RLS: readers can only insert/update their own `shelf_users` row, insert/update/delete their own `shelf_reviews` row, insert/delete their own `shelf_comments` row, and insert/delete their own `shelf_comment_reactions` row. All game-state changes (`shelf_state`/`reads`) go through the `admin-update` edge function — the client never writes them directly.
-- **Librarian is a role, not a password.** A librarian is any reader whose id has a row in `shelf_librarians`, but the actual authorization check inside `admin-update` reads `club_members.role = 'librarian'` instead (club-scoped, so it holds up once more than one club exists). Neither table has a write policy at all — grants and revokes only happen through the service-role `admin_grant_librarian` / `admin_revoke_librarian` edge-function actions, gated on the caller already being a librarian, which write both tables together. A librarian can't revoke themselves (so the club can never end up with zero librarians via self-service).
+- **Librarian is a per-club role, not a password.** A librarian is a reader whose `club_members` row for that club has `role = 'librarian'` — that's what `admin-update` checks and what the Admin tab reads, so the UI and the server can't disagree. (`shelf_librarians` still exists and is kept in step, but nothing reads it any more.) `club_members` has no write policy at all — grants and revokes only happen through the service-role `admin_grant_librarian` / `admin_revoke_librarian` edge-function actions, gated on the caller already being a librarian. A librarian can't revoke themselves (so the club can never end up with zero librarians via self-service).
 - `admin-update`, `set-review`, and `post-comment` each verify the caller's Supabase JWT themselves (rather than relying on the platform's built-in verification), which is why they're deployed with `--no-verify-jwt`.
 - `discord-interactions` verifies Discord's Ed25519 request signature against `DISCORD_PUBLIC_KEY`, so only genuine Discord requests are honored.
 
@@ -127,13 +163,14 @@ Just open `index.html` in a browser (or serve it with any static server — `pyt
 
 The Supabase dashboard has a full backup + SQL export.
 
-- Game state (eliminated readers, round number) is a small JSON blob: `select data from shelf_state where id = 1;`
+- Game state (eliminated readers, round number) is a small JSON blob, one row per club: `select data from shelf_state where club_id = '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8';`
 - Past reads (ratings, meeting schedules) live in their own table, not the blob: `select * from reads order by ts desc;`
-- Readers plus their current books: `select * from shelf_users;`
+- Who's in the club, their role, and their current book: `select * from club_members;`
+- Reader identities (display name, avatar, linked Discord id): `select * from shelf_users;` — its `book` column is a legacy mirror; don't read it
 - Member rubric reviews (including DNFs): `select * from shelf_reviews;`
 - Book discussion comments (and replies, via `parent_id`): `select * from shelf_comments;`
 - Comment emoji reactions: `select * from shelf_comment_reactions;`
-- Who holds the librarian role: `select * from shelf_librarians;` (the club-scoped mirror `admin-update` actually checks: `select * from club_members where role = 'librarian';`)
+- Who holds the librarian role: `select * from club_members where role = 'librarian';`
 
 ## License
 

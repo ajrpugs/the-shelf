@@ -137,33 +137,44 @@ Deno.serve(async (req) => {
     auth: { persistSession: false },
   });
 
+  // shelf_users is identity (display name, avatar) -- global, no club_id.
   const { data: current } = await admin
     .from("shelf_users")
-    .select("id, discord_username, avatar_url, book")
+    .select("id, discord_username, avatar_url, discord_id")
     .eq("id", userId)
     .maybeSingle();
   if (!current) return json({ error: "reader not found" }, 404);
 
-  const prev = (current.book ?? "").trim();
+  // The book itself lives on the membership row, so one person can hold a
+  // different book in each of their clubs (Phase 3.5). This has to be an upsert
+  // rather than an update: a reader signed in but not yet joined has no row.
+  const { data: membership } = await admin
+    .from("club_members")
+    .select("book")
+    .eq("club_id", DEFAULT_CLUB_ID)
+    .eq("user_id", userId)
+    .maybeSingle();
+  const prev = (membership?.book ?? "").trim();
+
   const { data: updated, error: updErr } = await admin
-    .from("shelf_users")
-    .update({ book: book || null, updated_at: new Date().toISOString() })
-    .eq("id", userId)
+    .from("club_members")
+    .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book: book || null }, { onConflict: "club_id,user_id" })
     .select()
     .single();
   if (updErr) return json({ error: updErr.message }, 500);
 
-  // Best-effort mirror into club_members -- not the source of truth yet, so a
-  // missed sync here is recoverable and must never fail the reader's request.
-  // Awaited (not fire-and-forget) so it actually runs before the isolate can
+  // Legacy mirror onto shelf_users.book, which nothing reads any more. Kept in
+  // step only so the Phase 3.5 cutover stays reversible; it goes away in Phase
+  // 6. Awaited (not fire-and-forget) so it actually runs before the isolate can
   // be torn down after the response is sent.
   try {
-    const { error: syncErr } = await admin
-      .from("club_members")
-      .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book: book || null }, { onConflict: "club_id,user_id" });
-    if (syncErr) console.error("club_members sync failed:", syncErr.message);
+    const { error: mirrorErr } = await admin
+      .from("shelf_users")
+      .update({ book: book || null, updated_at: new Date().toISOString() })
+      .eq("id", userId);
+    if (mirrorErr) console.error("shelf_users book mirror failed:", mirrorErr.message);
   } catch (err) {
-    console.error("club_members sync error:", err);
+    console.error("shelf_users book mirror error:", err);
   }
 
   // Post to Discord only when a book is set/changed. Clearing stays quiet.
@@ -183,7 +194,21 @@ Deno.serve(async (req) => {
     }
   }
 
-  return json({ ok: true, user: updated });
+  // `user` is the identity row merged with this club's membership -- the exact
+  // shape the client assembles in loadAll() and drops straight into its `users`
+  // array, so the response contract is unchanged by the book's move to
+  // club_members.
+  return json({
+    ok: true,
+    user: {
+      id: userId,
+      discord_username: current.discord_username,
+      avatar_url: current.avatar_url,
+      discord_id: current.discord_id,
+      book: book || null,
+      role: (updated as { role?: string } | null)?.role ?? "member",
+    },
+  });
 });
 
 function json(body: unknown, status = 200) {

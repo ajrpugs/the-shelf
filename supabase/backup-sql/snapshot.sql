@@ -1,0 +1,33 @@
+-- Consistent logical snapshot: one query = one transaction. Each table becomes a
+-- single turnkey INSERT that rebuilds its rows from JSON via
+-- jsonb_populate_recordset, so a later column reorder can't corrupt a restore.
+select concat_ws(E'\n',
+  '-- The Shelf - logical backup. Restore into an EMPTY schema, in this order',
+  '-- (parent tables first). Rerunnable only after truncating; these are plain',
+  '-- inserts, not upserts. auth.users is NOT included - it is managed by',
+  '-- Supabase and cannot be recreated from here.',
+  'begin;',
+  (select format('insert into public.clubs select * from jsonb_populate_recordset(null::public.clubs, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.clubs r))),
+  (select format('insert into public.club_secrets select * from jsonb_populate_recordset(null::public.club_secrets, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.club_secrets r))),
+  (select format('insert into public.shelf_users select * from jsonb_populate_recordset(null::public.shelf_users, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.shelf_users r))),
+  (select format('insert into public.profiles select * from jsonb_populate_recordset(null::public.profiles, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.profiles r))),
+  (select format('insert into public.shelf_librarians select * from jsonb_populate_recordset(null::public.shelf_librarians, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.shelf_librarians r))),
+  (select format('insert into public.club_members select * from jsonb_populate_recordset(null::public.club_members, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.club_members r))),
+  (select format('insert into public.shelf_state select * from jsonb_populate_recordset(null::public.shelf_state, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.shelf_state r))),
+  (select format('insert into public.reads select * from jsonb_populate_recordset(null::public.reads, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.reads r))),
+  (select format('insert into public.shelf_reviews select * from jsonb_populate_recordset(null::public.shelf_reviews, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.shelf_reviews r))),
+  (select format('insert into public.shelf_comments select * from jsonb_populate_recordset(null::public.shelf_comments, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.shelf_comments r))),
+  (select format('insert into public.shelf_comment_reactions select * from jsonb_populate_recordset(null::public.shelf_comment_reactions, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.shelf_comment_reactions r))),
+  'commit;'
+) as backup;

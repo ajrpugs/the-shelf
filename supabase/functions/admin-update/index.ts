@@ -4,8 +4,10 @@
 // (deployed --no-verify-jwt so we can pull the user id out, same as set-book)
 // and must have role = 'librarian' in club_members for DEFAULT_CLUB_ID --
 // club-scoped, not the global shelf_librarians table. Draw picks a random
-// eligible reader (from shelf_users where a book is set and their id isn't
-// already in eliminated). Round auto-advances when a pick empties the pool.
+// eligible reader (a club_members row for this club with a book set, whose id
+// isn't already in eliminated). Round auto-advances when a pick empties the
+// pool. Every query in here is filtered by club_id -- see Phase 3.5 of
+// docs/multi-tenant-plan.md.
 //
 // Deploy:
 //   supabase functions deploy admin-update --no-verify-jwt
@@ -29,51 +31,105 @@ const cors = {
 // Base URL of the live app, so Discord embeds can link back to a book's page.
 const SITE_URL = "https://sh3lf.net/";
 
-// Stand-in until per-club routing exists (Phase 3 of docs/multi-tenant-plan.md)
+// Stand-in until per-club routing exists (Phase 4 of docs/multi-tenant-plan.md)
 // -- the only real club today. Matches the seeded row in supabase/schema.sql.
+// Every query below is scoped by it; nothing in this function reads or writes
+// across clubs.
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 
-// club_members dual-writes -- not the source of truth yet, so a missed sync
-// here is recoverable and must never fail the librarian's actual action.
-type AdminClient = ReturnType<typeof createClient>;
+// Derive the client type from an actual createClient(...) call rather than from
+// `ReturnType<typeof createClient>`. The latter resolves supabase-js's generic
+// defaults to never/unknown instead of the any/"public" a real call infers, so
+// every helper below rejects the real client (TS2345) and `.upsert()` rejects
+// every object literal against a `never` schema (TS2353). `deno check` catches
+// this; the Supabase deploy pipeline only transpiles, so it never surfaced.
+function createServiceClient(url: string, key: string) {
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+type AdminClient = ReturnType<typeof createServiceClient>;
 
-async function syncClubMemberBook(client: AdminClient, userId: string, book: string | null): Promise<void> {
+// club_members is the source of truth for membership, role, and a reader's
+// current book (Phase 3.5). The direction of these writes is now the reverse of
+// what it was: the club_members write is the one that must not fail, and
+// shelf_users.book / shelf_librarians are best-effort legacy mirrors. Nothing
+// reads the mirrors any more -- they're kept in step only so the cutover stays
+// reversible, and they go away in Phase 6.
+
+async function mirrorShelfUsersBook(client: AdminClient, userId: string, book: string | null): Promise<void> {
   try {
     const { error } = await client
-      .from("club_members")
-      .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book }, { onConflict: "club_id,user_id" });
-    if (error) console.error("club_members book sync failed:", error.message);
+      .from("shelf_users")
+      .update({ book, updated_at: new Date().toISOString() })
+      .eq("id", userId);
+    if (error) console.error("shelf_users book mirror failed:", error.message);
   } catch (err) {
-    console.error("club_members book sync error:", err);
+    console.error("shelf_users book mirror error:", err);
   }
 }
 
-async function syncClubMembersAllBooksCleared(client: AdminClient): Promise<void> {
+async function setMemberBook(client: AdminClient, userId: string, book: string | null): Promise<void> {
+  const { error } = await client
+    .from("club_members")
+    .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book }, { onConflict: "club_id,user_id" });
+  if (error) throw error;
+  await mirrorShelfUsersBook(client, userId, book);
+}
+
+async function clearAllMemberBooks(client: AdminClient): Promise<void> {
+  const { error } = await client.from("club_members").update({ book: null }).eq("club_id", DEFAULT_CLUB_ID);
+  if (error) throw error;
+  // Mirror only this club's members -- the old version cleared `book` on every
+  // shelf_users row in the database, which with a second club present would
+  // have wiped that club's shelf too. Every step from here down is mirror-only,
+  // so nothing in it may fail the reset: club_members is already cleared, and
+  // that's the write that counts.
   try {
-    const { error } = await client.from("club_members").update({ book: null }).eq("club_id", DEFAULT_CLUB_ID);
-    if (error) console.error("club_members bulk book-clear sync failed:", error.message);
+    const { data, error: idErr } = await client
+      .from("club_members").select("user_id").eq("club_id", DEFAULT_CLUB_ID);
+    if (idErr) {
+      console.error("shelf_users bulk book mirror skipped:", idErr.message);
+      return;
+    }
+    const ids = (data ?? []).map((m: { user_id: string }) => m.user_id);
+    if (!ids.length) return;
+    const { error: mErr } = await client.from("shelf_users").update({ book: null }).in("id", ids);
+    if (mErr) console.error("shelf_users bulk book mirror failed:", mErr.message);
   } catch (err) {
-    console.error("club_members bulk book-clear sync error:", err);
+    console.error("shelf_users bulk book mirror error:", err);
   }
 }
 
-async function syncClubMemberRole(client: AdminClient, userId: string, role: "librarian" | "member"): Promise<void> {
+async function setMemberRole(client: AdminClient, userId: string, role: "librarian" | "member"): Promise<void> {
+  const { error } = await client
+    .from("club_members")
+    .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, role }, { onConflict: "club_id,user_id" });
+  if (error) throw error;
   try {
-    const { error } = await client
-      .from("club_members")
-      .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, role }, { onConflict: "club_id,user_id" });
-    if (error) console.error("club_members role sync failed:", error.message);
+    const mirror = role === "librarian"
+      ? await client.from("shelf_librarians").upsert({ user_id: userId }, { onConflict: "user_id" })
+      : await client.from("shelf_librarians").delete().eq("user_id", userId);
+    if (mirror.error) console.error("shelf_librarians mirror failed:", mirror.error.message);
   } catch (err) {
-    console.error("club_members role sync error:", err);
+    console.error("shelf_librarians mirror error:", err);
   }
 }
 
-async function syncClubMemberRemoved(client: AdminClient, userId: string): Promise<void> {
+// Removing a reader from the club deletes their *membership*, not their
+// identity. shelf_users is global (no club_id), so deleting that row -- which
+// is what this action used to do -- would have removed the person from every
+// club they belong to, and taken their profile with them. Their shelf_users row
+// stays; signing in again re-creates the membership via join_default_club(),
+// which is the same "sign in again to rejoin" behavior as before.
+async function removeMember(client: AdminClient, userId: string): Promise<void> {
+  const { error } = await client
+    .from("club_members").delete().eq("club_id", DEFAULT_CLUB_ID).eq("user_id", userId);
+  if (error) throw error;
+  await mirrorShelfUsersBook(client, userId, null);
   try {
-    const { error } = await client.from("club_members").delete().eq("club_id", DEFAULT_CLUB_ID).eq("user_id", userId);
-    if (error) console.error("club_members removal sync failed:", error.message);
+    const { error: mErr } = await client.from("shelf_librarians").delete().eq("user_id", userId);
+    if (mErr) console.error("shelf_librarians removal mirror failed:", mErr.message);
   } catch (err) {
-    console.error("club_members removal sync error:", err);
+    console.error("shelf_librarians removal mirror error:", err);
   }
 }
 
@@ -406,17 +462,14 @@ Deno.serve(async (req) => {
   if (authErr || !userData?.user) return json({ error: "invalid auth" }, 401);
   const callerId = userData.user.id;
 
-  const client = createClient(
-    url,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    { auth: { persistSession: false } },
-  );
+  const client = createServiceClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   // Club-scoped, not global: a shelf_librarians row makes someone a librarian
   // everywhere, but club_members.role is per (club_id, user_id) -- this is the
   // check that actually stops a librarian of one club from acting as one in
-  // another. shelf_librarians itself is untouched (still what the client's
-  // amLibrarian tab-gate reads; grant/revoke still dual-write both).
+  // another -- and, as of Phase 3.5, the same table the client's own
+  // amLibrarian tab-gate reads, so the UI and the server can no longer
+  // disagree about who is a librarian here.
   const { data: membership } = await client
     .from("club_members").select("role").eq("club_id", DEFAULT_CLUB_ID).eq("user_id", callerId).maybeSingle();
   if (membership?.role !== "librarian") return json({ error: "not a librarian" }, 403);
@@ -428,8 +481,10 @@ Deno.serve(async (req) => {
   // lives in the `reads` table. `version` guards against two concurrent admin
   // actions clobbering each other: every action that touches eliminated/
   // roundNumber writes via writeGameState(), conditioned on this exact value.
+  // Addressed by club_id, not by the old fixed `id = 1` singleton -- shelf_state
+  // now holds one row per club (unique (club_id), see the Phase 3.5 migration).
   const { data: row, error: readErr } = await client
-    .from("shelf_state").select("data, version").eq("id", 1).single();
+    .from("shelf_state").select("data, version").eq("club_id", DEFAULT_CLUB_ID).single();
   if (readErr && readErr.code !== "PGRST116") return json({ error: readErr.message }, 500);
   const gameState: GameState = normalizeGameState(row?.data);
   const version: number = row?.version ?? 0;
@@ -438,7 +493,7 @@ Deno.serve(async (req) => {
     const { data: updated, error } = await client
       .from("shelf_state")
       .update({ data: next, version: version + 1, updated_at: new Date().toISOString() })
-      .eq("id", 1)
+      .eq("club_id", DEFAULT_CLUB_ID)
       .eq("version", version)
       .select()
       .maybeSingle();
@@ -461,12 +516,47 @@ Deno.serve(async (req) => {
   try {
     switch (action) {
       case "draw": {
-        const { data: readers, error: rErr } = await client
-          .from("shelf_users")
-          .select("id, discord_username, book, avatar_url, discord_id")
+        // The eligible pool is *this club's* members who have a book set, read
+        // from club_members. It used to come straight from shelf_users, which
+        // is global identity with no club_id at all -- so the wheel would have
+        // offered up every reader of every club. shelf_users is still where the
+        // winner's display name / avatar / Discord id come from.
+        const { data: members, error: mErr } = await client
+          .from("club_members")
+          .select("user_id, book")
+          .eq("club_id", DEFAULT_CLUB_ID)
           .not("book", "is", null)
           .neq("book", "");
-        if (rErr) throw rErr;
+        if (mErr) throw mErr;
+        type Identity = {
+          id: string;
+          discord_username?: string | null;
+          avatar_url?: string | null;
+          discord_id?: string | null;
+        };
+        const memberIds = (members ?? []).map((m: { user_id: string }) => m.user_id);
+        let identities: Identity[] = [];
+        if (memberIds.length) {
+          const { data: idRows, error: idErr } = await client
+            .from("shelf_users")
+            .select("id, discord_username, avatar_url, discord_id")
+            .in("id", memberIds);
+          if (idErr) throw idErr;
+          identities = (idRows ?? []) as Identity[];
+        }
+        const identityById = new Map(identities.map(u => [u.id, u]));
+        // Same row shape pickEligible has always been handed, so
+        // _shared/shelf-logic.mjs and its tests are untouched.
+        const readers = (members ?? []).map((m: { user_id: string; book: string }) => {
+          const who = identityById.get(m.user_id);
+          return {
+            id: m.user_id,
+            book: m.book,
+            discord_username: who?.discord_username ?? "Reader",
+            avatar_url: who?.avatar_url ?? null,
+            discord_id: who?.discord_id ?? null,
+          };
+        });
         const { eligible, chosen } = pickEligible(readers, gameState.eliminated);
         const pickRound = gameState.roundNumber;
         let newEliminated = [...gameState.eliminated, chosen.id];
@@ -485,7 +575,7 @@ Deno.serve(async (req) => {
         const ts = new Date().toISOString();
         const { error: insErr } = await client
           .from("reads")
-          .insert({ round: pickRound, winner_id: chosen.id, winner_username: chosen.discord_username, book: chosen.book, ts });
+          .insert({ club_id: DEFAULT_CLUB_ID, round: pickRound, winner_id: chosen.id, winner_username: chosen.discord_username, book: chosen.book, ts });
         if (insErr) return json({ error: insErr.message }, 500);
         winner = { round: pickRound, winner_id: chosen.id, winner_username: chosen.discord_username, book: chosen.book, ts };
         winnerAvatarUrl = (chosen as { avatar_url?: string | null }).avatar_url ?? null;
@@ -506,16 +596,21 @@ Deno.serve(async (req) => {
         if (conflict) return conflict;
         gameState.eliminated = [];
         gameState.roundNumber = 1;
-        // Also wipe everyone's book and every past read so the shelf is truly empty.
-        await client.from("shelf_users").update({ book: null }).neq("id", "00000000-0000-0000-0000-000000000000");
-        await client.from("reads").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-        await syncClubMembersAllBooksCleared(client);
+        // Wipe this club's books and this club's past reads so its shelf is
+        // truly empty. Both deletes used to be table-wide (`.neq("id", <zero
+        // uuid>)`), which with a second club present would have destroyed every
+        // club's history from one librarian's reset.
+        await clearAllMemberBooks(client);
+        const { error: delReadsErr } = await client
+          .from("reads").delete().eq("club_id", DEFAULT_CLUB_ID);
+        if (delReadsErr) throw delReadsErr;
         break;
       }
       case "undo_last_spin": {
         const { data: lastRows, error: lastErr } = await client
           .from("reads")
           .select("id, round, winner_id, winner_username, book, ts")
+          .eq("club_id", DEFAULT_CLUB_ID)
           .order("ts", { ascending: false })
           .limit(1);
         if (lastErr) throw lastErr;
@@ -526,6 +621,7 @@ Deno.serve(async (req) => {
         const { data: sameRoundReads, error: srErr } = await client
           .from("reads")
           .select("round, winner_id")
+          .eq("club_id", DEFAULT_CLUB_ID)
           .eq("round", last.round)
           .neq("id", last.id);
         if (srErr) throw srErr;
@@ -541,9 +637,7 @@ Deno.serve(async (req) => {
       case "admin_clear_book": {
         const userId = String(payload.user_id ?? "");
         if (!userId) throw new Error("user_id required");
-        const { error } = await client.from("shelf_users").update({ book: null }).eq("id", userId);
-        if (error) throw error;
-        await syncClubMemberBook(client, userId, null);
+        await setMemberBook(client, userId, null);
         break;
       }
       case "admin_set_book": {
@@ -552,12 +646,7 @@ Deno.serve(async (req) => {
         const userId = String(payload.user_id ?? "");
         if (!userId) throw new Error("user_id required");
         const bookVal = String(payload.book ?? "").trim();
-        const { error } = await client
-          .from("shelf_users")
-          .update({ book: bookVal || null, updated_at: new Date().toISOString() })
-          .eq("id", userId);
-        if (error) throw error;
-        await syncClubMemberBook(client, userId, bookVal || null);
+        await setMemberBook(client, userId, bookVal || null);
         break;
       }
       case "admin_set_rating": {
@@ -566,7 +655,8 @@ Deno.serve(async (req) => {
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
         const { data: entry, error: findErr } = await client
-          .from("reads").select("book, round, rating").eq("ts", ts).maybeSingle();
+          .from("reads").select("book, round, rating")
+          .eq("club_id", DEFAULT_CLUB_ID).eq("ts", ts).maybeSingle();
         if (findErr) throw findErr;
         if (!entry) throw new Error("history item not found");
         const raw = payload.total;
@@ -591,7 +681,9 @@ Deno.serve(async (req) => {
             ratingChange = { book: entry.book, round: entry.round, rating };
           }
         }
-        const { error: updErr } = await client.from("reads").update({ rating: newRating }).eq("ts", ts);
+        const { error: updErr } = await client
+          .from("reads").update({ rating: newRating })
+          .eq("club_id", DEFAULT_CLUB_ID).eq("ts", ts);
         if (updErr) throw updErr;
         break;
       }
@@ -601,13 +693,16 @@ Deno.serve(async (req) => {
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
         const { data: entry, error: findErr } = await client
-          .from("reads").select("ratings_open").eq("ts", ts).maybeSingle();
+          .from("reads").select("ratings_open")
+          .eq("club_id", DEFAULT_CLUB_ID).eq("ts", ts).maybeSingle();
         if (findErr) throw findErr;
         if (!entry) throw new Error("history item not found");
         const nextOpen = payload.open === true
           ? true
           : payload.open === false ? false : !entry.ratings_open;
-        const { error: updErr } = await client.from("reads").update({ ratings_open: nextOpen }).eq("ts", ts);
+        const { error: updErr } = await client
+          .from("reads").update({ ratings_open: nextOpen })
+          .eq("club_id", DEFAULT_CLUB_ID).eq("ts", ts);
         if (updErr) throw updErr;
         break;
       }
@@ -618,7 +713,8 @@ Deno.serve(async (req) => {
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
         const { data: entry, error: findErr } = await client
-          .from("reads").select("book, round, meetings").eq("ts", ts).maybeSingle();
+          .from("reads").select("book, round, meetings")
+          .eq("club_id", DEFAULT_CLUB_ID).eq("ts", ts).maybeSingle();
         if (findErr) throw findErr;
         if (!entry) throw new Error("history item not found");
         const half = buildMeeting(payload.half_at, payload.half_upto);
@@ -630,7 +726,9 @@ Deno.serve(async (req) => {
           if (half) next.half = half;
           if (full) next.full = full;
         }
-        const { error: updErr } = await client.from("reads").update({ meetings: next }).eq("ts", ts);
+        const { error: updErr } = await client
+          .from("reads").update({ meetings: next })
+          .eq("club_id", DEFAULT_CLUB_ID).eq("ts", ts);
         if (updErr) throw updErr;
         // Only worth announcing if something actually moved.
         if (JSON.stringify(prev) !== JSON.stringify(next)) {
@@ -645,7 +743,8 @@ Deno.serve(async (req) => {
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
         const { data: entry, error: findErr } = await client
-          .from("reads").select("book, round, meetings").eq("ts", ts).maybeSingle();
+          .from("reads").select("book, round, meetings")
+          .eq("club_id", DEFAULT_CLUB_ID).eq("ts", ts).maybeSingle();
         if (findErr) throw findErr;
         if (!entry) throw new Error("history item not found");
         if (!entry.meetings || (!entry.meetings.half && !entry.meetings.full)) {
@@ -657,9 +756,7 @@ Deno.serve(async (req) => {
       case "admin_remove_user": {
         const userId = String(payload.user_id ?? "");
         if (!userId) throw new Error("user_id required");
-        const { error } = await client.from("shelf_users").delete().eq("id", userId);
-        if (error) throw error;
-        await syncClubMemberRemoved(client, userId);
+        await removeMember(client, userId);
         const newEliminated = gameState.eliminated.filter(id => id !== userId);
         const conflict = await writeGameState({ eliminated: newEliminated, roundNumber: gameState.roundNumber });
         if (conflict) return conflict;
@@ -673,7 +770,8 @@ Deno.serve(async (req) => {
         // Returns early — it touches shelf_reviews, not shelf_state/reads.
         const list = Array.isArray(payload.reviews) ? payload.reviews : null;
         if (!list || !list.length) throw new Error("reviews[] required");
-        const { data: existingReads, error: existingErr } = await client.from("reads").select("ts");
+        const { data: existingReads, error: existingErr } = await client
+          .from("reads").select("ts").eq("club_id", DEFAULT_CLUB_ID);
         if (existingErr) throw existingErr;
         const knownTs = new Set((existingReads ?? []).map((r: { ts: string }) => r.ts));
         const cats = ["plot", "characters", "pacing", "language", "themes"] as const;
@@ -686,7 +784,7 @@ Deno.serve(async (req) => {
           if (!knownTs.has(book_ts)) {
             throw new Error(`row ${i}: no read with ts ${book_ts}`);
           }
-          const out: Record<string, unknown> = { book_ts, user_id };
+          const out: Record<string, unknown> = { club_id: DEFAULT_CLUB_ID, book_ts, user_id };
           for (const c of cats) {
             const n = Math.round(Number(rec[c]));
             if (!Number.isFinite(n) || n < 1 || n > 20) {
@@ -699,30 +797,24 @@ Deno.serve(async (req) => {
         });
         const { error } = await client
           .from("shelf_reviews")
-          .upsert(rows, { onConflict: "book_ts,user_id" });
+          .upsert(rows, { onConflict: "club_id,book_ts,user_id" });
         if (error) throw error;
         return json({ ok: true, imported: rows.length });
       }
       case "admin_grant_librarian": {
-        // Promote a reader to librarian (insert their row). Idempotent.
+        // Promote a reader to librarian in *this* club. Idempotent.
         const uid = String(payload.user_id ?? "");
         if (!uid) throw new Error("user_id required");
-        const { error } = await client
-          .from("shelf_librarians").upsert({ user_id: uid }, { onConflict: "user_id" });
-        if (error) throw error;
-        await syncClubMemberRole(client, uid, "librarian");
+        await setMemberRole(client, uid, "librarian");
         return json({ ok: true });
       }
       case "admin_revoke_librarian": {
-        // Demote a librarian (delete their row). A librarian can't revoke
-        // themselves — that avoids orphaning the club with zero librarians;
-        // another librarian must do it.
+        // Demote a librarian. A librarian can't revoke themselves — that avoids
+        // orphaning the club with zero librarians; another librarian must do it.
         const uid = String(payload.user_id ?? "");
         if (!uid) throw new Error("user_id required");
         if (uid === callerId) throw new Error("you can't revoke your own librarian role");
-        const { error } = await client.from("shelf_librarians").delete().eq("user_id", uid);
-        if (error) throw error;
-        await syncClubMemberRole(client, uid, "member");
+        await setMemberRole(client, uid, "member");
         return json({ ok: true });
       }
       default:
@@ -740,6 +832,7 @@ Deno.serve(async (req) => {
   const { data: readsRows, error: readsErr } = await client
     .from("reads")
     .select("round, winner_id, winner_username, book, ts, rating, ratingsOpen:ratings_open, meetings")
+    .eq("club_id", DEFAULT_CLUB_ID)
     .order("ts", { ascending: false });
   if (readsErr) return json({ error: readsErr.message }, 500);
   const state = { eliminated: gameState.eliminated, roundNumber: gameState.roundNumber, history: readsRows ?? [] };

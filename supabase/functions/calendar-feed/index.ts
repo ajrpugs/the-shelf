@@ -1,20 +1,32 @@
 // Supabase Edge Function: calendar-feed
 //
-// Serves the book club's meeting schedule as a subscribable iCalendar (.ics)
-// feed built from the `reads` table. Each read can carry a 50% and a 100% meeting;
-// this emits one VEVENT per scheduled meeting. Public and read-only so anyone
-// can subscribe by URL in Google/Apple/Outlook — no auth header required.
+// Serves one club's meeting schedule as a subscribable iCalendar (.ics) feed
+// built from the `reads` table. Each read can carry a 50% and a 100% meeting;
+// this emits one VEVENT per scheduled meeting. Read-only and unauthenticated —
+// calendar clients (Google/Apple/Outlook) can't send a Supabase apikey, let
+// alone a JWT — so which club you get is decided by an unguessable per-club
+// token instead: `?token=<club_secrets.calendar_token>`.
+//
+// Without that, the feed was a single global query over `reads` with no filter,
+// which would have handed every subscriber every club's schedule (§9 of
+// docs/multi-tenant-plan.md). A token-less request now falls back to the one
+// seeded club rather than to "all clubs", so the members already subscribed to
+// the original URL keep working; that fallback goes away in Phase 6 once
+// everyone has re-subscribed with a token.
 //
 // Deploy:
 //   supabase functions deploy calendar-feed --no-verify-jwt
 //
 // Subscribe URL:
-//   https://<project-ref>.supabase.co/functions/v1/calendar-feed
+//   https://<project-ref>.supabase.co/functions/v1/calendar-feed?token=<token>
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SITE_URL = "https://sh3lf.net/";
 const MEETING_MINUTES = 60; // each discussion is a 1-hour event
+
+// Fallback club for token-less requests -- see the header comment.
+const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 
 type Meeting = { at?: string; upTo?: string };
 type HistoryItem = {
@@ -62,7 +74,7 @@ function fold(line: string): string {
   return parts.join("\r\n");
 }
 
-function buildIcs(history: HistoryItem[]): string {
+function buildIcs(history: HistoryItem[], clubName: string): string {
   const now = new Date();
   const dtstamp = icsStamp(now);
   const lines: string[] = [
@@ -71,7 +83,7 @@ function buildIcs(history: HistoryItem[]): string {
     "PRODID:-//The Shelf//Book Club//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    "X-WR-CALNAME:The Shelf — Book Club",
+    `X-WR-CALNAME:${icsText(clubName)} — Book Club`,
     "X-WR-CALDESC:50% and 100% discussion meetings for the current and past reads.",
     "X-PUBLISHED-TTL:PT1H",
     "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
@@ -91,6 +103,11 @@ function buildIcs(history: HistoryItem[]): string {
     desc += ` The Shelf: ${SITE_URL}#book=${h.round ?? ""}`;
     lines.push(
       "BEGIN:VEVENT",
+      // Deliberately NOT club-scoped, even though `ts` is only unique per club
+      // now: a UID change makes every calendar client treat the event as brand
+      // new, duplicating it for everyone already subscribed. Two clubs can only
+      // collide here by drawing in the same millisecond, and each feed is served
+      // to its own subscribers anyway.
       `UID:shelf-${h.ts ?? h.round ?? ""}-${phase}@theshelf`,
       `DTSTAMP:${dtstamp}`,
       `DTSTART:${icsStamp(start)}`,
@@ -125,14 +142,34 @@ Deno.serve(async (req) => {
     { auth: { persistSession: false } },
   );
 
+  // Resolve which club this feed is for. A token must match a real club (404 on
+  // a bad one rather than quietly serving the default -- otherwise a typo'd or
+  // revoked token would leak the seeded club's schedule).
+  const token = new URL(req.url).searchParams.get("token")?.trim();
+  let clubId = DEFAULT_CLUB_ID;
+  if (token) {
+    const { data: secret, error: secretErr } = await client
+      .from("club_secrets")
+      .select("club_id")
+      .eq("calendar_token", token)
+      .maybeSingle();
+    if (secretErr) return new Response(`error: ${secretErr.message}`, { status: 500 });
+    if (!secret) return new Response("unknown calendar token", { status: 404 });
+    clubId = secret.club_id as string;
+  }
+
+  const { data: club } = await client
+    .from("clubs").select("name").eq("id", clubId).maybeSingle();
+
   const { data: rows, error } = await client
     .from("reads")
-    .select("round, book, ts, meetings");
+    .select("round, book, ts, meetings")
+    .eq("club_id", clubId);
   if (error) {
     return new Response(`error: ${error.message}`, { status: 500 });
   }
 
-  const ics = buildIcs((rows ?? []) as HistoryItem[]);
+  const ics = buildIcs((rows ?? []) as HistoryItem[], (club?.name as string) || "The Shelf");
 
   return new Response(req.method === "HEAD" ? null : ics, {
     status: 200,

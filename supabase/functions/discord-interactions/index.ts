@@ -18,21 +18,44 @@ const PUBLIC_KEY = Deno.env.get("DISCORD_PUBLIC_KEY") ?? "";
 // Base URL of the live app, so Discord embeds can link back to the book's page.
 const SITE_URL = "https://sh3lf.net/";
 
-// Stand-in until per-club routing exists (Phase 3 of docs/multi-tenant-plan.md)
+// Stand-in until per-club routing exists (Phase 4 of docs/multi-tenant-plan.md)
 // -- the only real club today. Matches the seeded row in supabase/schema.sql.
+// /mybook always targets this club; once a reader can belong to two, the command
+// needs a club argument (or a default-club setting per reader).
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 
-// Best-effort mirror into club_members -- not the source of truth yet, so a
-// missed sync here is recoverable and must never fail the /mybook command.
-async function syncClubMembersBook(client: ReturnType<typeof createClient>, userId: string, book: string | null): Promise<void> {
-  try {
-    const { error } = await client
-      .from("club_members")
-      .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book }, { onConflict: "club_id,user_id" });
-    if (error) console.error("club_members sync failed:", error.message);
-  } catch (err) {
-    console.error("club_members sync error:", err);
+// Derived from an actual createClient(...) call, not `ReturnType<typeof
+// createClient>` -- the latter resolves supabase-js's generic defaults to
+// never/unknown, so setMemberBook would reject the real client and `.upsert()`
+// would reject every object literal. Same fix as in admin-update.
+function createServiceClient(url: string, key: string) {
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+type MyBookClient = ReturnType<typeof createServiceClient>;
+
+// The book lives on the membership row as of Phase 3.5, so this write is the one
+// that must succeed. Upsert rather than update: a reader who signed in but never
+// joined has no row yet.
+async function setMemberBook(client: MyBookClient, userId: string, book: string | null): Promise<boolean> {
+  const { error } = await client
+    .from("club_members")
+    .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book }, { onConflict: "club_id,user_id" });
+  if (error) {
+    console.error("club_members book write failed:", error.message);
+    return false;
   }
+  // Legacy mirror onto shelf_users.book -- nothing reads it any more; kept in
+  // step only so the cutover stays reversible (dropped in Phase 6).
+  try {
+    const { error: mirrorErr } = await client
+      .from("shelf_users")
+      .update({ book, updated_at: new Date().toISOString() })
+      .eq("id", userId);
+    if (mirrorErr) console.error("shelf_users book mirror failed:", mirrorErr.message);
+  } catch (err) {
+    console.error("shelf_users book mirror error:", err);
+  }
+  return true;
 }
 
 // --- Open Library cover + Discord post ---------------------------------------
@@ -101,7 +124,12 @@ async function postBookSet(webhookUrl: string, args: {
 
 // --- Ed25519 signature verification ------------------------------------------
 
-function hexToBytes(hex: string): Uint8Array {
+// Return type is Uint8Array<ArrayBuffer>, not a bare Uint8Array: current TS libs
+// type the latter as Uint8Array<ArrayBufferLike>, which WebCrypto's BufferSource
+// rejects because it could be a SharedArrayBuffer. `new Uint8Array(n)` always
+// allocates a real ArrayBuffer, so this is a type annotation only -- no runtime
+// change to signature verification.
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i++) {
     bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
@@ -172,15 +200,16 @@ async function handleMyBook(interaction: any) {
   const titleOpt = options.find(o => o.name === "title");
   const bookTitle = String(titleOpt?.value ?? "").trim();
 
-  const client = createClient(
+  const client = createServiceClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    { auth: { persistSession: false } },
   );
 
+  // shelf_users is the identity lookup (who owns this Discord id) -- global, no
+  // club_id. The reader's book comes from their membership row below.
   const { data: user, error: lookupErr } = await client
     .from("shelf_users")
-    .select("id, discord_username, avatar_url, book")
+    .select("id, discord_username, avatar_url")
     .eq("discord_id", discordUserId)
     .maybeSingle();
   if (lookupErr) {
@@ -193,21 +222,22 @@ async function handleMyBook(interaction: any) {
     );
   }
 
-  const prevBook = (user.book ?? "").trim();
+  const { data: membership } = await client
+    .from("club_members")
+    .select("book")
+    .eq("club_id", DEFAULT_CLUB_ID)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const prevBook = (membership?.book ?? "").trim();
 
   if (!bookTitle) {
-    const { error } = await client.from("shelf_users").update({ book: null }).eq("id", user.id);
-    if (error) return reply("Couldn't clear your book. Try again.");
-    await syncClubMembersBook(client, user.id, null);
+    const cleared = await setMemberBook(client, user.id, null);
+    if (!cleared) return reply("Couldn't clear your book. Try again.");
     return reply("📖 Cleared your book. You're off the shelf.");
   }
 
-  const { error } = await client
-    .from("shelf_users")
-    .update({ book: bookTitle, updated_at: new Date().toISOString() })
-    .eq("id", user.id);
-  if (error) return reply("Couldn't save your book. Try again.");
-  await syncClubMembersBook(client, user.id, bookTitle);
+  const saved = await setMemberBook(client, user.id, bookTitle);
+  if (!saved) return reply("Couldn't save your book. Try again.");
 
   // Post to the channel only when a book was actually set or changed.
   if (bookTitle !== prevBook) {

@@ -1204,7 +1204,7 @@ const DEFAULT_CLUB_SLUG = "the-guild"; // matches the seeded clubs row
 // ---------- State ----------
 const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
 let state = emptyState();
-let users = [];              // shelf_users rows
+let users = [];              // this club's members: shelf_users identity + club_members book/role (see loadAll)
 let reviews = [];            // shelf_reviews rows (member rubric reviews)
 let comments = [];           // shelf_comments rows (per-book discussion)
 let reactions = [];          // shelf_comment_reactions rows (emoji on comments)
@@ -1220,7 +1220,7 @@ let lastRenderedHash = null; // location.hash as of the previous render() — le
                               // (e.g. replying to or reacting to a comment)
 let calendarMonth = null;    // { y, m } shown in the calendar grid; null = auto
 let session = null;          // Supabase auth session
-let myUserRow = null;        // Current user's shelf_users row
+let myUserRow = null;        // Current user's row out of `users` (identity + this club's book)
 let spinning = false;
 let flashMsg = null;
 let pendingRender = false;
@@ -1675,10 +1675,12 @@ async function resolveBookDetail(rawTitle) {
 }
 
 // ---------- Librarian mode ----------
-// Librarian rights are a per-user role — a row in shelf_librarians — not a
-// shared password. `amLibrarian` is set once on sign-in (see onSignedIn) and
-// gates the Admin tab + controls. The server re-checks on every admin-update
-// call from the caller's JWT; this flag is only the UI gate.
+// Librarian rights are a per-club role — `club_members.role = 'librarian'` for
+// this club — not a shared password, and not the global shelf_librarians table
+// (which would make a librarian of one club look like a librarian of every
+// club). `amLibrarian` is set on sign-in and refreshed by every loadAll, and
+// gates the Admin tab + controls. The server re-checks the same role on every
+// admin-update call from the caller's JWT; this flag is only the UI gate.
 let amLibrarian = false;
 let librarianIds = new Set();       // all librarian user ids (for the Admin UI)
 const isAdmin = () => amLibrarian;
@@ -1824,17 +1826,39 @@ async function initAuth() {
 
 async function onSignedIn() {
   await ensureUserRow(session.user);
+  await ensureClubMembership();
   await loadLibrarianStatus();
   await loadAll();
   subscribeRealtime();
 }
 
-// Load the librarian set. `amLibrarian` (do I have a row?) drives the UI gate;
-// `librarianIds` powers the Admin tab's grant/revoke controls. The server
-// independently re-checks the caller's JWT on every admin-update call.
+// Make sure the signed-in reader has a club_members row, since that table (not
+// shelf_users) is now what decides who's on the shelf and who's eligible for the
+// wheel. club_members has no insert policy, so this goes through a narrow
+// security-definer RPC that can only add *you* to *the seeded club* — see the
+// Phase 3.5 migration. Phase 4 replaces it with an invite-gated join.
+async function ensureClubMembership() {
+  try {
+    const { error } = await supabase.rpc("join_default_club");
+    if (error) console.warn("club join failed:", error.message);
+  } catch (err) {
+    console.warn("club join error:", err);
+  }
+}
+
+// Load who the librarians are, from club_members.role scoped to this club —
+// *not* the global shelf_librarians table, which would have shown the Admin tab
+// to a librarian of some other club (the server has enforced the club-scoped
+// role since Phase 2, so the UI was the half that could lie). `amLibrarian`
+// drives the tab gate; `librarianIds` powers the grant/revoke controls. The
+// server independently re-checks the caller's JWT on every admin-update call.
 async function loadLibrarianStatus() {
   try {
-    const { data } = await supabase.from("shelf_librarians").select("user_id");
+    const { data } = await supabase
+      .from("club_members")
+      .select("user_id")
+      .eq("club_id", DEFAULT_CLUB_ID)
+      .eq("role", "librarian");
     librarianIds = new Set((data || []).map(r => r.user_id));
   } catch {
     librarianIds = new Set();
@@ -1889,9 +1913,12 @@ async function loadAll() {
   if (!CONFIGURED) { render(); return; }
   setRefreshing(true);
   try {
-    const [{ data: sData, error: sErr }, { data: uData, error: uErr }, { data: rData, error: rErr }, { data: cData, error: cErr }, { data: readsData, error: readsErr }, { data: xData, error: xErr }] = await Promise.all([
-      supabase.from("shelf_state").select("data").eq("id", 1).single(),
-      supabase.from("shelf_users").select("*"),
+    const [{ data: sData, error: sErr }, { data: mData, error: mErr }, { data: rData, error: rErr }, { data: cData, error: cErr }, { data: readsData, error: readsErr }, { data: xData, error: xErr }] = await Promise.all([
+      // Keyed by club_id, not the old fixed `id = 1` singleton.
+      supabase.from("shelf_state").select("data").eq("club_id", DEFAULT_CLUB_ID).single(),
+      // Membership + book + role for this club. Replaces the unscoped
+      // `shelf_users.select("*")`, which pulled every reader of every club.
+      supabase.from("club_members").select("user_id, role, book").eq("club_id", DEFAULT_CLUB_ID),
       supabase.from("shelf_reviews").select("*").eq("club_id", DEFAULT_CLUB_ID),
       supabase.from("shelf_comments").select("*").eq("club_id", DEFAULT_CLUB_ID),
       supabase.from("reads")
@@ -1901,7 +1928,7 @@ async function loadAll() {
       supabase.from("shelf_comment_reactions").select("comment_id, user_id, emoji").eq("club_id", DEFAULT_CLUB_ID),
     ]);
     if (sErr && sErr.code !== "PGRST116") throw sErr;
-    if (uErr) throw uErr;
+    if (mErr) throw mErr;
     // History lives in `reads` (Phase 0 cutover), not shelf_state.data.history
     // — eliminated/roundNumber still come from shelf_state. Degrade to an
     // empty history rather than breaking the whole load if it's unavailable.
@@ -1911,7 +1938,31 @@ async function loadAll() {
       roundNumber: sData?.data?.roundNumber,
       history: (!readsErr && readsData) ? readsData : [],
     });
-    users = uData || [];
+    // `users` is this club's membership joined with each member's identity:
+    // club_members carries who's in the club, their role, and their book;
+    // shelf_users carries the display name and avatar and is global (no
+    // club_id), so it's fetched by id rather than swept. Same row shape render()
+    // has always consumed — anyone without an identity row is skipped, since
+    // there'd be nothing to draw.
+    const members = mData || [];
+    const memberIds = members.map(m => m.user_id);
+    let identities = [];
+    if (memberIds.length) {
+      const { data: iData, error: iErr } = await supabase
+        .from("shelf_users")
+        .select("id, discord_username, avatar_url, discord_id")
+        .in("id", memberIds);
+      if (iErr) throw iErr;
+      identities = iData || [];
+    }
+    const identityById = new Map(identities.map(u => [u.id, u]));
+    users = members
+      .filter(m => identityById.has(m.user_id))
+      .map(m => ({ ...identityById.get(m.user_id), book: m.book, role: m.role }));
+    // Roles come from the same fetch, so the Admin gate can't drift from the
+    // membership list the rest of the UI is rendering.
+    librarianIds = new Set(members.filter(m => m.role === "librarian").map(m => m.user_id));
+    amLibrarian = !!(session && librarianIds.has(session.user.id));
     // Reviews/comments are non-critical: if a table isn't there yet (migration
     // not applied), degrade to empty instead of breaking the whole load.
     if (rErr) console.warn("shelf_reviews unavailable:", rErr.message);
@@ -1933,6 +1984,12 @@ function subscribeRealtime() {
   const clubFilter = `club_id=eq.${DEFAULT_CLUB_ID}`;
   supabase.channel("shelf-live")
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_state", filter: clubFilter }, () => queueRefresh())
+    .on("postgres_changes", { event: "*", schema: "public", table: "club_members", filter: clubFilter }, () => queueRefresh())
+    // shelf_users is global identity (no club_id, so nothing to filter on) and
+    // only changes when someone's display name or avatar does — rare enough that
+    // the cross-club wakeups it causes aren't worth losing live avatar updates.
+    // Everything that used to arrive via this channel (books, joins, roles) now
+    // comes through club_members above.
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_users" }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_reviews", filter: clubFilter }, () => queueRefresh())
     .on("postgres_changes", { event: "*", schema: "public", table: "shelf_comments", filter: clubFilter }, () => queueRefresh())
@@ -2535,6 +2592,11 @@ function fmtDate(iso) {
 // The subscribable feed (see supabase/functions/calendar-feed). Members add this
 // URL once to their own Google/Apple/Outlook calendar; it stays in sync as the
 // librarian schedules meetings in the app.
+//
+// No `?token=` yet: the per-club calendar_token lives in club_secrets, which has
+// no RLS policies at all (service-role only), so the client genuinely can't read
+// it. The token-less URL resolves to this club by the edge function's fallback.
+// Surfacing a real per-club token needs a librarian-only endpoint — Phase 6.
 const CALENDAR_FEED_URL = `${SUPABASE_URL}/functions/v1/calendar-feed`;
 
 // Flatten every scheduled meeting across all reads into a sorted timeline.
