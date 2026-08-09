@@ -89,7 +89,12 @@ node --test supabase/functions/_shared/*.test.mjs
 # Run the frontend locally (nothing to build — Supabase is the backend)
 python3 -m http.server        # then open http://localhost:8000/index.html
 
-# Deploy an edge function (each is deployed by name; --no-verify-jwt is required)
+# Deploy an edge function (each is deployed by name; --no-verify-jwt is required).
+# TMPDIR MATTERS: the bundler writes its eszip under $TMPDIR from inside a
+# container, and Colima does not mount /var/folders (macOS's default TMPDIR), so
+# the deploy dies with "failed to open eszip: ENOENT". Point TMPDIR at something
+# under $HOME, which Colima does mount:
+#   export TMPDIR=$HOME/tmp && mkdir -p "$TMPDIR"
 supabase functions deploy admin-update --no-verify-jwt
 supabase functions deploy set-book --no-verify-jwt
 supabase functions deploy discord-interactions --no-verify-jwt
@@ -135,6 +140,16 @@ Until then, `scripts/backup.sh` is the restore point:
 - **Verifies row counts against live and exits non-zero on any mismatch.** The SQL lives in `supabase/backup-sql/`; if you add a table, add it to both files there or it silently won't be backed up (the count check only compares tables it's told about).
 - Written outside the repo deliberately: it contains `club_secrets` (Discord webhook URL, calendar token) plus every member's name, book, reviews and comments. Keep it out of git and off shared drives.
 - **`auth.users` is not included** — Supabase manages it. Restoring into a fresh project means members sign in again, which mints new ids and orphans every `winner_id`/`user_id` in the file. A restore is only turnkey back into the *same* project.
+
+**Scheduled backups** run daily at 13:00 via a user LaunchAgent, `net.sh3lf.backup`. Install/refresh with `scripts/install-backup-agent.sh`, remove with `--remove`. Log: `~/the-shelf-backups/backup.log`.
+
+- It runs a **staged copy** under `~/Library/Application Support/the-shelf-backup/`, not the repo. This isn't tidiness: the repo lives in `~/Documents`, which macOS TCC protects, and a LaunchAgent cannot read it at all — the job dies with exit 126 / `Operation not permitted` before the first line runs. Granting Full Disk Access would also work but is a manual System Settings step.
+- **The staged copy is a snapshot — re-run the installer after editing `scripts/backup.sh` or `supabase/backup-sql/`**, or the scheduled job keeps using the old versions.
+- It sets `SUPABASE_PROJECT_ID` rather than relying on `--linked` (there's no `supabase/.temp/` outside the repo), and `TMPDIR=$HOME/tmp` for the same Colima reason as function deploys.
+- It starts Colima if Docker is down so the pg_dump half still happens, then stops it again — verified end to end from cold (~67s).
+- Retention keeps the newest 14 runs, pruning only after a run has verified, so a failed run can never evict a good backup.
+- **`supabase db query --output-format json` returns a bare array** (`[{...}]`), not `{rows: [...]}`. Some wrappers re-wrap it; the parsing in `backup.sh` accepts both on purpose. Don't "simplify" it — coding against only the wrapped shape breaks the script everywhere except inside that wrapper.
+- Honest limits: it only fires while this Mac is awake and logged in, and depends on the CLI's stored credentials staying valid. Not a substitute for Pro's PITR.
 
 Reversing a schema change is separate from restoring data: hand-run rollback scripts live in `supabase/rollback/` (deliberately outside `supabase/migrations/` so `db push` can't apply them).
 
