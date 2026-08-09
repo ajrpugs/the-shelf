@@ -15,8 +15,8 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Stand-in until per-club routing exists (Phase 4 of docs/multi-tenant-plan.md).
-// Every query below is scoped by it -- a `book_ts` is only unique within a club.
+// Fallback club for a request that does not name one (see clubId below). Every
+// query is scoped by the resolved club -- a `book_ts` is only unique within one.
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 
 Deno.serve(async (req) => {
@@ -38,19 +38,34 @@ Deno.serve(async (req) => {
   if (authErr || !userData?.user) return json({ error: "invalid auth" }, 401);
   const userId = userData.user.id;
 
-  let body: { book_ts?: string; body?: string; delete_id?: string; parent_id?: string };
+  let body: { book_ts?: string; club_id?: string; body?: string; delete_id?: string; parent_id?: string };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
+
+  // The caller names the club (Phase 4 slice 4b); the membership check below is
+  // what makes that safe. Absent means the seeded club, so an older deployed
+  // frontend keeps working.
+  const clubId = String(body.club_id ?? DEFAULT_CLUB_ID);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clubId)) {
+    return json({ error: "invalid club_id" }, 400);
+  }
 
   const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
     auth: { persistSession: false },
   });
+
+  // Only a member of this club may post in it, or delete from it. A delete is
+  // already narrowed to the caller's own row, but the club scoping keeps the
+  // check uniform with everything else here.
+  const { data: membership } = await admin
+    .from("club_members").select("user_id").eq("club_id", clubId).eq("user_id", userId).maybeSingle();
+  if (!membership) return json({ error: "not a member of this club" }, 403);
 
   // Delete: only the author's own comment.
   if (body.delete_id) {
     const { error: delErr } = await admin
       .from("shelf_comments")
       .delete()
-      .eq("club_id", DEFAULT_CLUB_ID)
+      .eq("club_id", clubId)
       .eq("id", String(body.delete_id))
       .eq("user_id", userId);
     if (delErr) return json({ error: delErr.message }, 500);
@@ -67,7 +82,7 @@ Deno.serve(async (req) => {
   const { data: match, error: readsErr } = await admin
     .from("reads")
     .select("ts")
-    .eq("club_id", DEFAULT_CLUB_ID)
+    .eq("club_id", clubId)
     .eq("ts", bookTs)
     .maybeSingle();
   if (readsErr) return json({ error: readsErr.message }, 500);
@@ -81,7 +96,7 @@ Deno.serve(async (req) => {
     const { data: parent, error: parentErr } = await admin
       .from("shelf_comments")
       .select("id, book_ts, parent_id")
-      .eq("club_id", DEFAULT_CLUB_ID)
+      .eq("club_id", clubId)
       .eq("id", String(body.parent_id))
       .maybeSingle();
     if (parentErr) return json({ error: parentErr.message }, 500);
@@ -93,7 +108,7 @@ Deno.serve(async (req) => {
 
   const { data: saved, error: insErr } = await admin
     .from("shelf_comments")
-    .insert({ club_id: DEFAULT_CLUB_ID, book_ts: bookTs, user_id: userId, body: text, parent_id: parentId })
+    .insert({ club_id: clubId, book_ts: bookTs, user_id: userId, body: text, parent_id: parentId })
     .select()
     .single();
   if (insErr) return json({ error: insErr.message }, 500);

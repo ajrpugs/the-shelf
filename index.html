@@ -1202,14 +1202,13 @@ const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 const DEFAULT_CLUB_SLUG = "the-guild"; // matches the seeded clubs row
 
 // The resolved `clubs` row for the slug in the URL, plus how resolution went.
-//   loading     -- no answer yet; don't query club-scoped tables
-//   ok          -- `club` is populated and usable
-//   not_found   -- no club with that slug (or not visible to this reader)
-//   unavailable -- a real club, but not the seeded one. All six edge functions
-//                  still hardcode DEFAULT_CLUB_ID, so reads would come from the
-//                  club in the URL while every write went to the default one.
-//                  Refusing outright beats a half-wired club; lifted in the
-//                  next slice, when the functions take a club_id.
+//   loading    -- no answer yet; don't query club-scoped tables
+//   ok         -- `club` is populated and usable
+//   not_found  -- no club with that slug
+//   not_member -- a real club, but this reader isn't in it. Its rows are already
+//                 invisible to them under RLS, so without this they'd get a
+//                 working-looking club with an empty shelf. Turning this into
+//                 "ask for an invite" is Phase 4d.
 let club = null;
 let clubStatus = "loading";
 const clubId = () => club?.id ?? DEFAULT_CLUB_ID;
@@ -1719,7 +1718,7 @@ async function callAdmin(action, payload = {}) {
         "apikey": SUPABASE_ANON_KEY,
         "Authorization": `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ action, payload }),
+      body: JSON.stringify({ action, club_id: clubId(), payload }),
     });
     if (res.status === 401 || res.status === 403) {
       setFlash("err", "Not authorized — librarian only.");
@@ -1871,7 +1870,15 @@ async function resolveClubFromRoute() {
     if (error) throw error;
     if (!data) { club = null; clubStatus = "not_found"; return; }
     club = data;
-    clubStatus = data.id === DEFAULT_CLUB_ID ? "ok" : "unavailable";
+    // The seeded club is joined automatically on sign-in, so membership is
+    // assumed there. For any other club, being in it is the thing that decides
+    // whether there's anything to show -- and the server enforces the same check
+    // on every write, so this is the UI half of one rule, not the rule itself.
+    if (data.id === DEFAULT_CLUB_ID) { clubStatus = "ok"; return; }
+    const { data: mine } = await supabase
+      .from("club_members").select("user_id")
+      .eq("club_id", data.id).eq("user_id", session.user.id).maybeSingle();
+    clubStatus = mine ? "ok" : "not_member";
   } catch (err) {
     console.warn("club resolve failed:", err.message);
     // Fall back to the default club rather than locking the app out on a blip.
@@ -1886,6 +1893,9 @@ async function resolveClubFromRoute() {
 // security-definer RPC that can only add *you* to *the seeded club* — see the
 // Phase 3.5 migration. Phase 4 replaces it with an invite-gated join.
 async function ensureClubMembership() {
+  // join_default_club() joins the SEEDED club regardless of the URL, so calling
+  // it while viewing another club would quietly enrol you in the wrong one.
+  if (clubId() !== DEFAULT_CLUB_ID) return;
   try {
     const { error } = await supabase.rpc("join_default_club");
     if (error) console.warn("club join failed:", error.message);
@@ -2066,7 +2076,7 @@ async function setMyBook(book) {
         "apikey": SUPABASE_ANON_KEY,
         "Authorization": `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ book }),
+      body: JSON.stringify({ book, club_id: clubId() }),
     });
     if (!res.ok) {
       const t = await res.text().catch(() => "");
@@ -2103,7 +2113,7 @@ async function saveMyReview(bookTs, scores, note) {
         "apikey": SUPABASE_ANON_KEY,
         "Authorization": `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, club_id: clubId() }),
     });
     if (!res.ok) {
       const t = await res.text().catch(() => "");
@@ -2141,7 +2151,7 @@ async function postComment(bookTs, text, parentId = null) {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/post-comment`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${session.access_token}` },
-      body: JSON.stringify({ book_ts: bookTs, body: text, parent_id: parentId }),
+      body: JSON.stringify({ book_ts: bookTs, body: text, parent_id: parentId, club_id: clubId() }),
     });
     if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error(t || res.statusText); }
     const body = await res.json();
@@ -2155,7 +2165,7 @@ async function deleteComment(id) {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/post-comment`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${session.access_token}` },
-      body: JSON.stringify({ delete_id: id }),
+      body: JSON.stringify({ delete_id: id, club_id: clubId() }),
     });
     if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error(t || res.statusText); }
     // The DB cascade-deletes any replies too (parent_id -> on delete cascade);
@@ -2581,7 +2591,7 @@ async function runDraw() {
         "apikey": SUPABASE_ANON_KEY,
         "Authorization": `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ action: "draw", payload: {} }),
+      body: JSON.stringify({ action: "draw", club_id: clubId(), payload: {} }),
     });
     if (res.status === 401 || res.status === 403) {
       spinning = false;
@@ -3350,7 +3360,7 @@ function render() {
 
   // A club that couldn't be resolved gets its own page rather than an empty
   // shelf, which would look like a working club with nothing in it.
-  if (clubStatus === "not_found" || clubStatus === "unavailable") {
+  if (clubStatus === "not_found" || clubStatus === "not_member") {
     app.innerHTML = renderClubProblem();
     document.querySelector("[data-go-default-club]")?.addEventListener("click", () => {
       location.hash = `#/c/${DEFAULT_CLUB_SLUG}/reading`;
@@ -3918,10 +3928,10 @@ function renderClubProblem() {
   return `
     <header><div class="eyebrow">Book club</div><h1>The Shelf</h1><div class="rule"></div></header>
     <div class="setup">
-      <h2>${notFound ? "No such club" : "That club isn't ready yet"}</h2>
+      <h2>${notFound ? "No such club" : "You're not in this club"}</h2>
       <p>${notFound
         ? `Nothing is registered at <b>${esc(wanted)}</b>. Check the link, or ask whoever sent it for an invite.`
-        : `<b>${esc(clubName())}</b> exists, but this build can only run the original club — multi-club support is still being wired up.`}</p>
+        : `<b>${esc(clubName())}</b> exists, but you're not a member — so there's nothing here to show you. Ask a librarian of that club to add you.`}</p>
       <p><button class="btn" data-go-default-club>Go to ${esc(DEFAULT_CLUB_SLUG)}</button></p>
     </div>`;
 }

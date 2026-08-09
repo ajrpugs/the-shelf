@@ -23,8 +23,8 @@ const cors = {
 // Base URL of the live app, so Discord embeds can link back to the book's page.
 const SITE_URL = "https://sh3lf.net/";
 
-// Stand-in until per-club routing exists (Phase 3 of docs/multi-tenant-plan.md)
-// -- the only real club today. Matches the seeded row in supabase/schema.sql.
+// Fallback club for a request that does not name one (see clubId below).
+// Matches the seeded row in supabase/schema.sql.
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 
 // --- Open Library cover lookup -----------------------------------------------
@@ -129,9 +129,17 @@ Deno.serve(async (req) => {
   if (authErr || !userData?.user) return json({ error: "invalid auth" }, 401);
   const userId = userData.user.id;
 
-  let body: { book?: string };
+  let body: { book?: string; club_id?: string };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
   const book = String(body.book ?? "").trim();
+
+  // The caller names the club (Phase 4 slice 4b); the membership check below is
+  // what makes that safe. Absent means the seeded club, so a frontend deployed
+  // before this change keeps working.
+  const clubId = String(body.club_id ?? DEFAULT_CLUB_ID);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clubId)) {
+    return json({ error: "invalid club_id" }, 400);
+  }
 
   const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
     auth: { persistSession: false },
@@ -145,20 +153,26 @@ Deno.serve(async (req) => {
     .maybeSingle();
   if (!current) return json({ error: "reader not found" }, 404);
 
-  // The book itself lives on the membership row, so one person can hold a
-  // different book in each of their clubs (Phase 3.5). This has to be an upsert
-  // rather than an update: a reader signed in but not yet joined has no row.
+  // The book lives on the membership row, so one person can hold a different book
+  // in each of their clubs (Phase 3.5). Membership must already exist -- this is
+  // an UPDATE, not the upsert it was: now that the caller names the club, an
+  // upsert would let anyone insert themselves into any club and appear on its
+  // shelf. Joining is Phase 4d's job (invite-gated); until then sign-in creates
+  // the seeded club's membership via join_default_club().
   const { data: membership } = await admin
     .from("club_members")
-    .select("book")
-    .eq("club_id", DEFAULT_CLUB_ID)
+    .select("book, role")
+    .eq("club_id", clubId)
     .eq("user_id", userId)
     .maybeSingle();
-  const prev = (membership?.book ?? "").trim();
+  if (!membership) return json({ error: "not a member of this club" }, 403);
+  const prev = (membership.book ?? "").trim();
 
   const { data: updated, error: updErr } = await admin
     .from("club_members")
-    .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book: book || null }, { onConflict: "club_id,user_id" })
+    .update({ book: book || null })
+    .eq("club_id", clubId)
+    .eq("user_id", userId)
     .select()
     .single();
   if (updErr) return json({ error: updErr.message }, 500);

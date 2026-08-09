@@ -320,7 +320,17 @@ Two things had to be true before writing a line of Phase 4, neither of them in t
 
 2. **There had to be somewhere other than production to work.** Phase 4 is *about creating clubs*; you can't develop that against the live book club. `supabase db reset` now replays all 21 migrations into a local Postgres, via `00000000000000_bootstrap_base_tables.sql` (the `shelf_state`/`shelf_users` the chain always assumed, recorded on production as already-applied rather than run) plus a guard on the hardcoded production librarian id that used to abort the chain with a foreign-key error on any other database. `supabase start` needs `-x vector` under Colima.
 
-**Slices:** 4a prep (done) · 4b resolve `#/c/<slug>` to a real club · 4c `create-club` (rows created atomically, slug validation, reserved words, rate limit) · 4d invites + join, retiring `join_default_club()` · 4e leave / transfer / delete, with a last-librarian guard · 4f onboarding an empty club.
+**Slices:** 4a prep ✅ · 4b club from the URL ✅ · 4c `create-club` (rows created atomically, slug validation, reserved words, rate limit) · 4d invites + join, retiring `join_default_club()` · 4e leave / transfer / delete, with a last-librarian guard · 4f onboarding an empty club.
+
+#### 4b — club resolved from the URL — ✅ done 2026-08-09
+
+The slug in `#/c/<slug>/<tab>` had been parsed since Phase 3 and ignored. Now:
+
+- The client resolves it against `clubs` and routes all 12 scoped queries and both realtime filters through `clubId()`. Three states: `ok`, `not_found`, and `not_member` (a real club you're not in — its rows are already invisible under RLS, so without this you'd get a working-looking club with an empty shelf; turning that into "ask for an invite" is 4d).
+- **Five of the six edge functions now take `club_id` from the request** and authorize against it: `admin-update` requires `club_members.role = 'librarian'` for *that* club, and `set-book`/`set-review`/`post-comment` require membership of it. An absent `club_id` still means the seeded club, so the frontend and the functions can be deployed in either order without a broken window. `set-book` also changed from upsert to update — now that the caller names the club, an upsert would have let anyone insert themselves into any club and appear on its shelf.
+- `discord-interactions` is deliberately **not** parameterized: a slash command carries a guild and a Discord user, no club. Mapping guild → club needs `clubs` to know its guild id, which is Phase 6.
+
+Verified against a local database with two real clubs, over real HTTP to locally-served functions: a member of club A got 403 `not a member of this club` from `set-book`/`set-review`/`post-comment` on club B; a librarian of B got past `admin-update`'s gate on B and 403 `not a librarian` on A; a bad `club_id` got 400; an omitted one still worked. Then club B ran a **full draw of its own** — picked its book, advanced to round 2 — while club A stayed at round 1 with its reads and eliminated list untouched. That's the plan's Phase 1 exit criterion ("two clubs coexist with no data bleed") finally demonstrated by two clubs actually *running*, not just by isolation queries.
 
 ### Phase 5 — Auth providers
 Magic link + Google, identity normalization, account linking.

@@ -22,8 +22,8 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Stand-in until per-club routing exists (Phase 4 of docs/multi-tenant-plan.md).
-// Every query below is scoped by it -- a `book_ts` is only unique within a club.
+// Fallback club for a request that does not name one (see clubId below). Every
+// query is scoped by the resolved club -- a `book_ts` is only unique within one.
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 
 const CATEGORIES = ["plot", "characters", "pacing", "language", "themes"] as const;
@@ -58,6 +58,7 @@ Deno.serve(async (req) => {
 
   let body: {
     book_ts?: string;
+    club_id?: string;
     clear?: boolean;
     dnf?: unknown;
     plot?: unknown; characters?: unknown; pacing?: unknown;
@@ -68,9 +69,23 @@ Deno.serve(async (req) => {
   const bookTs = String(body.book_ts ?? "").trim();
   if (!bookTs) return json({ error: "book_ts required" }, 400);
 
+  // The caller names the club (Phase 4 slice 4b); the membership check below is
+  // what makes that safe. Absent means the seeded club, so an older deployed
+  // frontend keeps working.
+  const clubId = String(body.club_id ?? DEFAULT_CLUB_ID);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clubId)) {
+    return json({ error: "invalid club_id" }, 400);
+  }
+
   const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
     auth: { persistSession: false },
   });
+
+  // Only a member of this club may review its reads. Without this, anyone signed
+  // in could review any club's books once they knew a club_id and a book_ts.
+  const { data: membership } = await admin
+    .from("club_members").select("user_id").eq("club_id", clubId).eq("user_id", userId).maybeSingle();
+  if (!membership) return json({ error: "not a member of this club" }, 403);
 
   // The review must target a real past read. Pull all reads (history lives in
   // its own table, not shelf_state, since the Phase 0 cutover) and confirm the
@@ -78,7 +93,7 @@ Deno.serve(async (req) => {
   const { data: allReads, error: readsErr } = await admin
     .from("reads")
     .select("ts, rating, ratings_open")
-    .eq("club_id", DEFAULT_CLUB_ID)
+    .eq("club_id", clubId)
     .order("ts", { ascending: false });
   if (readsErr) return json({ error: readsErr.message }, 500);
   type Read = { ts: string; rating?: { total?: number } | null; ratings_open?: boolean };
@@ -91,7 +106,7 @@ Deno.serve(async (req) => {
     const { error: delErr } = await admin
       .from("shelf_reviews")
       .delete()
-      .eq("club_id", DEFAULT_CLUB_ID)
+      .eq("club_id", clubId)
       .eq("book_ts", bookTs)
       .eq("user_id", userId);
     if (delErr) return json({ error: delErr.message }, 500);
@@ -132,7 +147,7 @@ Deno.serve(async (req) => {
   const { data: saved, error: upErr } = await admin
     .from("shelf_reviews")
     .upsert({
-      club_id: DEFAULT_CLUB_ID,
+      club_id: clubId,
       book_ts: bookTs,
       user_id: userId,
       ...scores,

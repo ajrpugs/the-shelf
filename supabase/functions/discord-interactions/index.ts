@@ -18,10 +18,13 @@ const PUBLIC_KEY = Deno.env.get("DISCORD_PUBLIC_KEY") ?? "";
 // Base URL of the live app, so Discord embeds can link back to the book's page.
 const SITE_URL = "https://sh3lf.net/";
 
-// Stand-in until per-club routing exists (Phase 4 of docs/multi-tenant-plan.md)
-// -- the only real club today. Matches the seeded row in supabase/schema.sql.
-// /mybook always targets this club; once a reader can belong to two, the command
-// needs a club argument (or a default-club setting per reader).
+// The club /mybook targets. Unlike the other five functions, this one is NOT
+// parameterized by slice 4b, and deliberately so: a Discord slash command has no
+// URL and no session to carry a club_id, only a guild and a Discord user. Mapping
+// a guild to a club needs `clubs` to know its Discord guild id, which is Phase 6
+// (per-club settings, own webhook). Until then /mybook only ever works for the
+// seeded club -- a reader who belongs to a second club must set that book in the
+// web app. Matches the seeded row in supabase/schema.sql.
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 
 // Derived from an actual createClient(...) call, not `ReturnType<typeof
