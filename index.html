@@ -1906,19 +1906,30 @@ async function callClubAdmin(action, payload = {}) {
   }
 }
 
-// Every club this reader is in, for the switcher and the "you have no clubs yet"
-// landing state. Read directly: club_members is readable for your own clubs, and
-// `clubs` is readable outright.
+// Every club this reader is in, for the switcher and the "you're not in this
+// club" page.
+//
+// The `user_id` filter is load-bearing, not belt-and-braces. club_members' select
+// policy is `is_member(club_id) or clubs.visibility = 'public'` -- scoped by
+// CLUB, not by user -- so an unfiltered read of a public club returns a row per
+// member, and the switcher rendered one pill per member of The Guild (12 pills
+// all reading "The Guild") instead of one per club. RLS restricts which clubs
+// you can see; only this filter restricts them to the ones that are yours.
 async function loadMyClubs() {
+  if (!session) { myClubs = []; return; }
   try {
     const { data, error } = await supabase
       .from("club_members")
-      .select("role, clubs:club_id ( id, slug, name, visibility )");
+      .select("role, clubs:club_id ( id, slug, name, visibility )")
+      .eq("user_id", session.user.id);
     if (error) throw error;
-    myClubs = (data || [])
-      .map(r => ({ ...(r.clubs || {}), role: r.role }))
-      .filter(c => c.id)
-      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    // (club_id, user_id) is the primary key, so one row per club per reader --
+    // dedupe by id anyway so a future join can't silently reintroduce the bug.
+    const byId = new Map();
+    for (const r of data || []) {
+      if (r.clubs?.id) byId.set(r.clubs.id, { ...r.clubs, role: r.role });
+    }
+    myClubs = [...byId.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   } catch (err) {
     console.warn("club list failed:", err.message);
     myClubs = [];
