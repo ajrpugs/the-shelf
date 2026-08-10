@@ -947,10 +947,17 @@
      viewport is narrower than the tab labels' combined width -- every phone.
      Scroll horizontally instead, like a native app tab strip, rather than
      stacking rows above the content on every single page. */
+  /* overflow-y must be pinned to hidden: setting only overflow-x makes the
+     other axis compute to auto, and .tab-btn's margin-bottom:-1px pushes its
+     border box 1px past the padding box -- enough vertical scrollable overflow
+     that a touch drag visibly slides the whole strip up and down. The matching
+     padding-bottom:1px keeps the active tab's 2px underline out of the clipped
+     region, so it still meets the strip's border instead of losing a pixel. */
   .tabs{
     display: flex; flex-wrap: nowrap; gap: 4px; margin: 4px 0 22px;
-    border-bottom: 1px solid var(--panel-border); padding-bottom: 0;
-    overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    border-bottom: 1px solid var(--panel-border); padding-bottom: 1px;
+    overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
   }
   /* Fade the edges so a clipped label reads as "more to scroll to", not a
      rendering glitch -- the only hint on a strip with no visible scrollbar.
