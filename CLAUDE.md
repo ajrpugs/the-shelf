@@ -89,8 +89,9 @@ Colima rather than Docker Desktop deliberately: CLI-only, no GUI launch, no lice
 # this is the only thing that catches type errors in them)
 deno check --no-lock supabase/functions/*/index.ts
 
-# Offline unit tests for the shared draw/undo/rating/meeting logic
-node --test supabase/functions/_shared/*.test.mjs
+# Offline unit tests: shared draw/undo/rating/meeting logic, plus the client's
+# post-auth redirect (sliced out of index.html at run time, so it tests what ships)
+node --test supabase/functions/_shared/*.test.mjs tests/*.test.mjs
 
 # Run the frontend locally (nothing to build — Supabase is the backend)
 python3 -m http.server        # then open http://localhost:8000/index.html

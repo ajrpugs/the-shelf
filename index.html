@@ -1861,6 +1861,9 @@ async function initAuth() {
 }
 
 async function onSignedIn() {
+  // Before anything reads the route: put back the destination the OAuth round
+  // trip stripped, so an invite link still lands on its invite.
+  restorePostAuthDest();
   await ensureUserRow(session.user);
   // Which club we're on has to be settled before anything club-scoped runs --
   // membership, the librarian gate and loadAll all key off clubId().
@@ -2086,8 +2089,45 @@ async function ensureUserRow(user) {
   myUserRow = data;
 }
 
+// Where the reader was heading before they were asked to sign in.
+//
+// `redirectTo` below deliberately strips the hash, and has to: OAuth comes back
+// with Supabase's own token fragment in the URL, which would collide with ours.
+// That meant a signed-out person clicking an invite link lost the code across the
+// round trip and landed on the default club instead of the club that invited them
+// — the primary path for every new member. So the destination is stashed here and
+// restored after sign-in.
+//
+// sessionStorage, not localStorage: it survives navigating this tab out to
+// Discord and back, but doesn't leak a half-finished journey into other tabs or
+// outlive the browser session. Phase 5's email confirmation adds a second round
+// trip (through the inbox, possibly in a different tab) that this will NOT
+// survive — that one needs the destination carried in the confirmation link.
+const POST_AUTH_KEY = "shelf:post-auth-dest";
+const POST_AUTH_ROUTES = /^#\/(?:join\/[A-Za-z0-9]+|new|c\/[^/]+(?:\/[a-z]*)?)\/?$/;
+
+function stashPostAuthDest() {
+  const h = location.hash || "";
+  if (!POST_AUTH_ROUTES.test(h)) return;
+  try { sessionStorage.setItem(POST_AUTH_KEY, h); } catch { /* private mode; not fatal */ }
+}
+
+function restorePostAuthDest() {
+  let h = null;
+  try {
+    h = sessionStorage.getItem(POST_AUTH_KEY);
+    if (h) sessionStorage.removeItem(POST_AUTH_KEY);
+  } catch { /* ignore */ }
+  if (!h || location.hash === h) return;
+  // replaceState rather than assigning location.hash: assigning fires a
+  // hashchange, and onSignedIn is already about to resolve and load this exact
+  // route — the two would race and double-load.
+  try { history.replaceState(null, "", location.pathname + location.search + h); } catch { location.hash = h; }
+}
+
 async function signIn() {
   if (!CONFIGURED) return;
+  stashPostAuthDest();
   const cleanUrl = window.location.href.split("#")[0].split("?")[0];
   await supabase.auth.signInWithOAuth({
     provider: "discord",

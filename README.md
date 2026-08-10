@@ -127,8 +127,8 @@ brew install node deno          # tests + typechecking the edge functions
 brew install colima docker      # only for pg_dump-based backups
 colima start                    # headless Docker VM; `colima stop` when done
 
-# Unit tests for the shared wheel/rating/meeting logic (offline, no network)
-node --test supabase/functions/_shared/*.test.mjs
+# Unit tests: shared wheel/rating/meeting logic, plus the client's post-auth redirect
+node --test supabase/functions/_shared/*.test.mjs tests/*.test.mjs
 
 # Typecheck the edge functions. Worth doing: the Supabase deploy pipeline only
 # transpiles, so this is the ONLY thing that catches type errors in them.
