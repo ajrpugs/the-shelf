@@ -507,6 +507,13 @@ Deno.serve(async (req) => {
     .from("club_members").select("role").eq("club_id", clubId).eq("user_id", callerId).maybeSingle();
   if (membership?.role !== "librarian") return json({ error: "not a librarian" }, 403);
 
+  // A suspended club is a moderation hold, not a delete -- its data stays put,
+  // but every write path here stops, including a librarian's own. There's no
+  // UI for setting this; an operator flips it by hand (see the migration).
+  const { data: clubRow } = await client
+    .from("clubs").select("suspended_at").eq("id", clubId).maybeSingle();
+  if (clubRow?.suspended_at) return json({ error: "This club has been suspended." }, 403);
+
   // shelf_state.data now holds only { eliminated, roundNumber } -- history
   // lives in the `reads` table. `version` guards against two concurrent admin
   // actions clobbering each other: every action that touches eliminated/

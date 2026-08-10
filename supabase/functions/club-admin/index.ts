@@ -91,6 +91,15 @@ async function librarianCount(client: Client, clubId: string): Promise<number> {
   return count ?? 0;
 }
 
+// A suspended club is a moderation hold, not a delete -- its data stays put,
+// but growth/activity actions stop, including a librarian's own. There's no
+// UI for setting this; an operator flips it by hand (see the migration).
+async function isSuspended(client: Client, clubId: string): Promise<boolean> {
+  const { data } = await client
+    .from("clubs").select("suspended_at").eq("id", clubId).maybeSingle();
+  return !!data?.suspended_at;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
@@ -191,6 +200,7 @@ Deno.serve(async (req) => {
       // Gate: librarian of the club.
       case "create_invite": {
         if (!await isLibrarian(client, clubId, callerId)) return json({ error: "not a librarian" }, 403);
+        if (await isSuspended(client, clubId)) return json({ error: "This club has been suspended." }, 403);
         const rawMax = body.max_uses;
         const maxUses = rawMax === null || rawMax === undefined || rawMax === ""
           ? null
@@ -249,6 +259,11 @@ Deno.serve(async (req) => {
             .from("clubs").select("id, slug, name, visibility").eq("id", inviteClub).single();
           return json({ ok: true, club: already, already: true });
         }
+
+        // A suspended club is a moderation hold, not a delete -- reopening a
+        // link you already used still lands you in it (the branch above), but
+        // no one new can join while it's held.
+        if (await isSuspended(client, inviteClub)) return json({ error: "This club has been suspended." }, 403);
 
         if (
           invite.revoked

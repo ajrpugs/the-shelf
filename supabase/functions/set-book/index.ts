@@ -191,6 +191,13 @@ Deno.serve(async (req) => {
     .eq("user_id", userId)
     .maybeSingle();
   if (!membership) return json({ error: "not a member of this club" }, 403);
+
+  // A suspended club is a moderation hold, not a delete -- see the migration
+  // that added this column. No UI sets it; an operator does by hand.
+  const { data: clubRow } = await admin
+    .from("clubs").select("suspended_at").eq("id", clubId).maybeSingle();
+  if (clubRow?.suspended_at) return json({ error: "This club has been suspended." }, 403);
+
   const prev = (membership.book ?? "").trim();
 
   const { data: updated, error: updErr } = await admin

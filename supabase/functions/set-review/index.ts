@@ -113,6 +113,13 @@ Deno.serve(async (req) => {
     return json({ ok: true, cleared: true });
   }
 
+  // A suspended club is a moderation hold, not a delete -- see the migration
+  // that added this column. Clearing your own review above stays allowed (a
+  // reduction, not new activity); submitting a new one below does not.
+  const { data: clubRow } = await admin
+    .from("clubs").select("suspended_at").eq("id", clubId).maybeSingle();
+  if (clubRow?.suspended_at) return json({ error: "This club has been suspended." }, 403);
+
   // Reviews are only accepted on the *current* read — the oldest pick that
   // hasn't been given a committed score yet — and only while the librarian has
   // opened ratings. This blocks retroactive scoring of past reads.

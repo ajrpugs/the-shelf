@@ -72,6 +72,13 @@ Deno.serve(async (req) => {
     return json({ ok: true, deleted: String(body.delete_id) });
   }
 
+  // A suspended club is a moderation hold, not a delete -- see the migration
+  // that added this column. Deleting your own comment above stays allowed (a
+  // reduction, not new activity); posting a new one below does not.
+  const { data: clubRow } = await admin
+    .from("clubs").select("suspended_at").eq("id", clubId).maybeSingle();
+  if (clubRow?.suspended_at) return json({ error: "This club has been suspended." }, 403);
+
   const bookTs = String(body.book_ts ?? "").trim();
   if (!bookTs) return json({ error: "book_ts required" }, 400);
   const text = String(body.body ?? "").trim().slice(0, 2000);

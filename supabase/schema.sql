@@ -759,3 +759,11 @@ alter table public.shelf_users drop constraint if exists shelf_users_name_len_ch
 alter table public.shelf_users
   add constraint shelf_users_name_len_chk
   check (length(btrim(discord_username)) between 1 and 40);
+
+-- 28. Phase 7: club suspension -----------------------------------------------
+-- A minimal, reversible moderation lever -- an operator flips this by hand
+-- (no UI), and every club-scoped edge function refuses to write while it's
+-- set. See 20260810140000_club_suspension.sql for the full rationale.
+
+alter table public.clubs
+  add column if not exists suspended_at timestamptz;

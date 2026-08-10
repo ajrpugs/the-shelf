@@ -1269,6 +1269,9 @@ const DEFAULT_CLUB_SLUG = "the-guild"; // matches the seeded clubs row
 //                 invisible to them under RLS, so without this they'd get a
 //                 working-looking club with an empty shelf. Turning this into
 //                 "ask for an invite" is Phase 4d.
+//   suspended  -- a moderation hold (clubs.suspended_at), set by an operator by
+//                 hand, no UI. `club` is still populated -- unlike not_found --
+//                 so the page can name it, but every write 403s server-side.
 let club = null;
 let clubStatus = "loading";
 let myClubs = [];            // every club this reader belongs to (club switcher)
@@ -2223,10 +2226,14 @@ async function resolveClubFromRoute() {
   clubStatus = "loading";
   try {
     const { data, error } = await supabase
-      .from("clubs").select("id, slug, name, tagline, visibility, timezone").eq("slug", wanted).maybeSingle();
+      .from("clubs").select("id, slug, name, tagline, visibility, timezone, suspended_at").eq("slug", wanted).maybeSingle();
     if (error) throw error;
     if (!data) { club = null; clubStatus = "not_found"; return; }
     club = data;
+    // A moderation hold (set by hand, no UI -- see the migration) takes
+    // priority over membership: a suspended club's own members shouldn't see
+    // a working-looking app whose every write silently 403s.
+    if (data.suspended_at) { clubStatus = "suspended"; return; }
     // Membership decides whether there's anything to show, for EVERY club
     // including the seeded one. That used to be short-circuited on the grounds
     // that sign-in auto-joined the seeded club — retiring the auto-join
@@ -4031,6 +4038,10 @@ function render() {
     return;
   }
 
+  // Reachable signed in or out -- it's the one page that has to be readable
+  // before someone even has an account.
+  if (parseRoute().name === "legal") { app.innerHTML = renderLegal(); wireLegal(); return; }
+
   if (!session) {
     app.innerHTML = renderLoginGate();
     wireLoginGate();
@@ -4052,7 +4063,7 @@ function render() {
 
   // A club that couldn't be resolved gets its own page rather than an empty
   // shelf, which would look like a working club with nothing in it.
-  if (clubStatus === "not_found" || clubStatus === "not_member") {
+  if (clubStatus === "not_found" || clubStatus === "not_member" || clubStatus === "suspended") {
     app.innerHTML = renderClubProblem();
     document.querySelector("[data-go-default-club]")?.addEventListener("click", () => {
       location.hash = `#/c/${DEFAULT_CLUB_SLUG}/reading`;
@@ -4599,6 +4610,7 @@ function render() {
   // has to promote someone or delete the club instead.
   html += ` · <a href="#" class="footer-link" id="leave-club">Leave ${esc(clubName())}</a>`;
   html += ` · <a href="https://discord.gg/4YeGJgs8u" target="_blank" rel="noopener" class="footer-link">Join the Discord</a>`;
+  html += ` · <a href="#/legal" class="footer-link">Terms &amp; Privacy</a>`;
   html += `</footer>`;
 
   app.innerHTML = html;
@@ -4702,6 +4714,7 @@ function parseRoute() {
   // club route so /c/new and a club slugged "join" can't collide with them.
   if (/^#\/new\/?$/.test(hash)) return { name: "new-club" };
   if (/^#\/account\/?$/.test(hash)) return { name: "account" };
+  if (/^#\/legal\/?$/.test(hash)) return { name: "legal" };
   const join = hash.match(/^#\/join\/([A-Za-z0-9]+)\/?$/);
   if (join) return { name: "join", code: join[1].toUpperCase() };
   // clubSlug is resolved against the `clubs` table as of Phase 4 slice 4b --
@@ -4816,6 +4829,94 @@ function wireAccount() {
     location.reload();
   });
 }
+
+// ---------- Terms & Privacy (Phase 7) ----------
+// Reachable signed in or out (see render()) -- it's the one page that has to
+// work before someone has an account at all. Plain-English on purpose: this
+// is a free hobby project with one operator, not a company with a legal
+// team, and it says so rather than dressing up in language that implies
+// otherwise. Written to describe what the app actually does (see CLAUDE.md
+// and docs/multi-tenant-plan.md) -- not aspirational, not boilerplate copied
+// from somewhere else.
+function renderLegal() {
+  const backHref = session ? `#/c/${esc(clubSlug())}/reading` : "#";
+  return `
+    <header><div class="eyebrow">The Shelf</div><h1>Terms &amp; Privacy</h1><div class="rule"></div></header>
+    <a href="${backHref}" class="detail-back">← Back</a>
+    <div class="setup">
+      <div class="card no-rule">
+        <div class="mini-head">What this is</div>
+        <p>The Shelf is a free, single-operator hobby project, not a company. This page
+        is a plain description of what the app actually does with your data and what
+        happens if something goes wrong — not a substitute for legal advice, and not a
+        promise of the kind a business with a legal team could make.</p>
+      </div>
+
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">What's collected, and why</div>
+        <p>Signing in with Discord or Google shares your account id, display name, and
+        avatar — that's how the app knows who you are and shows your name on the shelf.
+        Everything else is what you put in yourself: the books you pick, the clubs you
+        join or create, review scores and notes, comments, and reactions. There's no
+        separate password, no email/password signup, and no tracking or analytics
+        beyond what your sign-in provider itself does.</p>
+      </div>
+
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">What doesn't happen</div>
+        <p>No ads. Nothing is sold or shared with third parties beyond the services the
+        app itself depends on to run — Discord/Google for sign-in, Supabase for
+        storage, and Open Library for book cover art (a title, not your identity, is
+        what's sent there). A club can post to its own Discord server if a librarian
+        sets that up; nothing posts anywhere without that.</p>
+      </div>
+
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">Deleting your account</div>
+        <p>Account deletion (from the <a href="#/account" class="footer-link">Account
+        page</a>) is permanent and removes your membership in every club, and every
+        review and comment you've written. One thing deliberately survives: your past
+        picks stay in each club's history under your name as plain text, so a club's
+        own record of what it read doesn't grow holes because a member later left.</p>
+      </div>
+
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">Backups aren't guaranteed</div>
+        <p>This project doesn't run paid database backups. Best-effort backups exist,
+        but there's no service-level promise attached to them — a club's data could be
+        lost in a way a funded product's wouldn't be. If that matters more to a club
+        than the app being free, that's worth knowing going in.</p>
+      </div>
+
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">Moderation</div>
+        <p>Open sign-up means clubs and content from people the operator has never met.
+        A club that violates these terms — or is reported and found to — can be
+        suspended (put on hold, reversibly) or, for serious or repeated cases, deleted
+        outright, along with the account responsible. Report a problem via the contact
+        below.</p>
+      </div>
+
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">Age</div>
+        <p>The Shelf isn't directed at children and isn't intended for anyone under 13.</p>
+      </div>
+
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">Changes</div>
+        <p>This notice may change as the app does. There's no mailing list to announce
+        that on — check back here if it matters to you.</p>
+      </div>
+
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">Contact</div>
+        <p>Report a problem, ask a question, or request your data be handled a
+        particular way via
+        <a href="https://github.com/ajrpugs/the-shelf/issues" target="_blank" rel="noopener" class="footer-link">GitHub Issues</a>.</p>
+      </div>
+    </div>`;
+}
+function wireLegal() { /* static page -- nothing to wire up */ }
 
 // ---------- No clubs at all (Phase 5 prep) ----------
 // The two ways forward are the two things a reader with no club can actually do:
@@ -4948,13 +5049,18 @@ function goToClub(slug) {
 function renderClubProblem() {
   const wanted = parseRoute().clubSlug || DEFAULT_CLUB_SLUG;
   const notFound = clubStatus === "not_found";
+  const suspended = clubStatus === "suspended";
+  const heading = notFound ? "No such club" : suspended ? "This club is suspended" : "You're not in this club";
+  const body = notFound
+    ? `Nothing is registered at <b>${esc(wanted)}</b>. Check the link, or ask whoever sent it for an invite.`
+    : suspended
+      ? `<b>${esc(clubName())}</b> has been suspended pending review. Its history and members are untouched, but nothing new can happen here for now.`
+      : `<b>${esc(clubName())}</b> exists, but you're not a member — so there's nothing here to show you. Ask a librarian of that club for an invite link.`;
   return `
     <header><div class="eyebrow">Book club</div><h1>The Shelf</h1><div class="rule"></div></header>
     <div class="setup">
-      <h2>${notFound ? "No such club" : "You're not in this club"}</h2>
-      <p>${notFound
-        ? `Nothing is registered at <b>${esc(wanted)}</b>. Check the link, or ask whoever sent it for an invite.`
-        : `<b>${esc(clubName())}</b> exists, but you're not a member — so there's nothing here to show you. Ask a librarian of that club for an invite link.`}</p>
+      <h2>${heading}</h2>
+      <p>${body}</p>
       <p>
         ${myClubs.length
           ? myClubs.map(c => `<button class="btn-primary" data-go-club="${attr(c.slug)}">Go to ${esc(c.name)}</button>`).join(" ")
@@ -5572,6 +5678,7 @@ function renderLoginGate() {
       <p class="invite-meta" style="margin-top:14px;">
         Signing in doesn't add you to anyone's club — you'll be asked to start one or use an invite.
       </p>
+      <p class="invite-meta" style="margin-top:8px;"><a href="#/legal" class="footer-link">Terms &amp; Privacy</a></p>
     </div>
   `;
 }
