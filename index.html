@@ -943,16 +943,32 @@
   .modal-actions button.btn-ghost:hover:not(:disabled){ border-color: var(--ink); color: var(--ink); background: rgba(236,227,207,0.06); }
 
   /* ---- Tab navigation ---- */
+  /* A row this wide (7 tabs + Admin) wraps into 2-3 ragged lines once the
+     viewport is narrower than the tab labels' combined width -- every phone.
+     Scroll horizontally instead, like a native app tab strip, rather than
+     stacking rows above the content on every single page. */
   .tabs{
-    display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 22px;
+    display: flex; flex-wrap: nowrap; gap: 4px; margin: 4px 0 22px;
     border-bottom: 1px solid var(--panel-border); padding-bottom: 0;
+    overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
   }
+  /* Fade the edges so a clipped label reads as "more to scroll to", not a
+     rendering glitch -- the only hint on a strip with no visible scrollbar.
+     Only applied when wireUp() measures actual overflow (see .has-overflow
+     toggle there), so desktop -- where every tab already fits -- never dims
+     its first/last label for no reason. */
+  .tabs.has-overflow{
+    -webkit-mask-image: linear-gradient(to right, transparent, black 14px, black calc(100% - 14px), transparent);
+    mask-image: linear-gradient(to right, transparent, black 14px, black calc(100% - 14px), transparent);
+  }
+  .tabs::-webkit-scrollbar{ display: none; }
   .tab-btn{
     background: transparent; border: none; border-bottom: 2px solid transparent;
     color: var(--ink-soft); cursor: pointer; padding: 8px 12px 9px;
     font-family:'Courier Prime', monospace; font-size: 11.5px; font-weight: 700;
     letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: -1px;
     border-radius: 2px 2px 0 0; transition: color 0.12s ease, background 0.12s ease;
+    flex: 0 0 auto; white-space: nowrap;
   }
   .tab-btn:hover{ color: var(--ink); background: rgba(236,227,207,0.05); }
   .tab-btn.on{ color: var(--stamp-text); border-bottom-color: var(--stamp); }
@@ -1280,6 +1296,11 @@ let currentTab = "reading";  // active top-level tab in the main view
 let lastRenderedTab = null;  // currentTab as of the previous render() — lets us
                               // fade in tab content only on an actual tab switch,
                               // not on every background realtime refresh
+let tabJustSwitched = false; // mirrors that same comparison so wireUp() can
+                              // scroll the (now horizontally-scrolling) tab
+                              // strip's active tab into view on a real switch,
+                              // never on a background realtime refresh
+                              // not on every background realtime refresh
 let lastRenderedHash = null; // location.hash as of the previous render() — lets us
                               // scroll to top only on an actual route navigation,
                               // not on every re-render of the same detail page
@@ -1296,6 +1317,48 @@ const setFlash = (kind, text) => {
   flashMsg = { kind, text };
   setTimeout(() => { if (flashMsg && flashMsg.text === text) { flashMsg = null; render(); } }, 4000);
 };
+
+// Maps a caught JS/Supabase error to copy a reader can act on, instead of
+// whatever Postgres/fetch happened to say -- "Couldn't save: JWT expired" or a
+// raw constraint-violation string reads as broken, not as something to retry.
+// `action` is a short phrase completing "Couldn't ___": "save your review",
+// "load the shelf". The original error always goes to console first, so
+// nothing is lost for anyone who opens dev tools or files a bug report.
+//
+// Several call sites (set-review, set-book, post-comment...) throw
+// `new Error(t)` where `t` is an edge function's OWN response body -- text a
+// human already wrote on purpose, e.g. "That read isn't open for ratings
+// yet." Those must pass through unchanged, not get flattened into a generic
+// "try again" that would bury a real business-rule answer. Only messages that
+// look like raw Postgres/JS internals, or match a known failure shape, get
+// replaced.
+function friendlyError(err, action) {
+  console.warn(`${action} failed:`, err);
+  const msg = (typeof err === "string" ? err : err?.message || "").trim();
+  // Specific patterns are checked first, even for a JS-native error -- a
+  // network failure surfaces as a TypeError("Failed to fetch") in every
+  // browser, and that's the single most common real-world case here.
+  if (/failed to fetch|networkerror|load failed|ERR_INTERNET|ERR_CONNECTION|ERR_NAME_NOT_RESOLVED/i.test(msg)) {
+    return "Couldn't reach the server — check your connection and try again.";
+  }
+  if (/jwt|token|401|unauthor/i.test(msg)) {
+    return "Your session needs a refresh — try again in a moment, or sign out and back in.";
+  }
+  if (/row-level security|permission denied|403|forbidden/i.test(msg)) {
+    return "You don't have permission to do that.";
+  }
+  if (/timeout|timed out/i.test(msg)) {
+    return "That took too long — try again.";
+  }
+  // Past that: a genuine JS exception (a bug, not a business rule) always
+  // gets the generic fallback -- `.message` on a TypeError never carries its
+  // type name, so this has to check `.name`, not pattern-match the text.
+  const isJsBug = err instanceof Error && /^(TypeError|ReferenceError|SyntaxError|RangeError|EvalError)$/.test(err.name);
+  const looksRaw = isJsBug
+    || !msg
+    || /duplicate key|violates|constraint|null value in column|invalid input syntax|PGRST\d|column .* does not exist/i.test(msg);
+  return looksRaw ? `Couldn't ${action}. Try again in a moment.` : msg;
+}
 
 function normalizeState(raw) {
   const r = raw || {};
@@ -1790,7 +1853,7 @@ async function callAdmin(action, payload = {}) {
     }
     render();
   } catch (err) {
-    setFlash("err", `Network error: ${err.message}`);
+    setFlash("err", friendlyError(err, "complete that action"));
   } finally {
     adminBusy = false;
     document.body.style.cursor = "";
@@ -1842,6 +1905,84 @@ function openModal({ labelledBy } = {}) {
   back.addEventListener("click", (e) => { if (e.target === back) close(); });
   document.body.appendChild(back);
   return { back, close, focusFirst };
+}
+
+// ---------- Generic modal dialogs ----------
+// Themed stand-ins for confirm()/alert()/prompt(). The native dialogs are OS
+// chrome dropped on top of a hand-styled dark theme -- jarring, and the one
+// thing every reader sees before any destructive admin action. Built on
+// openModal() so they share its focus trap, Escape-to-close and
+// click-outside-to-close; each resolves its promise however the dialog closed
+// rather than leaving a caller hanging.
+function confirmModal(message, { title = "Are you sure?", confirmLabel = "Confirm", cancelLabel = "Cancel", danger = true } = {}) {
+  return new Promise((resolve) => {
+    const { back, close, focusFirst } = openModal({ labelledBy: "confirm-modal-title" });
+    let settled = false;
+    const finish = (v) => { if (settled) return; settled = true; close(); resolve(v); };
+    back.innerHTML = `
+      <div class="modal">
+        <h3 id="confirm-modal-title">${esc(title)}</h3>
+        <p>${esc(message)}</p>
+        <div class="modal-actions">
+          <button class="btn-ghost" id="confirm-modal-cancel">${esc(cancelLabel)}</button>
+          <button class="${danger ? 'btn-danger' : 'btn-primary'}" id="confirm-modal-go">${esc(confirmLabel)}</button>
+        </div>
+      </div>`;
+    focusFirst();
+    back.querySelector("#confirm-modal-cancel").addEventListener("click", () => finish(false));
+    back.querySelector("#confirm-modal-go").addEventListener("click", () => finish(true));
+    back.addEventListener("keydown", (e) => { if (e.key === "Escape") finish(false); });
+    back.addEventListener("click", (e) => { if (e.target === back) finish(false); });
+  });
+}
+function alertModal(message, { title = "Heads up" } = {}) {
+  return new Promise((resolve) => {
+    const { back, close, focusFirst } = openModal({ labelledBy: "alert-modal-title" });
+    let settled = false;
+    const finish = () => { if (settled) return; settled = true; close(); resolve(); };
+    back.innerHTML = `
+      <div class="modal">
+        <h3 id="alert-modal-title">${esc(title)}</h3>
+        <p>${esc(message)}</p>
+        <div class="modal-actions">
+          <button class="btn-primary" id="alert-modal-ok">OK</button>
+        </div>
+      </div>`;
+    focusFirst();
+    back.querySelector("#alert-modal-ok").addEventListener("click", finish);
+    back.addEventListener("keydown", (e) => { if (e.key === "Escape" || e.key === "Enter") finish(); });
+    back.addEventListener("click", (e) => { if (e.target === back) finish(); });
+  });
+}
+// requireMatch mirrors the old RESET-style typed confirmation: Save stays
+// disabled until the input matches it exactly.
+function promptModal(message, { title = "Confirm", defaultValue = "", placeholder = "", confirmLabel = "Save", cancelLabel = "Cancel", requireMatch = null, danger = false } = {}) {
+  return new Promise((resolve) => {
+    const { back, close, focusFirst } = openModal({ labelledBy: "prompt-modal-title" });
+    let settled = false;
+    const finish = (v) => { if (settled) return; settled = true; close(); resolve(v); };
+    back.innerHTML = `
+      <div class="modal">
+        <h3 id="prompt-modal-title">${esc(title)}</h3>
+        <p>${esc(message)}</p>
+        <input type="text" id="prompt-modal-input" autocomplete="off" placeholder="${attr(placeholder)}" value="${attr(defaultValue)}" />
+        <div class="modal-actions">
+          <button class="btn-ghost" id="prompt-modal-cancel">${esc(cancelLabel)}</button>
+          <button class="${danger ? 'btn-danger' : 'btn-primary'}" id="prompt-modal-go"${requireMatch != null ? ' disabled' : ''}>${esc(confirmLabel)}</button>
+        </div>
+      </div>`;
+    const input = back.querySelector("#prompt-modal-input");
+    const goBtn = back.querySelector("#prompt-modal-go");
+    focusFirst();
+    input.select?.();
+    const isValid = () => requireMatch == null || input.value.trim() === requireMatch;
+    if (requireMatch != null) input.addEventListener("input", () => { goBtn.disabled = !isValid(); });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter" && isValid()) finish(input.value); });
+    back.querySelector("#prompt-modal-cancel").addEventListener("click", () => finish(null));
+    goBtn.addEventListener("click", () => { if (isValid()) finish(input.value); });
+    back.addEventListener("keydown", (e) => { if (e.key === "Escape") finish(null); });
+    back.addEventListener("click", (e) => { if (e.target === back) finish(null); });
+  });
 }
 
 function promptResetConfirmation() {
@@ -1962,7 +2103,7 @@ async function callClubAdmin(action, payload = {}) {
     if (!res.ok) { setFlash("err", body.error || res.statusText); return null; }
     return body;
   } catch (err) {
-    setFlash("err", `Network error: ${err.message}`);
+    setFlash("err", friendlyError(err, "complete that action"));
     return null;
   } finally {
     clubBusy = false;
@@ -2224,7 +2365,7 @@ async function ensureUserRow(user) {
       discord_id: discordId,
     }, { onConflict: "id" })
     .select().single();
-  if (error) { setFlash("err", `Sign-in setup: ${error.message}`); return; }
+  if (error) { setFlash("err", friendlyError(error, "finish signing you in")); return; }
   myUserRow = data;
   myDisplayName = data.discord_username;
 
@@ -2279,7 +2420,7 @@ async function saveDisplayName(name) {
     setFlash("info", `You're now “${trimmed}”.`);
     await loadAll();       // renders; refreshes the name everywhere it appears
   } catch (err) {
-    setFlash("err", `Couldn't save your name: ${err.message}`);
+    setFlash("err", friendlyError(err, "save your name"));
     render();
   }
 }
@@ -2304,7 +2445,7 @@ async function resetDisplayName() {
     setFlash("info", `Back to “${fromProvider}”.`);
     await loadAll();
   } catch (err) {
-    setFlash("err", `Couldn't reset your name: ${err.message}`);
+    setFlash("err", friendlyError(err, "reset your name"));
     render();
   }
 }
@@ -2418,7 +2559,7 @@ async function signIn(provider = "discord") {
     console.warn("sign-in failed:", error.message);
     setFlash("err", /provider is not enabled|unsupported/i.test(error.message)
       ? `${provider} sign-in isn't set up yet.`
-      : `Couldn't start sign-in: ${error.message}`);
+      : friendlyError(error, "start sign-in"));
     render();
   }
 }
@@ -2521,7 +2662,7 @@ async function loadAll() {
         loadAllRetrying = false;
       }
     }
-    setFlash("err", `Couldn't load: ${err.message}`);
+    setFlash("err", friendlyError(err, "load the shelf"));
   }
   setRefreshing(false);
   render();
@@ -2576,7 +2717,7 @@ async function setMyBook(book) {
     setFlash("info", book ? `Your pick: "${book}".` : "Cleared your book.");
     render();
   } catch (err) {
-    setFlash("err", `Couldn't save: ${err.message}`);
+    setFlash("err", friendlyError(err, "save your book"));
   }
 }
 
@@ -2612,7 +2753,7 @@ async function saveMyReview(bookTs, scores, note) {
     setFlash("info", scores === null ? "Cleared your review." : dnf ? "Marked as didn't-finish." : "Your review is in.");
     render();
   } catch (err) {
-    setFlash("err", `Couldn't save review: ${err.message}`);
+    setFlash("err", friendlyError(err, "save your review"));
   }
 }
 
@@ -2644,7 +2785,7 @@ async function postComment(bookTs, text, parentId = null) {
     const body = await res.json();
     if (body.comment) comments.push(body.comment);
     render();
-  } catch (err) { setFlash("err", `Couldn't post: ${err.message}`); render(); }
+  } catch (err) { setFlash("err", friendlyError(err, "post that")); render(); }
 }
 async function deleteComment(id) {
   if (!session || !id) return;
@@ -2659,7 +2800,7 @@ async function deleteComment(id) {
     // mirror that locally so orphaned replies don't linger until next refresh.
     comments = comments.filter(c => c.id !== id && c.parent_id !== id);
     render();
-  } catch (err) { setFlash("err", `Couldn't delete: ${err.message}`); render(); }
+  } catch (err) { setFlash("err", friendlyError(err, "delete that comment")); render(); }
 }
 
 // ---------- Comment reactions ----------
@@ -2698,7 +2839,7 @@ async function reactComment(commentId, emoji) {
       reactions.push({ comment_id: commentId, user_id: myId, emoji });
     }
     render();
-  } catch (err) { setFlash("err", `Couldn't react: ${err.message || err}`); render(); }
+  } catch (err) { setFlash("err", friendlyError(err, "react to that")); render(); }
 }
 
 // Librarian opens or closes member reviews for a read.
@@ -2708,12 +2849,16 @@ function setRatingsOpen(bookTs, open) {
 
 // Librarian snapshots the current member average into the committed Guild score,
 // which drops the read onto the leaderboard (and promotes the next-up read).
-function lockInScore(bookTs) {
+async function lockInScore(bookTs) {
   const agg = aggregateRubric(bookTs);
   if (!agg) { setFlash("err", "No member reviews to lock in yet."); render(); return; }
   const h = state.history.find(x => x.ts === bookTs);
   const title = h?.book || "this read";
-  if (!confirm(`Lock in the Guild score for "${title}" at ${agg.total}/100 (${agg.band.label}), averaged from ${agg.count} review${agg.count === 1 ? '' : 's'}? It moves to the leaderboard.`)) return;
+  const ok = await confirmModal(
+    `Lock in the Guild score for "${title}" at ${agg.total}/100 (${agg.band.label}), averaged from ${agg.count} review${agg.count === 1 ? '' : 's'}? It moves to the leaderboard.`,
+    { title: "Lock in this score?", confirmLabel: "Lock in", danger: false },
+  );
+  if (!ok) return;
   const cats = {};
   for (const { key } of RUBRIC) cats[key] = Math.round(agg.cats[key]);
   callAdmin("admin_set_rating", { ts: bookTs, total: agg.total, ...cats, reviews: agg.count });
@@ -2974,9 +3119,17 @@ function drawWheel(canvas, entries, rotation) {
     ctx.lineWidth = 1;
     ctx.stroke();
 
+    // A wedge whose centerline points into the left hemisphere reads upside
+    // down if drawn like the right hemisphere's -- rotate it another 180° so
+    // the glyphs stay upright, and mirror the anchor/alignment to match, or
+    // the text lands rim-outward off the wheel instead of inside the wedge.
+    const normMid = Math.atan2(Math.sin(mid), Math.cos(mid));
+    const flip = Math.cos(normMid) < 0;
+    const rimX = flip ? -(radius - 14) : (radius - 14);
+
     ctx.save();
-    ctx.rotate(mid);
-    ctx.textAlign = "right";
+    ctx.rotate(flip ? mid + Math.PI : mid);
+    ctx.textAlign = flip ? "left" : "right";
     ctx.textBaseline = "middle";
     // Shadow so text holds up over any cover art behind it.
     ctx.shadowColor = "rgba(0, 0, 0, 0.7)";
@@ -2989,11 +3142,11 @@ function drawWheel(canvas, entries, rotation) {
 
     ctx.fillStyle = "#F2E8D5";
     ctx.font = bookFont;
-    ctx.fillText(bookDisplay, radius - 14, -bookFontSize * 0.55);
+    ctx.fillText(bookDisplay, rimX, (flip ? 1 : -1) * bookFontSize * 0.55);
 
     ctx.fillStyle = "rgba(242,232,213,0.82)";
     ctx.font = nameFont;
-    ctx.fillText(nameDisplay, radius - 14, bookFontSize * 0.65);
+    ctx.fillText(nameDisplay, rimX, (flip ? -1 : 1) * bookFontSize * 0.65);
 
     // Compact year · pages line, once metadata is in and slices aren't tiny.
     const meta = wheelCoverImages[entry.id] && wheelCoverImages[entry.id].meta;
@@ -3002,7 +3155,7 @@ function drawWheel(canvas, entries, rotation) {
       const metaFont = `${Math.max(8, nameFontSize - 1)}px "Fraunces", serif`;
       ctx.fillStyle = "rgba(242,232,213,0.6)";
       ctx.font = metaFont;
-      ctx.fillText(truncateToWidth(metaText, metaFont), radius - 14, bookFontSize * 0.65 + nameFontSize + 2);
+      ctx.fillText(truncateToWidth(metaText, metaFont), rimX, (flip ? -1 : 1) * (bookFontSize * 0.65 + nameFontSize + 2));
     }
 
     ctx.restore();
@@ -3117,7 +3270,7 @@ async function runDraw() {
     goToTab("reading");
   } catch (err) {
     spinning = false;
-    setFlash("err", `Network error: ${err.message}`);
+    setFlash("err", friendlyError(err, "spin the wheel"));
     render();
   }
 }
@@ -4001,6 +4154,7 @@ function render() {
 
   const tabSwitched = currentTab !== lastRenderedTab;
   lastRenderedTab = currentTab;
+  tabJustSwitched = tabSwitched;
   html += `<div class="tab-body${tabSwitched ? ' tab-enter' : ''}" id="tab-panel" role="tabpanel" aria-labelledby="tab-btn-${currentTab}" tabindex="0">`;
 
   // ---- Reading: Currently reading + Next up ----
@@ -4649,10 +4803,9 @@ function wireAccount() {
     // The server requires this exact phrase too and re-checks it, along with the
     // "you're the only librarian somewhere" guard -- this prompt is a speed bump,
     // not the guard.
-    const typed = prompt(
-      "This permanently deletes your account, your memberships, and every review and comment you've written.\n\n" +
-      "Your past picks stay in each club's ledger under your name.\n\n" +
-      'Type DELETE MY ACCOUNT to confirm:'
+    const typed = await promptModal(
+      "This permanently deletes your account, your memberships, and every review and comment you've written. Your past picks stay in each club's ledger under your name. Type DELETE MY ACCOUNT to confirm.",
+      { title: "Delete your account?", placeholder: "DELETE MY ACCOUNT", confirmLabel: "Delete my account", danger: true, requireMatch: "DELETE MY ACCOUNT" },
     );
     if (typed === null) return;
     const body = await callClubAdmin("delete_account", { confirm: typed });
@@ -5455,6 +5608,17 @@ function wireUp() {
       goToTab(id);
     });
   });
+  const tabStrip = document.querySelector(".tabs");
+  if (tabStrip) {
+    tabStrip.classList.toggle("has-overflow", tabStrip.scrollWidth > tabStrip.clientWidth + 1);
+    if (tabJustSwitched) {
+      const activeTabBtn = document.getElementById(`tab-btn-${currentTab}`);
+      if (activeTabBtn) {
+        const left = activeTabBtn.offsetLeft - (tabStrip.clientWidth - activeTabBtn.clientWidth) / 2;
+        tabStrip.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+      }
+    }
+  }
 
   // Month grid navigation (0 = jump back to the current month).
   document.querySelectorAll("[data-cal-nav]").forEach(btn => {
@@ -5507,10 +5671,11 @@ function wireUp() {
 
   // Re-post a read's already-saved dates to Discord (doesn't change them).
   document.querySelectorAll("[data-me-announce]").forEach(btn => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const ts = btn.dataset.meAnnounce;
       const h = state.history.find(x => x.ts === ts);
-      if (!confirm(`Post the discussion dates for "${h?.book || 'this read'}" to Discord now?`)) return;
+      const ok = await confirmModal(`Post the discussion dates for "${h?.book || 'this read'}" to Discord now?`, { title: "Post to Discord?", confirmLabel: "Post", danger: false });
+      if (!ok) return;
       document.activeElement?.blur?.();
       callAdmin("admin_announce_meeting", { ts });
     });
@@ -5557,8 +5722,8 @@ function wireUp() {
     if (e.key === "Enter") save && save.click();
   });
   const clear = document.getElementById("clear-book");
-  if (clear) clear.addEventListener("click", () => {
-    if (!confirm("Clear your book? You can add another anytime.")) return;
+  if (clear) clear.addEventListener("click", async () => {
+    if (!(await confirmModal("Clear your book? You can add another anytime.", { title: "Clear your book?", confirmLabel: "Clear", danger: false }))) return;
     setMyBook("");
   });
 
@@ -5566,37 +5731,43 @@ function wireUp() {
   if (spinBtn) spinBtn.addEventListener("click", runDraw);
 
   const undoBtn = document.getElementById("undo-btn");
-  if (undoBtn) undoBtn.addEventListener("click", () => {
+  if (undoBtn) undoBtn.addEventListener("click", async () => {
     const last = state.history[0];
     if (!last) return;
-    if (!confirm(`Undo the pick of "${last.book}" by ${last.winner_username}?`)) return;
+    if (!(await confirmModal(`Undo the pick of "${last.book}" by ${last.winner_username}?`, { title: "Undo last spin?", confirmLabel: "Undo" }))) return;
     callAdmin("undo_last_spin", {});
   });
 
   document.querySelectorAll("[data-admin-editbook]").forEach(el => {
-    el.addEventListener("click", () => {
+    el.addEventListener("click", async () => {
       const uid = el.dataset.adminEditbook;
       const u = users.find(x => x.id === uid);
       const current = (u?.book || "");
-      const next = prompt(`Edit ${u?.discord_username || 'this reader'}'s book (silent — no Discord post):`, current);
+      const next = await promptModal(`Edit ${u?.discord_username || 'this reader'}'s book. This is silent — no Discord post.`, {
+        title: "Edit reader's book", defaultValue: current, placeholder: "Book title — Author", confirmLabel: "Save",
+      });
       if (next === null) return; // cancelled
       if (next.trim() === current.trim()) return; // unchanged
       callAdmin("admin_set_book", { user_id: uid, book: next.trim() });
     });
   });
   document.querySelectorAll("[data-admin-clear]").forEach(el => {
-    el.addEventListener("click", () => {
+    el.addEventListener("click", async () => {
       const uid = el.dataset.adminClear;
       const u = users.find(x => x.id === uid);
-      if (!confirm(`Clear ${u?.discord_username || 'this reader'}'s book?`)) return;
+      if (!(await confirmModal(`Clear ${u?.discord_username || 'this reader'}'s book?`, { title: "Clear reader's book?", confirmLabel: "Clear" }))) return;
       callAdmin("admin_clear_book", { user_id: uid });
     });
   });
   document.querySelectorAll("[data-admin-remove]").forEach(el => {
-    el.addEventListener("click", () => {
+    el.addEventListener("click", async () => {
       const uid = el.dataset.adminRemove;
       const u = users.find(x => x.id === uid);
-      if (!confirm(`Remove ${u?.discord_username || 'this reader'} from the shelf? Their past reads stay in the ledger, but they'll need to sign in again to rejoin.`)) return;
+      const ok = await confirmModal(
+        `Remove ${u?.discord_username || 'this reader'} from the shelf? Their past reads stay in the ledger, but they'll need to sign in again to rejoin.`,
+        { title: "Remove reader?", confirmLabel: "Remove" },
+      );
+      if (!ok) return;
       callAdmin("admin_remove_user", { user_id: uid });
     });
   });
@@ -5637,7 +5808,11 @@ function wireUp() {
   });
 
   document.getElementById("cs-cal-rotate")?.addEventListener("click", async () => {
-    if (!confirm("Reset the calendar feed URL? Everyone currently subscribed will stop receiving updates and will need the new link.")) return;
+    const ok = await confirmModal(
+      "Reset the calendar feed URL? Everyone currently subscribed will stop receiving updates and will need the new link.",
+      { title: "Reset feed URL?", confirmLabel: "Reset" },
+    );
+    if (!ok) return;
     document.activeElement?.blur?.();
     const body = await callClubAdmin("rotate_calendar_token", { club_id: clubId() });
     if (!body?.calendar_token) { render(); return; }
@@ -5649,7 +5824,11 @@ function wireUp() {
   // ---- Leave this club (4e) ----
   document.getElementById("leave-club")?.addEventListener("click", async (e) => {
     e.preventDefault();
-    if (!confirm(`Leave ${clubName()}? Your past picks stay in its ledger, but you'll come off the shelf. You can rejoin with a new invite.`)) return;
+    const ok = await confirmModal(
+      `Leave ${clubName()}? Your past picks stay in its ledger, but you'll come off the shelf. You can rejoin with a new invite.`,
+      { title: "Leave this club?", confirmLabel: "Leave" },
+    );
+    if (!ok) return;
     document.activeElement?.blur?.();
     const body = await callClubAdmin("leave_club", { club_id: clubId() });
     if (!body?.ok) { render(); return; }   // e.g. 409, last librarian
@@ -5685,7 +5864,8 @@ function wireUp() {
   document.querySelectorAll("[data-inv-revoke]").forEach(el => {
     el.addEventListener("click", async () => {
       const code = el.dataset.invRevoke;
-      if (!confirm(`Revoke invite ${code}? Anyone still holding that link won't be able to join.`)) return;
+      const ok = await confirmModal(`Revoke invite ${code}? Anyone still holding that link won't be able to join.`, { title: "Revoke invite?", confirmLabel: "Revoke" });
+      if (!ok) return;
       document.activeElement?.blur?.();
       if (await callClubAdmin("revoke_invite", { club_id: clubId(), code })) {
         setFlash("info", "Invite revoked.");
@@ -5700,7 +5880,10 @@ function wireUp() {
     e.currentTarget.blur();
     // Typing the name is the server's requirement too -- it re-checks, so this
     // prompt is a speed bump, not the guard.
-    const typed = prompt(`This deletes ${clubName()} and everything in it — permanently.\n\nType the club's name to confirm:`);
+    const cn = clubName();
+    const typed = await promptModal(`This deletes "${cn}" and everything in it — permanently. Type the club's name to confirm.`, {
+      title: "Delete this club?", placeholder: cn, confirmLabel: "Delete club", danger: true, requireMatch: cn,
+    });
     if (typed === null) return;
     const body = await callClubAdmin("delete_club", { club_id: clubId(), confirm_name: typed.trim() });
     if (!body?.ok) { render(); return; }
@@ -5714,7 +5897,8 @@ function wireUp() {
     el.addEventListener("click", async () => {
       const uid = el.dataset.adminGrantLib;
       const u = users.find(x => x.id === uid);
-      if (!confirm(`Make ${u?.discord_username || 'this reader'} a librarian? They'll get full admin controls.`)) return;
+      const ok = await confirmModal(`Make ${u?.discord_username || 'this reader'} a librarian? They'll get full admin controls.`, { title: "Grant librarian?", confirmLabel: "Make librarian", danger: false });
+      if (!ok) return;
       await callAdmin("admin_grant_librarian", { user_id: uid });
       await loadLibrarianStatus();
       render();
@@ -5724,7 +5908,8 @@ function wireUp() {
     el.addEventListener("click", async () => {
       const uid = el.dataset.adminRevokeLib;
       const u = users.find(x => x.id === uid);
-      if (!confirm(`Revoke librarian from ${u?.discord_username || 'this reader'}? They'll lose admin controls.`)) return;
+      const ok = await confirmModal(`Revoke librarian from ${u?.discord_username || 'this reader'}? They'll lose admin controls.`, { title: "Revoke librarian?", confirmLabel: "Revoke" });
+      if (!ok) return;
       await callAdmin("admin_revoke_librarian", { user_id: uid });
       await loadLibrarianStatus();
       render();
@@ -5732,14 +5917,13 @@ function wireUp() {
   });
 
   document.querySelectorAll("[data-admin-rate]").forEach(el => {
-    el.addEventListener("click", () => {
+    el.addEventListener("click", async () => {
       const ts = el.dataset.adminRate;
       const h = state.history.find(x => x.ts === ts);
       const current = ratingTotal(h);
-      const next = prompt(
-        `Set the Guild score (0–100) for "${h?.book || 'this read'}". Leave blank to clear.`,
-        current == null ? "" : String(current),
-      );
+      const next = await promptModal(`Set the Guild score (0–100) for "${h?.book || 'this read'}". Leave blank to clear.`, {
+        title: "Set Guild score", defaultValue: current == null ? "" : String(current), placeholder: "0–100", confirmLabel: "Save",
+      });
       if (next === null) return; // cancelled
       const trimmed = next.trim();
       if (trimmed === "") {
@@ -5748,15 +5932,19 @@ function wireUp() {
         return;
       }
       const n = Math.round(Number(trimmed));
-      if (!Number.isFinite(n) || n < 0 || n > 100) { alert("Enter a number from 0 to 100."); return; }
+      if (!Number.isFinite(n) || n < 0 || n > 100) { await alertModal("Enter a number from 0 to 100.", { title: "Invalid score" }); return; }
       if (n === current) return; // unchanged
       callAdmin("admin_set_rating", { ts, total: n });
     });
   });
 
   const reset = document.getElementById("reset-btn");
-  if (reset) reset.addEventListener("click", () => {
-    if (!confirm("Wipe the entire ledger — history, every reader's book, everything. This cannot be undone. Continue?")) return;
+  if (reset) reset.addEventListener("click", async () => {
+    const ok = await confirmModal(
+      "Wipe the entire ledger — history, every reader's book, everything. This cannot be undone. Continue?",
+      { title: "Reset the shelf?", confirmLabel: "Continue" },
+    );
+    if (!ok) return;
     promptResetConfirmation();
   });
   const signOutBtn = document.getElementById("sign-out-btn");
@@ -5771,7 +5959,7 @@ window.addEventListener("resize", () => {
 initAuth();
 // Review buttons live on both the Currently reading banner and book pages, so
 // handle them by delegation instead of per-render wiring.
-document.addEventListener("click", (e) => {
+document.addEventListener("click", async (e) => {
   // Close any open reader dropdown / reaction palette when the click lands
   // outside it. (A menu item click triggers a re-render, which rebuilds the
   // <details> closed anyway.)
@@ -5839,7 +6027,7 @@ document.addEventListener("click", (e) => {
     const id = cDel.dataset.commentDelete;
     const n = repliesFor(id).length;
     const msg = n ? `Delete this comment and its ${n} repl${n === 1 ? 'y' : 'ies'}?` : "Delete this comment?";
-    if (confirm(msg)) deleteComment(id);
+    if (await confirmModal(msg, { title: "Delete comment?", confirmLabel: "Delete" })) deleteComment(id);
     return;
   }
   const react = e.target.closest("[data-react-emoji]");
