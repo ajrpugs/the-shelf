@@ -1281,6 +1281,14 @@ const DEFAULT_CLUB_SLUG = "the-guild"; // matches the seeded clubs row
 //                 so the page can name it, but every write 403s server-side.
 let club = null;
 let clubStatus = "loading";
+// Has loadAll() finished at least once for the club now in `club`? Separate from
+// clubStatus, which only says the club RESOLVED -- resolving is one query, and
+// the shelf, members and history are half a second of queries after it. Until
+// this is true there is nothing to draw but the boot placeholder; see render().
+let clubDataLoaded = false;
+// Byte-for-byte the static contents of #app in the markup above, so re-rendering
+// the placeholder is invisible rather than a flicker back to the same thing.
+const BOOT_PLACEHOLDER = `<div class="loading">Pulling the ledger…</div>`;
 let myClubs = [];            // every club this reader belongs to (club switcher)
 let invites = [];            // club_invites for this club, librarians only
 let clubBusy = false;        // a club-admin call is in flight
@@ -2051,6 +2059,10 @@ async function initAuth() {
     }
     else if (event === "SIGNED_OUT") {
       users = []; myUserRow = null; state = emptyState(); amLibrarian = false; librarianIds = new Set();
+      // Signing back in re-resolves to the same club, which resolveClubFromRoute
+      // short-circuits -- so clear this here or the next reader gets a glimpse of
+      // the previous one's shelf before their own load lands.
+      clubDataLoaded = false;
       render();
     } else if (event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
       render();
@@ -2231,6 +2243,8 @@ async function resolveClubFromRoute() {
   const wanted = parseRoute().clubSlug || DEFAULT_CLUB_SLUG;
   if (club && club.slug === wanted && clubStatus === "ok") return;
   clubStatus = "loading";
+  // A different club from here on: the loaded rows belong to the old one.
+  clubDataLoaded = false;
   try {
     const { data, error } = await supabase
       .from("clubs").select("id, slug, name, tagline, visibility, timezone, suspended_at").eq("slug", wanted).maybeSingle();
@@ -2679,6 +2693,9 @@ async function loadAll() {
     setFlash("err", friendlyError(err, "load the shelf"));
   }
   setRefreshing(false);
+  // Set on the way out of the failure path too: a load that errored has an error
+  // flash to show, and holding the boot placeholder forever would hide it.
+  clubDataLoaded = true;
   render();
 }
 
@@ -4078,6 +4095,19 @@ function render() {
     document.querySelectorAll("[data-go-club]").forEach(el => {
       el.addEventListener("click", () => goToClub(el.dataset.goClub));
     });
+    return;
+  }
+
+  // Nothing club-scoped has landed yet, so every array below is empty and `club`
+  // may still be null. Drawing the main view here paints the default club's
+  // chrome over no data at all, which is indistinguishable from a brand-new
+  // club: round 1, an empty shelf, and clubNeedsOnboarding()'s "Welcome to ..."
+  // checklist. A reader saw exactly that for the ~1.2s of a first sign-in,
+  // because supabase-js clears the OAuth fragment with `location.hash = ""` --
+  // which fires our hashchange listener, and its render() lands long before
+  // loadAll() does. Hold the boot placeholder until there's something real.
+  if (clubStatus === "loading" || !clubDataLoaded) {
+    app.innerHTML = BOOT_PLACEHOLDER;
     return;
   }
 
