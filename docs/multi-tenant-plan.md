@@ -71,10 +71,10 @@ Each of these is a considered omission, not a backlog item.
 
 Real, unresolved, and mostly not engineering.
 
-- **No Terms or Privacy notice, and no way to reach the operator.** Open signup on a public domain means holding accounts and content for people you don't know. Account deletion exists (so "deletion must genuinely delete" is satisfiable), but the written artefacts don't.
-- **No moderation path** beyond deleting a club or an account. A stranger's club is not the same trust level as a friend's.
+- ~~No Terms or Privacy notice, and no way to reach the operator.~~ Closed: `#/legal`, reachable signed in or out, linked from the sign-in gate and the app footer. Points to GitHub Issues as the contact.
+- ~~No moderation path~~ beyond deleting a club or an account. Closed, minimally: `clubs.suspended_at` (20260810140000_club_suspension.sql) is a reversible hold an operator sets by hand (no UI) — every club-scoped edge function refuses to write while it's set, but leaving, deleting, and a librarian's own settings changes stay allowed. A stranger's club is still not the same trust level as a friend's; this is a kill switch, not a review queue.
 - **Backups depend on one laptop being awake.** See §2.
-- **Two screens have never been looked at by a human**: Admin → Club settings, and the account page. Every class and CSS variable they use is verified to exist, but nobody has seen the layout.
+- ~~Two screens have never been looked at by a human~~: Admin → Club settings and the account page have both now been rendered and screenshotted (mocked Supabase backend, real page). Both hold up.
 
 ## 5. What scaling would actually cost
 
