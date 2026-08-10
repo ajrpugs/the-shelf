@@ -61,6 +61,25 @@ async function setMemberBook(client: MyBookClient, userId: string, book: string 
   return true;
 }
 
+// The club's own Discord webhook, falling back to the project-wide env secret.
+//
+// Phase 6a: a club supplies its own webhook (or none, and gets no Discord posts).
+// The env secret stays as the fallback so the seeded club keeps working without
+// anyone re-entering anything, and so a club that wants the shared channel can
+// simply not set one. club_secrets has no RLS policies -- only the service role
+// can read this, which is the whole reason the table exists.
+async function webhookFor(client: MyBookClient, clubId: string): Promise<string | undefined> {
+  try {
+    const { data } = await client
+      .from("club_secrets").select("discord_webhook_url").eq("club_id", clubId).maybeSingle();
+    const own = (data?.discord_webhook_url as string | null) || null;
+    if (own) return own;
+  } catch (err) {
+    console.error("club webhook lookup failed:", err);
+  }
+  return Deno.env.get("DISCORD_WEBHOOK_URL") || undefined;
+}
+
 // --- Open Library cover + Discord post ---------------------------------------
 
 function normalizeForMatch(s: string): string {
@@ -244,7 +263,7 @@ async function handleMyBook(interaction: any) {
 
   // Post to the channel only when a book was actually set or changed.
   if (bookTitle !== prevBook) {
-    const webhookUrl = Deno.env.get("DISCORD_WEBHOOK_URL");
+    const webhookUrl = await webhookFor(client, DEFAULT_CLUB_ID);
     if (webhookUrl) {
       const cover = await fetchCover(bookTitle);
       await postBookSet(webhookUrl, {

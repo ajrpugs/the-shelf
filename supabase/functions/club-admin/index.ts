@@ -312,6 +312,108 @@ Deno.serve(async (req) => {
         return json({ ok: true, deleted: target.slug });
       }
 
+      // --- 6a: per-club settings --------------------------------------------
+      // Gate: librarian of the club.
+      case "update_club": {
+        if (!await isLibrarian(client, clubId, callerId)) return json({ error: "not a librarian" }, 403);
+
+        const patch: Record<string, unknown> = {};
+
+        if (body.name !== undefined) {
+          const name = String(body.name ?? "").trim().slice(0, 80);
+          if (!name) return json({ error: "The club needs a name." }, 400);
+          patch.name = name;
+        }
+
+        if (body.tagline !== undefined) {
+          const tagline = String(body.tagline ?? "").trim().slice(0, 160);
+          patch.tagline = tagline || null;
+        }
+
+        if (body.timezone !== undefined) {
+          const tz = String(body.timezone ?? "").trim();
+          // Ask Intl whether the zone is real -- it throws a RangeError on an
+          // unknown name, and it's the same implementation the client will use to
+          // convert meeting times, so agreeing with it is the point.
+          try {
+            new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+          } catch {
+            return json({ error: `“${tz}” isn't a timezone name. Try e.g. Europe/London.` }, 400);
+          }
+          patch.timezone = tz;
+        }
+
+        if (body.visibility !== undefined) {
+          const v = String(body.visibility ?? "");
+          if (v !== "public" && v !== "private") return json({ error: "visibility must be public or private" }, 400);
+          patch.visibility = v;
+        }
+
+        // The slug is deliberately NOT editable here. Changing it breaks every
+        // link and invite anyone has already shared, and it would need the same
+        // reserved-word and uniqueness handling as create_club. A separate,
+        // explicit "change the club's link" action can own that if it's ever
+        // wanted.
+        if (body.slug !== undefined) {
+          return json({ error: "A club's link can't be changed — it would break every invite already sent." }, 400);
+        }
+
+        if (!Object.keys(patch).length) return json({ error: "nothing to update" }, 400);
+
+        const { data: updated, error } = await client
+          .from("clubs").update(patch).eq("id", clubId)
+          .select("id, slug, name, tagline, visibility, timezone").single();
+        if (error) throw error;
+        return json({ ok: true, club: updated });
+      }
+
+      // Gate: librarian. club_secrets has no RLS policies at all, so this is the
+      // only way to see them -- deliberately, since one of them is a credential.
+      // The webhook is returned as a boolean, never echoed back: a librarian needs
+      // to know whether one is set, not to be able to read it out of the page.
+      case "get_club_settings": {
+        if (!await isLibrarian(client, clubId, callerId)) return json({ error: "not a librarian" }, 403);
+        const { data: secrets, error } = await client
+          .from("club_secrets").select("calendar_token, discord_webhook_url").eq("club_id", clubId).maybeSingle();
+        if (error) throw error;
+        return json({
+          ok: true,
+          calendar_token: secrets?.calendar_token ?? null,
+          has_webhook: !!(secrets?.discord_webhook_url),
+        });
+      }
+
+      case "set_club_webhook": {
+        if (!await isLibrarian(client, clubId, callerId)) return json({ error: "not a librarian" }, 403);
+        const raw = String(body.webhook_url ?? "").trim();
+        // Empty clears it -- a club that wants no Discord integration at all.
+        let webhook: string | null = null;
+        if (raw) {
+          if (!/^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/webhooks\//i.test(raw)) {
+            return json({ error: "That doesn't look like a Discord webhook URL." }, 400);
+          }
+          webhook = raw;
+        }
+        // Upsert: a club created before club_secrets existed may have no row.
+        const { error } = await client
+          .from("club_secrets")
+          .upsert({ club_id: clubId, discord_webhook_url: webhook }, { onConflict: "club_id" });
+        if (error) throw error;
+        return json({ ok: true, has_webhook: !!webhook });
+      }
+
+      // Invalidates every calendar subscription for this club, which is the point:
+      // the token is what makes the ICS URL unguessable, so a leaked one needs a
+      // way to be replaced.
+      case "rotate_calendar_token": {
+        if (!await isLibrarian(client, clubId, callerId)) return json({ error: "not a librarian" }, 403);
+        const token = crypto.randomUUID();
+        const { error } = await client
+          .from("club_secrets").upsert({ club_id: clubId, calendar_token: token }, { onConflict: "club_id" });
+        if (error) throw error;
+        return json({ ok: true, calendar_token: token });
+      }
+
       // --- 6b: delete my account -------------------------------------------
       // Gate: you, deleting yourself, having typed the confirmation. There is no
       // "delete someone else" -- an admin removing a person from their club is

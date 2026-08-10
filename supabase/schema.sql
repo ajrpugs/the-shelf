@@ -715,3 +715,23 @@ alter default privileges in schema public grant all on functions to anon, authen
 -- See 20260809170000_retire_join_default_club.sql.
 
 drop function if exists public.join_default_club();
+
+-- 26. Phase 6a: per-club settings -----------------------------------------
+-- timezone retires the CLUB_TZ constant in index.html: a club founded outside
+-- America/Toronto was scheduling its meetings at the wrong hour. Validated in
+-- club-admin (Intl can say whether a zone name is real; a CHECK constraint can't
+-- run the pg_timezone_names subquery it would need). See
+-- 20260810120000_club_settings.sql.
+
+alter table public.clubs
+  add column if not exists timezone text not null default 'America/Toronto';
+alter table public.clubs
+  add column if not exists tagline text;
+
+alter table public.clubs drop constraint if exists clubs_timezone_len_chk;
+alter table public.clubs
+  add constraint clubs_timezone_len_chk check (length(timezone) between 1 and 64);
+
+alter table public.clubs drop constraint if exists clubs_tagline_len_chk;
+alter table public.clubs
+  add constraint clubs_tagline_len_chk check (tagline is null or length(tagline) <= 160);

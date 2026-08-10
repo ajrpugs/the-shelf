@@ -1,6 +1,6 @@
 # Multi-tenant plan — "The Shelf" as a product
 
-**Status:** Phases 0–4 are implemented and live in production — harden, tenancy foundation, per-club librarian role, hash routing, the Phase 3.5 scoping cleanup, and the Phase 4 lifecycle (create a club, invites, join, leave, delete, onboarding). **Phase 5 is partly done and partly abandoned on purpose:** Google sign-in shipped 2026-08-09 (slice 5c), and **email accounts are deferred indefinitely** — see the decision at the top of §4. Phases 6–7 (settings — per-club and per-account — and the frontend restructure) are still proposal. See §8 for what's landed vs. what isn't, including what Phase 4 deliberately left open.
+**Status:** Phases 0–4 are implemented and live in production — harden, tenancy foundation, per-club librarian role, hash routing, the Phase 3.5 scoping cleanup, and the Phase 4 lifecycle (create a club, invites, join, leave, delete, onboarding). **Phase 5 is partly done and partly abandoned on purpose:** Google sign-in shipped 2026-08-09 (slice 5c), and **email accounts are deferred indefinitely** — see the decision at the top of §4. **Phase 6a (per-club settings) shipped 2026-08-10** — nothing about a club is hardcoded any more. 6b (account settings) is partly done: the page and account deletion exist; display name, email, password and connected accounts remain. Phase 7 is untouched. See §8 for what's landed vs. what isn't, including what Phase 4 deliberately left open.
 **Goal (decided 2026-07-26, revised 2026-07-27, see §10):** anyone can sign up at `sh3lf.net`, create their own private book club (no invite needed to create one), invite members, and run the wheel/meetings/reviews flow independently of every other club — free, open signup, Discord optional per club rather than required.
 
 This builds on the feasibility findings: the blocker isn't difficulty, it's that the data model changes under everything at once, and (as of writing) there were no tests to catch what breaks. That second half is now addressed — see §5.
@@ -411,9 +411,21 @@ Everything that doesn't depend on the two blockers below, so that when they clea
 
 Added 2026-08-09: this was only ever *per-club* settings. There is no account settings page anywhere in the plan, and today a reader can change exactly two things about themselves — their book, and signing out. Everything else about them (display name, avatar, how they sign in) is decided by their identity provider and unchangeable from inside the app. Split into the club-facing half and the personal half, which share the same settings scaffolding.
 
-#### 6a — per-club settings *(the original Phase 6)*
-Name, tagline, timezone (retire the hardcoded `America/Toronto`), cadence, own Discord webhook, per-club ICS token. This is the "admin settings" surface — the librarian-facing counterpart to the member management that already lives in the Admin tab.
-**Exit:** nothing about the club is hardcoded.
+#### 6a — per-club settings — ✅ done 2026-08-10
+Name, tagline, timezone, visibility, own Discord webhook and own ICS token, all editable from **Admin → Club settings**. The librarian-facing counterpart to the member management already in that tab.
+
+The timezone was the one that mattered: it was a `CLUB_TZ` constant of `America/Toronto`, so **a club founded anywhere else scheduled its 50%/100% discussions at the wrong hour** — a defect in what Phase 4 shipped, not a missing feature. It's `clubs.timezone` now, read through `clubTz()`. Entirely client-side, because no edge function ever handles wall-clock time; they only see instants. Validated in `club-admin` by asking `Intl` to construct a formatter with the name, which is precisely what the client then does with it, and the settings form shows the club's current local time so a librarian can sanity-check the zone rather than trust the string.
+
+`club_secrets` finally does something, three years of Phase-1 groundwork later:
+
+- **Discord webhook** — `webhookFor(client, clubId)` in `admin-update`/`set-book`/`discord-interactions` prefers the club's own and falls back to the `DISCORD_WEBHOOK_URL` env secret, so the seeded club kept working untouched and a club with neither simply posts nothing. Proven end to end on a local stack with **no env secret set**: a draw produced a `404 Unknown Webhook` from Discord, which can only mean the POST target came from `club_secrets`.
+- **Calendar token** — surfaced in the UI at last, with a rotate button. Rotating invalidates every existing subscription, which is the point: the token is what makes the ICS URL unguessable. Verified the old token then 404s and the new one serves, titled with the club's own name.
+
+Neither reaches the browser by a table read — `club_secrets` has no RLS policies at all — so both arrive via `get_club_settings`, which returns the calendar token but **only a boolean for the webhook**. A librarian needs to know whether one is set, not to read a credential out of the page.
+
+The slug is deliberately **not** editable: changing it breaks every link and invite already shared, so `update_club` refuses it rather than half-supporting it. Cadence from the original sketch is dropped — nothing reads it, and "when do we meet" is already answered per-read by the meeting scheduler.
+
+**Exit:** nothing about a club is hardcoded. ✅
 
 #### 6b — account settings *(new)*
 One page a reader reaches from their own name, owning what is currently unreachable:
@@ -439,7 +451,7 @@ One page a reader reaches from their own name, owning what is currently unreacha
 
 ## 9. Security items not to defer
 
-- **ICS feed is public and unauthenticated.** ✅ addressed in Phase 3.5 — `calendar-feed` takes `?token=<calendar_token>`, and a token-less request serves only the seeded club (never all clubs). The remaining gap is that the app can't yet *show* a member their club's token, so nobody is using a real one; Phase 6 surfaces it and drops the fallback.
+- **ICS feed is public and unauthenticated.** ✅ closed. Phase 3.5 made `calendar-feed` take `?token=<calendar_token>` with a token-less request serving only the seeded club (never all clubs); Phase 6a surfaces the token in Admin → Club settings, with a rotate button for when a link leaks. The token-less fallback is kept on purpose so subscriptions predating all this keep working — it resolves to the seeded club and nothing else.
 - **Discord webhook URLs are credentials** — anyone holding one can post to that channel. Hence `club_secrets`, service-role only.
 - **RLS is the only thing between tenants.** Test it like it matters.
 

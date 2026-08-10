@@ -1259,6 +1259,8 @@ let myClubs = [];            // every club this reader belongs to (club switcher
 let invites = [];            // club_invites for this club, librarians only
 let clubBusy = false;        // a club-admin call is in flight
 let loadAllRetrying = false; // guards the one auth-error retry in loadAll against recursing
+let clubSettings = null;     // { calendar_token, has_webhook } from club-admin; null = not loaded
+let clubSettingsFor = null;  // which club id clubSettings belongs to (cache key)
 const clubId = () => club?.id ?? DEFAULT_CLUB_ID;
 const clubSlug = () => club?.slug ?? DEFAULT_CLUB_SLUG;
 const clubName = () => club?.name ?? "The Shelf";
@@ -1980,7 +1982,7 @@ async function loadMyClubs() {
   try {
     const { data, error } = await supabase
       .from("club_members")
-      .select("role, clubs:club_id ( id, slug, name, visibility )")
+      .select("role, clubs:club_id ( id, slug, name, tagline, visibility, timezone )")
       .eq("user_id", session.user.id);
     if (error) throw error;
     // (club_id, user_id) is the primary key, so one row per club per reader --
@@ -1998,6 +2000,22 @@ async function loadMyClubs() {
 
 // Invite codes for this club. RLS returns rows only to a librarian of it, so an
 // empty list is the normal answer for everyone else -- no need to gate the call.
+// The librarian-only bits of club_secrets, which no client can read directly.
+// A non-librarian gets a 403 and leaves clubSettings null, which the Admin tab
+// never renders for them anyway.
+//
+// Fetched once per club rather than on every loadAll: loadAll re-runs on every
+// realtime change, and this is an edge-function round trip, not a table read.
+// Switching clubs invalidates it because the cache is keyed by club id.
+async function loadClubSettings({ force = false } = {}) {
+  if (!club || !amLibrarian) { clubSettings = null; clubSettingsFor = null; return; }
+  if (!force && clubSettingsFor === club.id && clubSettings) return;
+  const body = await callClubAdmin("get_club_settings", { club_id: club.id });
+  if (!body?.ok) return;   // leave whatever we had; a busy guard or blip isn't a reason to blank it
+  clubSettings = { calendar_token: body.calendar_token, has_webhook: body.has_webhook };
+  clubSettingsFor = club.id;
+}
+
 async function loadInvites() {
   if (!club) { invites = []; return; }
   try {
@@ -2062,7 +2080,7 @@ async function resolveClubFromRoute() {
   clubStatus = "loading";
   try {
     const { data, error } = await supabase
-      .from("clubs").select("id, slug, name, visibility").eq("slug", wanted).maybeSingle();
+      .from("clubs").select("id, slug, name, tagline, visibility, timezone").eq("slug", wanted).maybeSingle();
     if (error) throw error;
     if (!data) { club = null; clubStatus = "not_found"; return; }
     club = data;
@@ -2085,7 +2103,7 @@ async function resolveClubFromRoute() {
   } catch (err) {
     console.warn("club resolve failed:", err.message);
     // Fall back to the default club rather than locking the app out on a blip.
-    club = { id: DEFAULT_CLUB_ID, slug: DEFAULT_CLUB_SLUG, name: "The Shelf", visibility: "public" };
+    club = { id: DEFAULT_CLUB_ID, slug: DEFAULT_CLUB_SLUG, name: "The Shelf", visibility: "public", timezone: DEFAULT_CLUB_TZ };
     clubStatus = "ok";
   }
 }
@@ -2396,7 +2414,7 @@ async function loadAll() {
     reactions = (!xErr && xData) ? xData : [];
     // Club switcher + invite list. Non-critical: a failure here degrades the
     // Phase 4 chrome, it doesn't stop the shelf from rendering.
-    await Promise.all([loadMyClubs(), loadInvites()]);
+    await Promise.all([loadMyClubs(), loadInvites(), loadClubSettings()]);
     if (session) myUserRow = users.find(u => u.id === session.user.id) || myUserRow;
   } catch (err) {
     // A load can land mid-token-rotation and fail on the access token rather than
@@ -3045,6 +3063,34 @@ function fmtDate(iso) {
 // Surfacing a real per-club token needs a librarian-only endpoint — Phase 6.
 const CALENDAR_FEED_URL = `${SUPABASE_URL}/functions/v1/calendar-feed`;
 
+// Per-club feed (Phase 6a). The token is what makes the URL unguessable, and it
+// only reaches the browser via club-admin -- club_secrets has no RLS policies.
+// Without a token the endpoint falls back to the seeded club, which is why the
+// bare URL above still works for The Guild.
+const calendarFeedUrl = (token) => token ? `${CALENDAR_FEED_URL}?token=${encodeURIComponent(token)}` : CALENDAR_FEED_URL;
+
+// A short list to autocomplete from; any IANA name is accepted, and club-admin
+// validates it by asking Intl to build a formatter with it.
+const COMMON_TIMEZONES = [
+  "America/Toronto", "America/New_York", "America/Chicago", "America/Denver",
+  "America/Los_Angeles", "America/Vancouver", "America/Sao_Paulo",
+  "Europe/London", "Europe/Dublin", "Europe/Paris", "Europe/Berlin",
+  "Europe/Madrid", "Europe/Stockholm", "Europe/Warsaw", "Europe/Athens",
+  "Africa/Lagos", "Africa/Johannesburg", "Asia/Jerusalem", "Asia/Dubai",
+  "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo", "Asia/Seoul",
+  "Australia/Perth", "Australia/Sydney", "Pacific/Auckland", "UTC",
+];
+
+// The club's current wall-clock time, so a librarian can sanity-check the zone
+// they've typed rather than trusting the name.
+function nowInClubTz() {
+  try {
+    return new Date().toLocaleString(undefined, {
+      timeZone: clubTz(), weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+    });
+  } catch { return clubTz(); }
+}
+
 // Flatten every scheduled meeting across all reads into a sorted timeline.
 // Each item: { ts, round, book, phase: 'half'|'full', at: Date, upTo, past }.
 function allMeetings() {
@@ -3064,13 +3110,24 @@ function allMeetings() {
   return out;
 }
 
-// The club is Toronto-based: a meeting is "Wednesday 8pm ET" no matter where the
-// librarian scheduling it or the member reading it happens to be. Stored values
-// stay exact UTC instants — only the wall-clock reading is pinned to this zone.
-const CLUB_TZ = "America/Toronto";
+// A meeting is a wall-clock time in the CLUB's timezone — "Wednesday 8pm" means
+// 8pm where the club is, no matter where the librarian scheduling it or the member
+// reading it happens to be. Stored values stay exact UTC instants; only the
+// wall-clock reading is pinned to the zone.
+//
+// Phase 6a: that zone is `clubs.timezone`, not a constant. It was hardcoded to
+// America/Toronto, which was right for the one club that existed and wrong the
+// moment Phase 4 let anyone create one — a club founded in London scheduled its
+// discussions at the wrong hour. DEFAULT_CLUB_TZ is only the fallback for the
+// window before the club has resolved.
+const DEFAULT_CLUB_TZ = "America/Toronto";
+const clubTz = () => club?.timezone || DEFAULT_CLUB_TZ;
 
-const clubDTF = new Intl.DateTimeFormat("en-US", {
-  timeZone: CLUB_TZ, hour12: false,
+// Rebuilt per call rather than cached at module scope: the zone now changes when
+// you switch clubs, and a cached formatter would keep the previous club's.
+// Intl.DateTimeFormat is cheap and internally cached by the engine.
+const clubDTFFor = (tz) => new Intl.DateTimeFormat("en-US", {
+  timeZone: tz, hour12: false,
   year: "numeric", month: "2-digit", day: "2-digit",
   hour: "2-digit", minute: "2-digit", second: "2-digit",
 });
@@ -3078,7 +3135,7 @@ const clubDTF = new Intl.DateTimeFormat("en-US", {
 // The wall-clock fields an instant reads as in the club's timezone.
 function clubParts(date) {
   const out = {};
-  for (const p of clubDTF.formatToParts(date)) {
+  for (const p of clubDTFFor(clubTz()).formatToParts(date)) {
     if (p.type !== "literal") out[p.type] = Number(p.value);
   }
   if (out.hour === 24) out.hour = 0; // some engines emit hour 24 for midnight
@@ -3115,7 +3172,7 @@ function clubWallBack(w) {
 function fmtMeetingWhen(date) {
   try {
     return date.toLocaleString(undefined, {
-      timeZone: CLUB_TZ,
+      timeZone: clubTz(),
       weekday: "short", month: "short", day: "numeric",
       hour: "numeric", minute: "2-digit", timeZoneName: "short",
     });
@@ -4188,6 +4245,64 @@ function render() {
       });
     }
     html += `</div>`;
+    // ---- Club settings (6a) ----
+    // The timezone is the one that actually mattered: it used to be a constant,
+    // so any club not in Toronto scheduled its meetings at the wrong hour.
+    html += `<div class="card no-rule" style="margin-top:10px;">
+      <div class="tools-label">Club settings</div>
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input id="cs-name" type="text" maxlength="80" value="${attr(club?.name || "")}">
+      </label>
+      <label class="field">
+        <span class="field-label">Tagline</span>
+        <input id="cs-tagline" type="text" maxlength="160" placeholder="optional" value="${attr(club?.tagline || "")}">
+      </label>
+      <label class="field">
+        <span class="field-label">Timezone</span>
+        <input id="cs-tz" type="text" maxlength="64" value="${attr(clubTz())}" spellcheck="false" list="cs-tz-list">
+        <datalist id="cs-tz-list">${COMMON_TIMEZONES.map(z => `<option value="${attr(z)}"></option>`).join("")}</datalist>
+        <span class="field-hint">Meeting times are read in this zone — "8pm" means 8pm here. Currently <b>${esc(nowInClubTz())}</b>.</span>
+      </label>
+      <label class="field-inline">
+        <input id="cs-public" type="checkbox" ${club?.visibility === "public" ? "checked" : ""}>
+        <span>Listed publicly. Off means only people with the link or an invite can see it.</span>
+      </label>
+      <p><button class="btn-primary" id="cs-save">Save settings</button></p>
+    </div>`;
+
+    // ---- Discord + calendar (6a) ----
+    // Both live in club_secrets, which has no RLS policies at all, so they arrive
+    // via club-admin's get_club_settings rather than a direct read. The webhook is
+    // never echoed back — only whether one is set.
+    html += `<div class="card no-rule" style="margin-top:10px;">
+      <div class="tools-label">Discord &amp; calendar</div>
+      <div class="tool-row">
+        <span class="tool-row-desc">
+          Discord webhook: <b>${clubSettings === null ? "…" : clubSettings.has_webhook ? "set" : "not set"}</b>.
+          With none, this club posts nothing to Discord.
+        </span>
+      </div>
+      <label class="field">
+        <span class="field-label">Webhook URL</span>
+        <input id="cs-webhook" type="text" placeholder="https://discord.com/api/webhooks/… (blank to remove)" spellcheck="false">
+      </label>
+      <p><button class="btn-primary" id="cs-webhook-save">Save webhook</button></p>
+      <div class="tool-row" style="margin-top:6px;">
+        <span class="tool-row-desc">
+          Calendar feed — subscribe to this in Google/Apple/Outlook:
+          ${clubSettings?.calendar_token
+            ? `<br><code class="invite-code">${esc(calendarFeedUrl(clubSettings.calendar_token))}</code>`
+            : "<br>…"}
+        </span>
+      </div>
+      <div class="tool-row">
+        ${clubSettings?.calendar_token ? `<button class="btn-primary" id="cs-cal-copy">Copy feed URL</button>` : ""}
+        <button class="btn-danger" id="cs-cal-rotate">Reset feed URL</button>
+        <span class="tool-row-desc">Resetting stops every existing subscription — use it if the link leaks.</span>
+      </div>
+    </div>`;
+
     // ---- Invites (4d) ----
     html += `<div class="card no-rule" style="margin-top:10px;">
       <div class="tools-label">Invitations</div>
@@ -5378,6 +5493,52 @@ function wireUp() {
       callAdmin("admin_remove_user", { user_id: uid });
     });
   });
+  // ---- Club settings (6a) ----
+  document.getElementById("cs-save")?.addEventListener("click", async (e) => {
+    e.currentTarget.blur();
+    const body = await callClubAdmin("update_club", {
+      club_id: clubId(),
+      name: document.getElementById("cs-name")?.value ?? "",
+      tagline: document.getElementById("cs-tagline")?.value ?? "",
+      timezone: document.getElementById("cs-tz")?.value ?? "",
+      visibility: document.getElementById("cs-public")?.checked ? "public" : "private",
+    });
+    if (!body?.club) { render(); return; }
+    // Adopt the saved row directly: the timezone change has to take effect for
+    // every meeting time on screen, and a stale `club` would keep the old zone.
+    club = { ...club, ...body.club };
+    setFlash("info", "Club settings saved.");
+    await loadMyClubs();
+    render();
+  });
+
+  document.getElementById("cs-webhook-save")?.addEventListener("click", async (e) => {
+    e.currentTarget.blur();
+    const input = document.getElementById("cs-webhook");
+    const body = await callClubAdmin("set_club_webhook", { club_id: clubId(), webhook_url: input?.value ?? "" });
+    if (!body?.ok) { render(); return; }
+    if (input) input.value = "";
+    clubSettings = { ...(clubSettings || {}), has_webhook: body.has_webhook };
+    setFlash("info", body.has_webhook ? "Discord webhook saved." : "Discord webhook removed.");
+    render();
+  });
+
+  document.getElementById("cs-cal-copy")?.addEventListener("click", async () => {
+    const ok = await copyText(calendarFeedUrl(clubSettings?.calendar_token));
+    setFlash(ok ? "info" : "err", ok ? "Calendar feed URL copied." : "Couldn't copy — select the URL instead.");
+    render();
+  });
+
+  document.getElementById("cs-cal-rotate")?.addEventListener("click", async () => {
+    if (!confirm("Reset the calendar feed URL? Everyone currently subscribed will stop receiving updates and will need the new link.")) return;
+    document.activeElement?.blur?.();
+    const body = await callClubAdmin("rotate_calendar_token", { club_id: clubId() });
+    if (!body?.calendar_token) { render(); return; }
+    clubSettings = { ...(clubSettings || {}), calendar_token: body.calendar_token };
+    setFlash("info", "Feed URL reset. Share the new one.");
+    render();
+  });
+
   // ---- Leave this club (4e) ----
   document.getElementById("leave-club")?.addEventListener("click", async (e) => {
     e.preventDefault();

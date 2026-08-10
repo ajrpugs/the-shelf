@@ -108,6 +108,33 @@ async function postBookSet(webhookUrl: string, args: {
   }
 }
 
+// Derived from a real createClient(...) call, not `ReturnType<typeof createClient>`
+// -- see the note in admin-update: the latter resolves supabase-js's generics to
+// never/unknown and rejects the actual client.
+function createServiceClient(url: string, key: string) {
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+type ServiceClient = ReturnType<typeof createServiceClient>;
+
+// The club's own Discord webhook, falling back to the project-wide env secret.
+//
+// Phase 6a: a club supplies its own webhook (or none, and gets no Discord posts).
+// The env secret stays as the fallback so the seeded club keeps working without
+// anyone re-entering anything, and so a club that wants the shared channel can
+// simply not set one. club_secrets has no RLS policies -- only the service role
+// can read this, which is the whole reason the table exists.
+async function webhookFor(client: ServiceClient, clubId: string): Promise<string | undefined> {
+  try {
+    const { data } = await client
+      .from("club_secrets").select("discord_webhook_url").eq("club_id", clubId).maybeSingle();
+    const own = (data?.discord_webhook_url as string | null) || null;
+    if (own) return own;
+  } catch (err) {
+    console.error("club webhook lookup failed:", err);
+  }
+  return Deno.env.get("DISCORD_WEBHOOK_URL") || undefined;
+}
+
 // --- Server ------------------------------------------------------------------
 
 Deno.serve(async (req) => {
@@ -141,9 +168,7 @@ Deno.serve(async (req) => {
     return json({ error: "invalid club_id" }, 400);
   }
 
-  const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
-    auth: { persistSession: false },
-  });
+  const admin = createServiceClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   // shelf_users is identity (display name, avatar) -- global, no club_id.
   const { data: current } = await admin
@@ -194,7 +219,7 @@ Deno.serve(async (req) => {
   // Post to Discord only when a book is set/changed. Clearing stays quiet.
   const bookChanged = book && book !== prev;
   if (bookChanged) {
-    const webhookUrl = Deno.env.get("DISCORD_WEBHOOK_URL");
+    const webhookUrl = await webhookFor(admin, clubId);
     if (webhookUrl) {
       const cover = await fetchCover(book);
       await postBookSet(webhookUrl, {

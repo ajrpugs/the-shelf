@@ -20,7 +20,7 @@ Single-page HTML frontend + Supabase backend (Postgres + Realtime + Edge Functio
   - Set/clear a read's Guild score, open or close member reviews for it, bulk-import reviews, and schedule (or re-announce) its 50%/100% discussion meetings.
   - Grant or revoke the librarian role for other readers.
 
-- **Anyone signed in** can start their own club from `#/new` (up to 3 a day). New clubs are private: only people holding the link or an invite can see them. A librarian creates invite links from the Admin tab; joining is `#/join/<code>`. You can leave a club from the footer — unless you're its last librarian, in which case promote someone or delete the club. Deleting a club removes everything in it.
+- **Anyone signed in** can start their own club from `#/new` (up to 3 a day). A club's librarian sets its name, tagline, **timezone** (meeting times are read in the club's own zone), visibility, its own Discord webhook, and its subscribable calendar feed URL — all under **Admin → Club settings**. New clubs are private: only people holding the link or an invite can see them. A librarian creates invite links from the Admin tab; joining is `#/join/<code>`. You can leave a club from the footer — unless you're its last librarian, in which case promote someone or delete the club. Deleting a club removes everything in it.
 
 There is no explicit roster — the pool is whoever has a book set. Once you're picked, you sit out until the pool empties (the round auto-advances) or the librarian starts a new round manually.
 
@@ -79,7 +79,7 @@ supabase functions deploy club-admin --no-verify-jwt
 - **`discord-interactions`** — backs the `/mybook` slash command (optional; see below).
 - **`set-review`** — lets a signed-in reader submit or clear their own rubric review of the current read.
 - **`post-comment`** — lets a signed-in reader post or delete their own comment on a book's discussion thread.
-- **`club-admin`** — creating a club, invite links, joining, leaving, deleting (Phase 4).
+- **`club-admin`** — creating a club, invite links, joining, leaving, deleting (Phase 4); per-club settings and secrets (Phase 6a); deleting your account (6b).
 - **`calendar-feed`** — public, read-only `.ics` feed of one club's scheduled meetings, for subscribing in Google/Apple/Outlook calendars. Takes an optional `?token=<club_secrets.calendar_token>` to pick the club; without one it serves the seeded club.
 
 ### 4. Discord posts & slash command (optional)
