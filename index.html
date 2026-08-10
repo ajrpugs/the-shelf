@@ -1872,9 +1872,26 @@ async function onSignedIn() {
   // clubs you *are* in, and there's no other way to know them.
   if (clubStatus !== "ok") { await loadMyClubs(); render(); return; }
   await ensureClubMembership();
+  await loadMyClubs();
+  // Belongs to nothing, and didn't ask for a particular club: show them the two
+  // things they can actually do rather than dropping them into someone else's
+  // book club. Unreachable while join_default_club() still auto-joins every
+  // sign-in -- deliberately built before that changes, not after.
+  if (!myClubs.length && !parseRoute().clubSlug) { clubStatus = "no-clubs"; render(); return; }
   await loadLibrarianStatus();
   await loadAll();
   subscribeRealtime();
+}
+
+// Where to land after leaving or deleting your way out of a club.
+function goAfterLeaving() {
+  if (myClubs.length) { goToClub(myClubs[0].slug); return; }
+  // Drop the club out of the URL so a reload doesn't put them back on a club
+  // they just left. replaceState, so this doesn't fire a hashchange.
+  try { history.replaceState(null, "", location.pathname + location.search); } catch { /* ignore */ }
+  club = null;
+  clubStatus = "no-clubs";
+  render();
 }
 
 // ---------- Club lifecycle (Phase 4 slices 4c-4e) ----------
@@ -2063,19 +2080,62 @@ async function loadLibrarianStatus() {
   amLibrarian = !!(session && librarianIds.has(session.user.id));
 }
 
+// ---------- Identity, per provider (Phase 5 prep) ----------
+// Each provider nests name and avatar differently, and an email signup has no
+// metadata at all. The existing Discord chain is preserved exactly, in order, so
+// no current reader's display name changes -- the new sources are only ever
+// consulted after it runs out.
 function displayNameFromMeta(user) {
   const m = user.user_metadata || {};
   const c = m.custom_claims || {};
-  return c.global_name || m.full_name || m.preferred_username || m.name || "Reader";
+  return c.global_name          // Discord
+    || m.full_name              // Discord, Google
+    || m.preferred_username     // Discord
+    || m.name                   // Google
+    || nameFromEmail(user.email)
+    || "Reader";
+}
+
+// Email accounts arrive with nothing to borrow, so the local part is the only
+// name available until the reader is asked for one (slice 5b). Drops any +tag and
+// tidies separators so "ada.lovelace+books@x.com" reads as "ada lovelace".
+function nameFromEmail(email) {
+  const local = String(email || "").split("@")[0].split("+")[0];
+  if (!local) return null;
+  const cleaned = local.replace(/[._-]+/g, " ").trim().slice(0, 40);
+  return cleaned || null;
+}
+
+function avatarFromMeta(user) {
+  const m = user.user_metadata || {};
+  return m.avatar_url           // Discord
+    || m.picture                // Google
+    || null;
+}
+
+// The Discord user id, and ONLY ever a Discord one.
+//
+// This used to fall back to user_metadata.provider_id / .sub, which are whatever
+// the most recent provider wrote -- so signing in with Google would have written a
+// GOOGLE subject id into shelf_users.discord_id. That column is what
+// discord-interactions looks readers up by for /mybook, and profiles.discord_id is
+// unique, so the damage ranged from an inert wrong value to overwriting a real
+// Discord id (breaking that reader's slash command) to a unique-violation on
+// sign-in. `identities` is the authoritative list and is per provider; metadata is
+// only trusted when Discord is demonstrably the only provider on the account.
+function discordIdFromUser(user) {
+  const identity = user.identities?.find(i => i.provider === "discord");
+  if (identity) return identity.id || identity.identity_data?.provider_id || null;
+  if ((user.app_metadata?.provider || "") === "discord") {
+    return user.user_metadata?.provider_id || user.user_metadata?.sub || null;
+  }
+  return null;
 }
 
 async function ensureUserRow(user) {
   const username = displayNameFromMeta(user);
-  const avatar = user.user_metadata?.avatar_url || null;
-  const discordId = user.user_metadata?.provider_id
-    || user.user_metadata?.sub
-    || user.identities?.find(i => i.provider === "discord")?.id
-    || null;
+  const avatar = avatarFromMeta(user);
+  const discordId = discordIdFromUser(user);
   const { data, error } = await supabase
     .from("shelf_users")
     .upsert({
@@ -2087,6 +2147,24 @@ async function ensureUserRow(user) {
     .select().single();
   if (error) { setFlash("err", `Sign-in setup: ${error.message}`); return; }
   myUserRow = data;
+
+  // Also keep `profiles` current. Added in Phase 1 and never consumed; this makes
+  // it live (not a snapshot) so that when slice 5b asks an email signup for a
+  // display name, there's a provider-agnostic row to write it to. Nothing reads
+  // it yet, so a failure here is not worth interrupting sign-in over.
+  try {
+    const { error: pErr } = await supabase
+      .from("profiles")
+      .upsert({
+        id: user.id,
+        display_name: username,
+        avatar_url: avatar,
+        discord_id: discordId,
+      }, { onConflict: "id" });
+    if (pErr) console.warn("profiles sync failed:", pErr.message);
+  } catch (err) {
+    console.warn("profiles sync error:", err);
+  }
 }
 
 // Where the reader was heading before they were asked to sign in.
@@ -3542,6 +3620,12 @@ function render() {
   if (preRoute.name === "new-club") { app.innerHTML = renderNewClub(); wireNewClub(); return; }
   if (preRoute.name === "join") { app.innerHTML = renderJoin(preRoute.code); wireJoin(preRoute.code); return; }
 
+  // A reader who belongs to nothing. Reachable today by leaving your last club,
+  // and it becomes the normal first screen for every new account the moment
+  // join_default_club() is retired -- which is why it exists before that change
+  // rather than after it.
+  if (clubStatus === "no-clubs") { app.innerHTML = renderNoClubs(); wireNoClubs(); return; }
+
   // A club that couldn't be resolved gets its own page rather than an empty
   // shelf, which would look like a working club with nothing in it.
   if (clubStatus === "not_found" || clubStatus === "not_member") {
@@ -4157,6 +4241,46 @@ function goToTab(id) {
   } else {
     location.hash = target;
   }
+}
+
+// ---------- No clubs at all (Phase 5 prep) ----------
+// The two ways forward are the two things a reader with no club can actually do:
+// make one, or redeem an invite. Deliberately not a dead end offering the seeded
+// club, which is somebody else's book club.
+function renderNoClubs() {
+  return `
+    <header><div class="eyebrow">Welcome</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <div class="setup">
+      <h2>You're not in a book club yet</h2>
+      <p>Start one and invite your readers, or paste an invite code someone sent you.</p>
+      <p><button class="btn" id="nc-start">Start a club</button></p>
+      <label class="field">
+        <span class="field-label">Have an invite code?</span>
+        <input id="nc-code" type="text" maxlength="24" placeholder="ABCD1234EFGH" autocomplete="off" spellcheck="false" style="text-transform:uppercase">
+      </label>
+      <p><button class="btn" id="nc-redeem">Join the club</button></p>
+    </div>`;
+}
+
+function wireNoClubs() {
+  document.getElementById("nc-start")?.addEventListener("click", (e) => {
+    e.currentTarget.blur();
+    location.hash = "#/new";
+  });
+  const go = async () => {
+    const code = (document.getElementById("nc-code")?.value || "").trim().toUpperCase();
+    if (!code) { setFlash("err", "Enter the invite code first."); render(); return; }
+    document.activeElement?.blur?.();
+    const body = await callClubAdmin("join_with_invite", { code });
+    if (!body?.club) { render(); return; }
+    setFlash("info", body.already ? `You're already in ${body.club.name}.` : `Welcome to ${body.club.name}.`);
+    await loadMyClubs();
+    goToClub(body.club.slug);
+  };
+  document.getElementById("nc-redeem")?.addEventListener("click", go);
+  document.getElementById("nc-code")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); go(); }
+  });
 }
 
 // ---------- Create a club (4c) ----------
@@ -5046,7 +5170,7 @@ function wireUp() {
     setFlash("info", `You left ${clubName()}.`);
     club = null; clubStatus = "loading";
     await loadMyClubs();
-    goToClub(myClubs[0]?.slug || DEFAULT_CLUB_SLUG);
+    goAfterLeaving();
   });
 
   // ---- Invites (4d) ----
@@ -5097,7 +5221,7 @@ function wireUp() {
     setFlash("info", `${clubName()} was deleted.`);
     club = null; clubStatus = "loading";
     await loadMyClubs();
-    goToClub(myClubs[0]?.slug || DEFAULT_CLUB_SLUG);
+    goAfterLeaving();
   });
 
   document.querySelectorAll("[data-admin-grant-lib]").forEach(el => {
