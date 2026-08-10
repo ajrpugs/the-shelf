@@ -1258,6 +1258,7 @@ let clubStatus = "loading";
 let myClubs = [];            // every club this reader belongs to (club switcher)
 let invites = [];            // club_invites for this club, librarians only
 let clubBusy = false;        // a club-admin call is in flight
+let loadAllRetrying = false; // guards the one auth-error retry in loadAll against recursing
 const clubId = () => club?.id ?? DEFAULT_CLUB_ID;
 const clubSlug = () => club?.slug ?? DEFAULT_CLUB_SLUG;
 const clubName = () => club?.name ?? "The Shelf";
@@ -2398,6 +2399,26 @@ async function loadAll() {
     await Promise.all([loadMyClubs(), loadInvites()]);
     if (session) myUserRow = users.find(u => u.id === session.user.id) || myUserRow;
   } catch (err) {
+    // A load can land mid-token-rotation and fail on the access token rather than
+    // on anything being wrong -- most visibly right after linking a second
+    // identity, where the session is reissued while requests are in flight.
+    // Refresh the session and try once more before saying anything: the previous
+    // behaviour flashed "Couldn't load: JWT expired" at a reader whose next
+    // refresh would have succeeded anyway.
+    const authish = /jwt|token|401|unauthor/i.test(err?.message || "");
+    console.warn("loadAll failed:", err?.message, authish ? "(auth-shaped; retrying once)" : "");
+    if (authish && !loadAllRetrying) {
+      loadAllRetrying = true;
+      try {
+        await supabase.auth.refreshSession();
+        await loadAll();          // renders on its way out
+        return;
+      } catch (retryErr) {
+        console.warn("loadAll retry failed:", retryErr?.message);
+      } finally {
+        loadAllRetrying = false;
+      }
+    }
     setFlash("err", `Couldn't load: ${err.message}`);
   }
   setRefreshing(false);
