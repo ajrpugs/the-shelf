@@ -1261,6 +1261,8 @@ let clubBusy = false;        // a club-admin call is in flight
 let loadAllRetrying = false; // guards the one auth-error retry in loadAll against recursing
 let clubSettings = null;     // { calendar_token, has_webhook } from club-admin; null = not loaded
 let clubSettingsFor = null;  // which club id clubSettings belongs to (cache key)
+let myDisplayName = null;    // the signed-in reader's current display name
+let myNameCustomised = false; // true once they've chosen it, which stops sign-in overwriting it
 const clubId = () => club?.id ?? DEFAULT_CLUB_ID;
 const clubSlug = () => club?.slug ?? DEFAULT_CLUB_SLUG;
 const clubName = () => club?.name ?? "The Shelf";
@@ -2191,9 +2193,28 @@ function discordIdFromUser(user) {
 }
 
 async function ensureUserRow(user) {
-  const username = displayNameFromMeta(user);
+  const fromProvider = displayNameFromMeta(user);
   const avatar = avatarFromMeta(user);
   const discordId = discordIdFromUser(user);
+
+  // Has this reader chosen their own name? If so, sign-in must leave it alone --
+  // this write runs on every single sign-in, and overwriting from provider metadata
+  // is exactly what made a chosen name silently revert (Phase 6b). Avatar and
+  // discord_id keep tracking the provider either way; only the name is claimable.
+  let customised = false;
+  try {
+    const { data: prof } = await supabase
+      .from("profiles").select("display_name, display_name_customised").eq("id", user.id).maybeSingle();
+    if (prof?.display_name_customised && (prof.display_name || "").trim()) {
+      customised = true;
+      myDisplayName = prof.display_name;
+    }
+  } catch (err) {
+    console.warn("profile name check failed:", err?.message);
+  }
+  const username = customised ? myDisplayName : fromProvider;
+  myNameCustomised = customised;
+
   const { data, error } = await supabase
     .from("shelf_users")
     .upsert({
@@ -2205,11 +2226,13 @@ async function ensureUserRow(user) {
     .select().single();
   if (error) { setFlash("err", `Sign-in setup: ${error.message}`); return; }
   myUserRow = data;
+  myDisplayName = data.discord_username;
 
-  // Also keep `profiles` current. Added in Phase 1 and never consumed; this makes
-  // it live (not a snapshot) so that when slice 5b asks an email signup for a
-  // display name, there's a provider-agnostic row to write it to. Nothing reads
-  // it yet, so a failure here is not worth interrupting sign-in over.
+  // `profiles` is the provider-agnostic identity row. Kept live here; the flag is
+  // never written by this path, only read -- setting it is a deliberate act on the
+  // account page. Nothing reads `profiles` for display yet (that cutover would mean
+  // touching the draw path and Discord embeds too), so a failure isn't worth
+  // interrupting sign-in over.
   try {
     const { error: pErr } = await supabase
       .from("profiles")
@@ -2222,6 +2245,67 @@ async function ensureUserRow(user) {
     if (pErr) console.warn("profiles sync failed:", pErr.message);
   } catch (err) {
     console.warn("profiles sync error:", err);
+  }
+}
+
+// Set (or release) this reader's chosen display name.
+//
+// Written straight from the browser rather than through an edge function: both rows
+// are the caller's own and RLS already restricts them to their owner, there's no
+// secret involved and no effect on anyone else. Length is enforced by CHECK
+// constraints on both columns, so the DB holds the line even though the client
+// validates first for the error message.
+//
+// Both tables, deliberately: `shelf_users.discord_username` is still what the app
+// reads and what admin-update puts in Discord embeds, so writing only `profiles`
+// would show a chosen name on the account page and the provider's name everywhere
+// that matters.
+async function saveDisplayName(name) {
+  const trimmed = (name || "").trim().slice(0, 40);
+  if (!trimmed) { setFlash("err", "A display name can't be empty."); render(); return; }
+  try {
+    const { error: pErr } = await supabase
+      .from("profiles")
+      .update({ display_name: trimmed, display_name_customised: true })
+      .eq("id", session.user.id);
+    if (pErr) throw pErr;
+    const { error: uErr } = await supabase
+      .from("shelf_users")
+      .update({ discord_username: trimmed })
+      .eq("id", session.user.id);
+    if (uErr) throw uErr;
+    myDisplayName = trimmed;
+    myNameCustomised = true;
+    setFlash("info", `You're now “${trimmed}”.`);
+    await loadAll();       // renders; refreshes the name everywhere it appears
+  } catch (err) {
+    setFlash("err", `Couldn't save your name: ${err.message}`);
+    render();
+  }
+}
+
+// Hand the name back to the identity provider: clears the flag so the next sign-in
+// resumes tracking it, and applies the provider's current name right away.
+async function resetDisplayName() {
+  const fromProvider = displayNameFromMeta(session.user);
+  try {
+    const { error: pErr } = await supabase
+      .from("profiles")
+      .update({ display_name: fromProvider, display_name_customised: false })
+      .eq("id", session.user.id);
+    if (pErr) throw pErr;
+    const { error: uErr } = await supabase
+      .from("shelf_users")
+      .update({ discord_username: fromProvider })
+      .eq("id", session.user.id);
+    if (uErr) throw uErr;
+    myDisplayName = fromProvider;
+    myNameCustomised = false;
+    setFlash("info", `Back to “${fromProvider}”.`);
+    await loadAll();
+  } catch (err) {
+    setFlash("err", `Couldn't reset your name: ${err.message}`);
+    render();
   }
 }
 
@@ -4513,9 +4597,19 @@ function renderAccount() {
       <h2>Your account</h2>
       <div class="card no-rule">
         <div class="mini-head">You</div>
-        <p><b>${esc(me.discord_username || "Reader")}</b>${email ? `<br><span class="invite-meta">${esc(email)}</span>` : ""}</p>
-        <p class="invite-meta">Signs in with ${providers.length ? esc(providers.join(", ")) : "an identity provider"}.</p>
-        <p class="invite-meta">Changing your display name, email, password and connected accounts is still to come — for now your name comes from whoever you sign in with.</p>
+        <label class="field">
+          <span class="field-label">Display name</span>
+          <input id="acct-name" type="text" maxlength="40" value="${attr(myDisplayName || me.discord_username || "")}">
+          <span class="field-hint">${myNameCustomised
+            ? `This is your own name — signing in won't change it.`
+            : `Currently taken from ${providers.length ? esc(providers.join(" / ")) : "your sign-in provider"}, and updated whenever you change it there.`}</span>
+        </label>
+        <p>
+          <button class="btn-primary" id="acct-name-save">Save name</button>
+          ${myNameCustomised ? `<button class="btn-ghost" id="acct-name-reset">Use my provider's name</button>` : ""}
+        </p>
+        <p class="invite-meta">${email ? esc(email) : "No email address on this account."} · signs in with ${providers.length ? esc(providers.join(", ")) : "an identity provider"}.</p>
+        <p class="invite-meta">Changing your email, password and connected accounts is still to come.</p>
       </div>
       <div class="card no-rule" style="margin-top:10px;">
         <div class="mini-head">Your clubs</div>
@@ -4537,6 +4631,19 @@ function renderAccount() {
 }
 
 function wireAccount() {
+  const nameInput = document.getElementById("acct-name");
+  document.getElementById("acct-name-save")?.addEventListener("click", (e) => {
+    e.currentTarget.blur();
+    saveDisplayName(nameInput?.value ?? "");
+  });
+  nameInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); saveDisplayName(e.currentTarget.value); }
+  });
+  document.getElementById("acct-name-reset")?.addEventListener("click", (e) => {
+    e.currentTarget.blur();
+    resetDisplayName();
+  });
+
   document.getElementById("acct-delete")?.addEventListener("click", async (e) => {
     e.currentTarget.blur();
     // The server requires this exact phrase too and re-checks it, along with the

@@ -735,3 +735,27 @@ alter table public.clubs
 alter table public.clubs drop constraint if exists clubs_tagline_len_chk;
 alter table public.clubs
   add constraint clubs_tagline_len_chk check (tagline is null or length(tagline) <= 160);
+
+-- 27. Phase 6b: chosen display names --------------------------------------
+-- display_name_customised is what makes a chosen name survive: ensureUserRow
+-- rewrites the name from provider metadata on every sign-in, so without the flag a
+-- chosen name silently reverted next login. While false the name keeps tracking the
+-- provider; once true, sign-in leaves it alone. See
+-- 20260810130000_display_names.sql.
+--
+-- Length guards on both name columns because these are among the very few columns a
+-- reader writes DIRECTLY under RLS rather than through an edge function, so the
+-- database has to hold the line.
+
+alter table public.profiles
+  add column if not exists display_name_customised boolean not null default false;
+
+alter table public.profiles drop constraint if exists profiles_display_name_len_chk;
+alter table public.profiles
+  add constraint profiles_display_name_len_chk
+  check (length(btrim(display_name)) between 1 and 40);
+
+alter table public.shelf_users drop constraint if exists shelf_users_name_len_chk;
+alter table public.shelf_users
+  add constraint shelf_users_name_len_chk
+  check (length(btrim(discord_username)) between 1 and 40);

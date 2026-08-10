@@ -234,6 +234,8 @@ Upgrade to **Supabase Pro** for reliability, not capacity:
 
 **Confirmed 2026-08-09, and worse than "no daily backups" implies.** `supabase backups list` on the live project returns `pitr_enabled: false` with an **empty** backup array — there is no restore point of any kind, and never has been. A single `reset` (or a bad migration) loses 17 reads, 80 reviews and 5 comments permanently. This is the largest standing risk to the club's data and it is entirely independent of the tenancy work.
 
+**Decision 2026-08-10: not paying for Pro.** So PITR is not coming, and the local backups below are the whole of the recovery story. That's an accepted risk rather than an oversight, and it has a shape worth naming: the club can lose everything since the last successful `scripts/backup.sh` run, and that script only runs while one particular Mac is awake and logged in. If it ever matters more than $25/mo, the fix is a toggle.
+
 Partial stopgap in place, not a substitute: `scripts/backup.sh` takes a verified logical backup on demand (pg_dump schema/data/roles via Docker, plus a row-count-verified public-data snapshot that works without it) into `~/the-shelf-backups/`. It is **manual** — nothing runs it on a schedule, so the club is only ever as protected as the last time someone remembered. Pro's PITR is still the actual fix; a cron/launchd job around `backup.sh` is the cheap interim one.
 
 ### Running cost
@@ -430,7 +432,7 @@ The slug is deliberately **not** editable: changing it breaks every link and inv
 #### 6b — account settings *(new)*
 One page a reader reaches from their own name, owning what is currently unreachable:
 
-- **Display name and avatar.** **Blocked by a conflict that has to be resolved first:** `ensureUserRow` upserts `discord_username` from provider metadata on *every* sign-in, so a name the reader chose would be silently overwritten the next time they signed in. Either the write becomes insert-only, or a "this was customised" flag has to suppress it. This is also where `profiles` stops being written-but-unread (see 5b) and becomes the thing the app actually displays.
+- **Display name** ✅ **done 2026-08-10.** The conflict is resolved by a flag rather than by making the write insert-only: `profiles.display_name_customised` is false while the name tracks the provider (so renaming yourself on Discord still propagates, which is what everyone had) and true once you've chosen one, after which sign-in leaves it alone. A "use my provider's name" button releases it. Written to **both** `profiles.display_name` and `shelf_users.discord_username`, because the latter is still what the app reads and what `admin-update` puts in Discord embeds — flipping that read to `profiles` would mean touching the draw path and the embeds at the same time as shipping a user-facing feature, so it's still owed. **Avatar** is not editable (it comes from the provider and there's nowhere to upload to; Supabase Storage is unused).
 - **Email address**, via `supabase.auth.updateUser` — needs confirmation, so blocked on Phase 5's SMTP.
 - **Password**: set one, change one, or have none because you only use a provider (5a).
 - **Linked identities**: connect or disconnect Discord and Google (5d), with the obvious guard — you can't remove your last way in. Disconnecting Discord also has a side effect worth surfacing: it clears `discord_id`, so `/mybook` and the winner @-ping stop working for that reader.
