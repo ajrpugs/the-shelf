@@ -11,7 +11,7 @@ Single-page HTML frontend + Supabase backend (Postgres + Realtime + Edge Functio
   - Clear their book to take themselves off the shelf.
   - See who's on the shelf, who's already been picked this round, past reads, and stats.
   - Once a read finishes, submit a rubric review (five categories, 1–20 each) or flag it as didn't-finish, while the librarian has ratings open for it, and post comments (and single-level replies, plus emoji reactions) on its discussion thread.
-- **Anyone with the link** (no login) can read the current state — who's on the shelf, past reads, ratings, and stats.
+- **You need an account, and membership of the club.** Signed-out visitors get the sign-in page; a signed-in reader who isn't a member of the club in the URL is told so rather than shown an empty shelf. (RLS would serve a `public` club's rows to anyone, but the app doesn't offer that — see `docs/multi-tenant-plan.md` §3.)
 - **Only a librarian** (a reader holding the librarian role — see below) can:
   - Spin the wheel — the server picks randomly from readers who have a book set and haven't been picked yet this round.
   - Start a new round (puts everyone back in the pool).
@@ -20,7 +20,7 @@ Single-page HTML frontend + Supabase backend (Postgres + Realtime + Edge Functio
   - Set/clear a read's Guild score, open or close member reviews for it, bulk-import reviews, and schedule (or re-announce) its 50%/100% discussion meetings.
   - Grant or revoke the librarian role for other readers.
 
-- **Anyone signed in** can start their own club from `#/new` (up to 3 a day). A club's librarian sets its name, tagline, **timezone** (meeting times are read in the club's own zone), visibility, its own Discord webhook, and its subscribable calendar feed URL — all under **Admin → Club settings**. New clubs are private: only people holding the link or an invite can see them. A librarian creates invite links from the Admin tab; joining is `#/join/<code>`. You can leave a club from the footer — unless you're its last librarian, in which case promote someone or delete the club. Deleting a club removes everything in it.
+- **Anyone signed in** can set their own display name and delete their account from `#/account`, and start their own club from `#/new` (up to 3 a day). A club's librarian sets its name, tagline, **timezone** (meeting times are read in the club's own zone), visibility, its own Discord webhook, and its subscribable calendar feed URL — all under **Admin → Club settings**. New clubs are private: only people holding the link or an invite can see them. A librarian creates invite links from the Admin tab; joining is `#/join/<code>`. You can leave a club from the footer — unless you're its last librarian, in which case promote someone or delete the club. Deleting a club removes everything in it.
 
 There is no explicit roster — the pool is whoever has a book set. Once you're picked, you sit out until the pool empties (the round auto-advances) or the librarian starts a new round manually.
 
@@ -33,7 +33,7 @@ The app is organized into tabs: **Reading** (what's currently being read / up ne
 ### 1. Supabase project
 
 1. Create a free project at [supabase.com](https://supabase.com).
-2. Open the **SQL editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates all twelve tables (`shelf_state`, `reads`, `shelf_users`, `shelf_reviews`, `shelf_comments`, `shelf_comment_reactions`, `shelf_librarians`, `clubs`, `club_members`, `club_invites`, `profiles`, `club_secrets`), their RLS policies, and hooks seven of them into realtime. The app is multi-club as of Phase 4 (see [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md)): the schema seeds one club, and readers can create their own from `#/new`.
+2. Open the **SQL editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates all twelve tables (`shelf_state`, `reads`, `shelf_users`, `shelf_reviews`, `shelf_comments`, `shelf_comment_reactions`, `shelf_librarians`, `clubs`, `club_members`, `club_invites`, `profiles`, `club_secrets`), their RLS policies, and hooks seven of them into realtime. The schema seeds one club; readers create their own from `#/new`. See [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md) for the decisions behind the design.
 
 ### 2. Sign-in providers (Discord, Google)
 
@@ -52,7 +52,7 @@ The app is organized into tabs: **Reading** (what's currently being read / up ne
 
 Which providers appear on the sign-in page is driven by **`AUTH_PROVIDERS`** near the top of the script, so adding another is one array entry plus its dashboard credentials.
 
-**Email/password accounts are deliberately not offered** — see the Phase 5 note in [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md). They'd require a transactional-email provider (for password resets above all), and Google covers the "not everyone has Discord" case that motivated them.
+**Email/password accounts are deliberately not offered** — see §2 of [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md). They'd require a transactional-email provider (for password resets above all), and Google covers the "not everyone has Discord" case that motivated them.
 
 ### 3. Edge functions
 
@@ -79,7 +79,7 @@ supabase functions deploy club-admin --no-verify-jwt
 - **`discord-interactions`** — backs the `/mybook` slash command (optional; see below).
 - **`set-review`** — lets a signed-in reader submit or clear their own rubric review of the current read.
 - **`post-comment`** — lets a signed-in reader post or delete their own comment on a book's discussion thread.
-- **`club-admin`** — creating a club, invite links, joining, leaving, deleting (Phase 4); per-club settings and secrets (Phase 6a); deleting your account (6b).
+- **`club-admin`** — creating a club, invite links, joining, leaving and deleting a club; per-club settings and secrets; deleting your account.
 - **`calendar-feed`** — public, read-only `.ics` feed of one club's scheduled meetings, for subscribing in Google/Apple/Outlook calendars. Takes an optional `?token=<club_secrets.calendar_token>` to pick the club; without one it serves the seeded club.
 
 ### 4. Discord posts & slash command (optional)
@@ -146,8 +146,11 @@ node --test supabase/functions/_shared/*.test.mjs tests/*.test.mjs
 # transpiles, so this is the ONLY thing that catches type errors in them.
 deno check --no-lock supabase/functions/*/index.ts
 
-# Cross-tenant RLS isolation check. Runs against the LINKED live project (there's
-# no local Postgres here) and cleans up the throwaway rows it creates.
+# Cross-tenant RLS isolation check. Runs against the LINKED live project -- it needs
+# real members to simulate JWTs for -- and cleans up the throwaway club it creates.
+#
+# For anything else, prefer a local database: `supabase start -x vector` then
+# `supabase db reset` replays every migration into a local Postgres.
 node --test supabase/tests/rls-isolation.test.mjs
 
 # Back up production. THIS PROJECT HAS NO AUTOMATIC BACKUPS — `supabase backups
@@ -160,7 +163,7 @@ scripts/backup.sh
 scripts/rehearse-migrations.sh supabase/migrations/<file>.sql
 ```
 
-Two gotchas worth knowing before you reach for the obvious commands:
+Three gotchas worth knowing before you reach for the obvious commands:
 
 - **A local database needs `supabase start -x vector`.** The `vector` container bind-mounts the Docker socket, which Colima's forwarded socket can't satisfy (`operation not supported`), and without the flag startup fails *after* applying every migration. Then `supabase db reset` replays the schema from scratch.
 - **`node --test <directory>` fails** on Node ≥23 (it treats a bare directory as a module). Glob the files, as above.
@@ -170,15 +173,17 @@ Hand-run rollback scripts for schema changes live in `supabase/rollback/`, delib
 
 ## Security notes
 
-- The anon key + RLS mean anyone with the URL can **read** state (including reviews and comments). That's intentional — the seeded club defaults to `visibility = 'public'` in the `clubs` table, which is what actually grants anonymous read access under RLS (not a blanket policy anymore).
-- Writes are locked down by RLS: readers can only insert/update their own `shelf_users` row, insert/update/delete their own `shelf_reviews` row, insert/delete their own `shelf_comments` row, and insert/delete their own `shelf_comment_reactions` row. All game-state changes (`shelf_state`/`reads`) go through the `admin-update` edge function — the client never writes them directly.
+- **Read access is per club.** RLS on every club-scoped table is `is_member(club_id) or clubs.visibility = 'public'`, so a private club's rows are invisible to non-members at the database level, not just hidden by the UI. The seeded club is `public`, which is what makes it anon-readable at all; the app still requires sign-in and membership to *show* it.
+- **Writes go through edge functions**, which re-authorize against the club named in the request — a caller can name any `club_id`, so that check is what makes it safe. Three exceptions are written straight from the browser under RLS, all of them the caller's own row with no secret and no cross-user effect: comment reactions, and the `profiles`/`shelf_users` display-name update (guarded by CHECK constraints rather than by the client).
 - **Librarian is a per-club role, not a password.** A librarian is a reader whose `club_members` row for that club has `role = 'librarian'` — that's what `admin-update` checks and what the Admin tab reads, so the UI and the server can't disagree. (`shelf_librarians` still exists and is kept in step, but nothing reads it any more.) `club_members` has no write policy at all — grants and revokes only happen through the service-role `admin_grant_librarian` / `admin_revoke_librarian` edge-function actions, gated on the caller already being a librarian. A librarian can't revoke themselves (so the club can never end up with zero librarians via self-service).
 - `admin-update`, `set-review`, and `post-comment` each verify the caller's Supabase JWT themselves (rather than relying on the platform's built-in verification), which is why they're deployed with `--no-verify-jwt`.
 - `discord-interactions` verifies Discord's Ed25519 request signature against `DISCORD_PUBLIC_KEY`, so only genuine Discord requests are honored.
 
 ## Data & backups
 
-The Supabase dashboard has a full backup + SQL export.
+**There are no automatic backups** — `supabase backups list` reports no PITR and an empty list, and paying for Pro was declined (`docs/multi-tenant-plan.md` §2). `scripts/backup.sh` is the only restore point: run it before every `supabase db push`, and see CLAUDE.md → Backups for the scheduled LaunchAgent and its limits.
+
+Useful queries:
 
 - Game state (eliminated readers, round number) is a small JSON blob, one row per club: `select data from shelf_state where club_id = '8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8';`
 - Past reads (ratings, meeting schedules) live in their own table, not the blob: `select * from reads order by ts desc;`
