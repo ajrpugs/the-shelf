@@ -1,12 +1,12 @@
 # The Shelf
 
-A tiny book-club picker with a library-ledger vibe. Readers sign in with Discord and each set one book; a librarian spins the wheel to pick one at random. Once you're picked, you sit out until the round turns over.
+A tiny book-club picker with a library-ledger vibe. Readers sign in with Discord or Google and each set one book; a librarian spins the wheel to pick one at random. Once you're picked, you sit out until the round turns over.
 
 Single-page HTML frontend + Supabase backend (Postgres + Realtime + Edge Functions), with optional Discord integration (webhook posts + a `/mybook` slash command). Free tier is more than enough for a book club.
 
 ## How it works
 
-- **Any reader** (signed in with Discord) can:
+- **Any reader** (signed in with Discord or Google) can:
   - Set or change their one book — from the web app, or with the `/mybook <title>` slash command in Discord.
   - Clear their book to take themselves off the shelf.
   - See who's on the shelf, who's already been picked this round, past reads, and stats.
@@ -35,12 +35,24 @@ The app is organized into tabs: **Reading** (what's currently being read / up ne
 1. Create a free project at [supabase.com](https://supabase.com).
 2. Open the **SQL editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates all twelve tables (`shelf_state`, `reads`, `shelf_users`, `shelf_reviews`, `shelf_comments`, `shelf_comment_reactions`, `shelf_librarians`, `clubs`, `club_members`, `club_invites`, `profiles`, `club_secrets`), their RLS policies, and hooks seven of them into realtime. The app is multi-club as of Phase 4 (see [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md)): the schema seeds one club, and readers can create their own from `#/new`.
 
-### 2. Discord OAuth (sign-in)
+### 2. Sign-in providers (Discord, Google)
 
 1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications) and grab its **Client ID** and **Client Secret**.
 2. In the Discord app's **OAuth2** settings, add the redirect URL Supabase gives you (Supabase dashboard → **Authentication → Providers → Discord**).
 3. In Supabase, enable the **Discord** provider and paste in the Client ID / Secret.
 4. Add your site's URL (e.g. `https://<you>.github.io/the-shelf/`, or your own custom domain) to Supabase's **Authentication → URL Configuration** allow-list so the OAuth redirect is accepted.
+
+**Google** (optional, and free — no billing account needed):
+
+1. Google Cloud Console → **APIs & Services → OAuth consent screen** (newer projects: **Google Auth Platform**). User type **External**, fill in app name and support email.
+2. **Publish the app.** While it's in *Testing* only explicitly-listed test users can sign in, and everyone else gets "access blocked". With only the default `openid`/`userinfo.email`/`userinfo.profile` scopes, publishing is instant and needs no Google review.
+3. **Credentials → Create credentials → OAuth client ID → Web application**, with `https://<project-ref>.supabase.co/auth/v1/callback` as the authorised redirect URI. Don't enable any APIs — that's what triggers billing prompts.
+4. Supabase → **Authentication → Providers → Google** → enable and paste the Client ID / secret.
+5. Set `enabled: true` on the Google entry in `AUTH_PROVIDERS` in `index.html`.
+
+Which providers appear on the sign-in page is driven by **`AUTH_PROVIDERS`** near the top of the script, so adding another is one array entry plus its dashboard credentials.
+
+**Email/password accounts are deliberately not offered** — see the Phase 5 note in [`docs/multi-tenant-plan.md`](docs/multi-tenant-plan.md). They'd require a transactional-email provider (for password resets above all), and Google covers the "not everyone has Discord" case that motivated them.
 
 ### 3. Edge functions
 
