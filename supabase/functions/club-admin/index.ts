@@ -114,10 +114,11 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
   const action = String(body.action ?? "");
 
-  // club_id is required by every action except create_club and join_with_invite
-  // (which derives it from the code).
+  // club_id is required by every action except create_club (no club yet),
+  // join_with_invite (derives it from the code) and delete_account (spans every
+  // club the caller is in).
   const clubId = String(body.club_id ?? "");
-  const needsClub = !["create_club", "join_with_invite"].includes(action);
+  const needsClub = !["create_club", "join_with_invite", "delete_account"].includes(action);
   if (needsClub && !UUID_RE.test(clubId)) return json({ error: "invalid club_id" }, 400);
 
   try {
@@ -309,6 +310,54 @@ Deno.serve(async (req) => {
         const { error } = await client.from("clubs").delete().eq("id", clubId);
         if (error) throw error;
         return json({ ok: true, deleted: target.slug });
+      }
+
+      // --- 6b: delete my account -------------------------------------------
+      // Gate: you, deleting yourself, having typed the confirmation. There is no
+      // "delete someone else" -- an admin removing a person from their club is
+      // admin_remove_user in admin-update, which takes away a membership and
+      // leaves the human's account alone.
+      //
+      // §7 has owed this since open signup was decided, and its Legal item
+      // ("account deletion must genuinely delete") isn't satisfiable without it.
+      case "delete_account": {
+        if (String(body.confirm ?? "").trim().toUpperCase() !== "DELETE MY ACCOUNT") {
+          return json({ error: 'Type "DELETE MY ACCOUNT" to confirm.' }, 400);
+        }
+
+        // The same guard leave_club applies, but across EVERY club they run.
+        // Without it, deleting an account orphans clubs with no librarian and no
+        // UI anywhere to appoint one.
+        const { data: myRoles, error: rolesErr } = await client
+          .from("club_members").select("club_id, role").eq("user_id", callerId);
+        if (rolesErr) throw rolesErr;
+        const soleLibrarianOf: string[] = [];
+        for (const row of (myRoles ?? []) as Array<{ club_id: string; role: string }>) {
+          if (row.role !== "librarian") continue;
+          if (await librarianCount(client, row.club_id) <= 1) soleLibrarianOf.push(row.club_id);
+        }
+        if (soleLibrarianOf.length) {
+          const { data: named } = await client
+            .from("clubs").select("name").in("id", soleLibrarianOf);
+          const names = (named ?? []).map((c: { name: string }) => c.name).join(", ");
+          return json({
+            error: `You're the only librarian of ${names}. Make someone else a librarian, or delete ${soleLibrarianOf.length === 1 ? "that club" : "those clubs"}, first.`,
+            sole_librarian_of: soleLibrarianOf,
+          }, 409);
+        }
+
+        // Deleting the auth user is the whole deletion: shelf_users, profiles,
+        // club_members, shelf_reviews, shelf_comments, shelf_comment_reactions and
+        // shelf_librarians all cascade from auth.users. What deliberately survives
+        // is `reads` -- winner_id is ON DELETE SET NULL and winner_username is
+        // plain text, so a club's ledger keeps the pick and the person disappears
+        // from it. A club's history shouldn't grow holes because someone left the
+        // product; the confirmation screen says so rather than leaving it to be
+        // discovered. clubs.created_by is also SET NULL, so a club they founded
+        // and handed over survives intact.
+        const { error: delErr } = await client.auth.admin.deleteUser(callerId);
+        if (delErr) return json({ error: delErr.message }, 500);
+        return json({ ok: true, deleted: true });
       }
 
       default:

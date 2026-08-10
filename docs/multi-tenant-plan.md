@@ -420,7 +420,9 @@ One page a reader reaches from their own name, owning what is currently unreacha
 
 **Exit:** a reader can change their name, how they sign in, and leave entirely, without anyone touching SQL.
 
-**Sequencing note:** 6b's email/password items are blocked on Phase 5, but display name, my-clubs and account deletion are not — and account deletion is the one item here with a legal rather than a product deadline, since open signup is already live. Worth pulling forward independently of the rest of this phase.
+**Sequencing note:** 6b's email/password items are blocked on Phase 5, but display name, my-clubs and account deletion are not — and account deletion is the one item here with a legal rather than a product deadline, since open signup is already live.
+
+**Pulled forward and shipped 2026-08-09:** `#/account` exists, carrying account deletion plus a read-only view of who you are and which clubs you're in. `club-admin`'s `delete_account` requires the phrase "DELETE MY ACCOUNT" and refuses anyone who is the **sole librarian of any club**, naming them — the `leave_club` guard applied across every club rather than one, since without it deleting an account orphans clubs with no UI anywhere to appoint a replacement. Deleting the `auth.users` row is the whole deletion; verified empirically on a local database that `shelf_users`, `profiles`, `club_members`, `shelf_reviews` and `shelf_comments` all go, while `reads` keeps the row with `winner_id` set to null and `winner_username` intact — the club's ledger keeps the pick, the person disappears from it, and the confirmation screen says so. The rest of 6b (display name, email, password, linked identities) is listed on the page as still to come rather than omitted, so it tells the truth about what you can change.
 
 ### Phase 7 — Frontend restructure *(when justified)*
 3,815 lines of string-built HTML in one file, full re-render per change. Revisit when the pain justifies it — not before.

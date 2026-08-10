@@ -3616,6 +3616,9 @@ function render() {
   const preRoute = parseRoute();
   if (preRoute.name === "new-club") { app.innerHTML = renderNewClub(); wireNewClub(); return; }
   if (preRoute.name === "join") { app.innerHTML = renderJoin(preRoute.code); wireJoin(preRoute.code); return; }
+  // Account settings sits outside club resolution: it's about the person, and it
+  // has to be reachable by someone who belongs to no clubs at all.
+  if (preRoute.name === "account") { app.innerHTML = renderAccount(); wireAccount(); return; }
 
   // A reader who belongs to nothing: the normal first screen for a brand-new
   // account now that the auto-join is gone, and also where you land after
@@ -4107,7 +4110,7 @@ function render() {
     });
     html += `</div>`;
   }
-  html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="#/new" class="footer-link">Start a club</a>`;
+  html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="#/new" class="footer-link">Start a club</a> · <a href="#/account" class="footer-link">Account</a>`;
   // Leaving is offered to everyone; club-admin refuses the last librarian, who
   // has to promote someone or delete the club instead.
   html += ` · <a href="#" class="footer-link" id="leave-club">Leave ${esc(clubName())}</a>`;
@@ -4214,6 +4217,7 @@ function parseRoute() {
   // Phase 4: creating and joining are routes of their own, matched before the
   // club route so /c/new and a club slugged "join" can't collide with them.
   if (/^#\/new\/?$/.test(hash)) return { name: "new-club" };
+  if (/^#\/account\/?$/.test(hash)) return { name: "account" };
   const join = hash.match(/^#\/join\/([A-Za-z0-9]+)\/?$/);
   if (join) return { name: "join", code: join[1].toUpperCase() };
   // clubSlug is resolved against the `clubs` table as of Phase 4 slice 4b --
@@ -4239,6 +4243,74 @@ function goToTab(id) {
   }
 }
 
+// ---------- Account settings (Phase 6b) ----------
+// The skeleton of the page, carrying the one item with a legal rather than a
+// product deadline: deleting your account. §7 has owed this since open signup was
+// decided, and its Legal item ("account deletion must genuinely delete") isn't
+// satisfiable without it.
+//
+// The rest of 6b lands here as it unblocks: display name and avatar need the
+// ensureUserRow overwrite resolved, email and password need Phase 5's SMTP, and
+// linked identities need 5d. Each is listed as pending rather than omitted, so the
+// page tells the truth about what you can and can't change.
+function renderAccount() {
+  const me = users.find(u => u.id === session.user.id) || myUserRow || {};
+  const email = session.user.email || null;
+  const providers = (session.user.identities || []).map(i => i.provider);
+  const clubs = myClubs.length
+    ? myClubs.map(c => `<li>${esc(c.name)} <span class="invite-meta">${c.role === "librarian" ? "librarian" : "member"}</span></li>`).join("")
+    : `<li class="invite-meta">none</li>`;
+  return `
+    <header><div class="eyebrow">Account</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <a href="#/c/${esc(clubSlug())}/reading" class="detail-back">← Back to the shelf</a>
+    <div class="setup">
+      <h2>Your account</h2>
+      <div class="card no-rule">
+        <div class="mini-head">You</div>
+        <p><b>${esc(me.discord_username || "Reader")}</b>${email ? `<br><span class="invite-meta">${esc(email)}</span>` : ""}</p>
+        <p class="invite-meta">Signs in with ${providers.length ? esc(providers.join(", ")) : "an identity provider"}.</p>
+        <p class="invite-meta">Changing your display name, email, password and connected accounts is still to come — for now your name comes from whoever you sign in with.</p>
+      </div>
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">Your clubs</div>
+        <ul style="margin:6px 0 0 18px;">${clubs}</ul>
+        <p style="margin-top:10px;"><a href="#/new" class="footer-link">Start another club</a></p>
+      </div>
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="tools-label">Danger zone</div>
+        <div class="tool-row">
+          <button class="btn-danger" id="acct-delete">Delete my account</button>
+          <span class="tool-row-desc">
+            Permanently deletes your account, your memberships, and every review and comment you've written.
+            Past picks stay in each club's ledger under your name — a club's history shouldn't grow holes
+            because you left. This can't be undone.
+          </span>
+        </div>
+      </div>
+    </div>`;
+}
+
+function wireAccount() {
+  document.getElementById("acct-delete")?.addEventListener("click", async (e) => {
+    e.currentTarget.blur();
+    // The server requires this exact phrase too and re-checks it, along with the
+    // "you're the only librarian somewhere" guard -- this prompt is a speed bump,
+    // not the guard.
+    const typed = prompt(
+      "This permanently deletes your account, your memberships, and every review and comment you've written.\n\n" +
+      "Your past picks stay in each club's ledger under your name.\n\n" +
+      'Type DELETE MY ACCOUNT to confirm:'
+    );
+    if (typed === null) return;
+    const body = await callClubAdmin("delete_account", { confirm: typed });
+    if (!body?.ok) { render(); return; }
+    // Nothing left to be signed in as.
+    await supabase.auth.signOut();
+    location.hash = "";
+    location.reload();
+  });
+}
+
 // ---------- No clubs at all (Phase 5 prep) ----------
 // The two ways forward are the two things a reader with no club can actually do:
 // make one, or redeem an invite. Deliberately not a dead end offering the seeded
@@ -4255,6 +4327,7 @@ function renderNoClubs() {
         <input id="nc-code" type="text" maxlength="24" placeholder="ABCD1234EFGH" autocomplete="off" spellcheck="false" style="text-transform:uppercase">
       </label>
       <p><button class="btn" id="nc-redeem">Join the club</button></p>
+      <p><a href="#/account" class="footer-link">Account settings</a></p>
     </div>`;
 }
 
