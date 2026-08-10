@@ -704,3 +704,14 @@ grant all on all functions in schema public to anon, authenticated, service_role
 alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
 alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
 alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+
+-- 25. Retire join_default_club() ------------------------------------------
+-- Signing in no longer joins you to the seeded club. Added in Phase 3.5 when
+-- there was one club and signing in meant landing on it; once Phase 4 let anyone
+-- create their own, an auto-join made every stranger a member of somebody else's
+-- book club. Getting in is an invite or creating a club. Dropped rather than left
+-- unused, because it was `security definer` with execute granted to
+-- `authenticated` -- any signed-in caller could invoke it directly.
+-- See 20260809170000_retire_join_default_club.sql.
+
+drop function if exists public.join_default_club();

@@ -1865,19 +1865,16 @@ async function onSignedIn() {
   // trip stripped, so an invite link still lands on its invite.
   restorePostAuthDest();
   await ensureUserRow(session.user);
-  // Which club we're on has to be settled before anything club-scoped runs --
-  // membership, the librarian gate and loadAll all key off clubId().
-  await resolveClubFromRoute();
-  // Needed even on the failure paths: the "not in this club" page offers the
-  // clubs you *are* in, and there's no other way to know them.
-  if (clubStatus !== "ok") { await loadMyClubs(); render(); return; }
-  await ensureClubMembership();
+  // Which clubs are mine has to come first now: it decides both whether there's
+  // anywhere to go at all, and (in resolveClubFromRoute) whether this reader may
+  // see the club in the URL.
   await loadMyClubs();
-  // Belongs to nothing, and didn't ask for a particular club: show them the two
-  // things they can actually do rather than dropping them into someone else's
-  // book club. Unreachable while join_default_club() still auto-joins every
-  // sign-in -- deliberately built before that changes, not after.
+  // Belongs to nothing and didn't ask for a particular club — the normal state of
+  // a brand-new account since the auto-join was retired. Offer the two things
+  // they can do rather than dropping them into someone else's book club.
   if (!myClubs.length && !parseRoute().clubSlug) { clubStatus = "no-clubs"; render(); return; }
+  await resolveClubFromRoute();
+  if (clubStatus !== "ok") { render(); return; }
   await loadLibrarianStatus();
   await loadAll();
   subscribeRealtime();
@@ -2026,11 +2023,18 @@ async function resolveClubFromRoute() {
     if (error) throw error;
     if (!data) { club = null; clubStatus = "not_found"; return; }
     club = data;
-    // The seeded club is joined automatically on sign-in, so membership is
-    // assumed there. For any other club, being in it is the thing that decides
-    // whether there's anything to show -- and the server enforces the same check
-    // on every write, so this is the UI half of one rule, not the rule itself.
-    if (data.id === DEFAULT_CLUB_ID) { clubStatus = "ok"; return; }
+    // Membership decides whether there's anything to show, for EVERY club
+    // including the seeded one. That used to be short-circuited on the grounds
+    // that sign-in auto-joined the seeded club — retiring the auto-join
+    // (20260809170000) removed the premise, and leaving the short-circuit would
+    // have shown a stranger the club's full app with no way to take part in it.
+    // The server enforces the same check on every write; this is the UI half of
+    // one rule, not the rule itself.
+    //
+    // Narrowing worth naming: a `public` club is now viewable only by its
+    // members, even though RLS would allow anyone to read it. Spectating a public
+    // club is a real feature but not one that exists — and the signed-out gate
+    // already meant nobody could do it in practice.
     const { data: mine } = await supabase
       .from("club_members").select("user_id")
       .eq("club_id", data.id).eq("user_id", session.user.id).maybeSingle();
@@ -2043,22 +2047,15 @@ async function resolveClubFromRoute() {
   }
 }
 
-// Make sure the signed-in reader has a club_members row, since that table (not
-// shelf_users) is now what decides who's on the shelf and who's eligible for the
-// wheel. club_members has no insert policy, so this goes through a narrow
-// security-definer RPC that can only add *you* to *the seeded club* — see the
-// Phase 3.5 migration. Phase 4 replaces it with an invite-gated join.
-async function ensureClubMembership() {
-  // join_default_club() joins the SEEDED club regardless of the URL, so calling
-  // it while viewing another club would quietly enrol you in the wrong one.
-  if (clubId() !== DEFAULT_CLUB_ID) return;
-  try {
-    const { error } = await supabase.rpc("join_default_club");
-    if (error) console.warn("club join failed:", error.message);
-  } catch (err) {
-    console.warn("club join error:", err);
-  }
-}
+// Signing in no longer joins you to anything.
+//
+// This is where ensureClubMembership() used to call join_default_club(), adding
+// every new account to the seeded club. That made sense when there was one club
+// and signing in meant landing on it; once anyone can sign up and create their
+// own, it made every stranger a member of somebody else's book club — on its
+// shelf and in its wheel. The RPC is dropped in 20260809170000; getting into a
+// club is an invite (Phase 4d) or creating one (4c). A reader who has neither
+// lands on renderNoClubs().
 
 // Load who the librarians are, from club_members.role scoped to this club —
 // *not* the global shelf_librarians table, which would have shown the Admin tab
@@ -3620,10 +3617,9 @@ function render() {
   if (preRoute.name === "new-club") { app.innerHTML = renderNewClub(); wireNewClub(); return; }
   if (preRoute.name === "join") { app.innerHTML = renderJoin(preRoute.code); wireJoin(preRoute.code); return; }
 
-  // A reader who belongs to nothing. Reachable today by leaving your last club,
-  // and it becomes the normal first screen for every new account the moment
-  // join_default_club() is retired -- which is why it exists before that change
-  // rather than after it.
+  // A reader who belongs to nothing: the normal first screen for a brand-new
+  // account now that the auto-join is gone, and also where you land after
+  // leaving or deleting your last club.
   if (clubStatus === "no-clubs") { app.innerHTML = renderNoClubs(); wireNoClubs(); return; }
 
   // A club that couldn't be resolved gets its own page rather than an empty

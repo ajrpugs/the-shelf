@@ -1,0 +1,27 @@
+-- Retire join_default_club(): stop putting every new account on someone else's
+-- shelf.
+--
+-- Added in Phase 3.5 as a stand-in for the insert policy club_members
+-- deliberately lacks, and it was the right call then: the app had exactly one
+-- club, and signing in had always meant landing on it. Phase 4 changed what that
+-- means. Anyone can now sign up and create their own club, so an auto-join makes
+-- every stranger a member of the seeded club, visible on its shelf and counted in
+-- its wheel. Phase 4d's invites are the real answer to "how do I get into a club",
+-- and this is the door that bypassed them.
+--
+-- Removing the client's call to it is NOT sufficient, which is why this migration
+-- exists: the function is `security definer` with `grant execute to authenticated`,
+-- so any signed-in person could invoke it directly over the RPC endpoint and add
+-- themselves regardless of what the UI does.
+--
+-- Existing members are unaffected -- their club_members rows already exist and
+-- nothing here touches them. What changes is only what happens to a brand-new
+-- account: it now belongs to no clubs and lands on the "you're not in a book club
+-- yet" screen, which offers the two things it can do (start a club, or redeem an
+-- invite). That screen was built ahead of this migration precisely so this could
+-- be a deletion rather than a rewrite.
+--
+-- Bootstrapping the first librarian of a fresh deployment is unchanged and still
+-- a hand-written club_members insert -- see "Librarian is a role" in CLAUDE.md.
+
+drop function if exists public.join_default_club();
