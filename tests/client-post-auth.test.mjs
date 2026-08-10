@@ -28,7 +28,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const html = readFileSync(join(repoRoot, "index.html"), "utf8");
 
 const START = "const POST_AUTH_KEY";
-const END = "async function signIn()";
+const END = "// Ways in, in the order they appear on the gate.";
 const from = html.indexOf(START);
 const to = html.indexOf(END);
 assert.ok(from !== -1 && to > from, "could not find the post-auth block in index.html — was it renamed?");
