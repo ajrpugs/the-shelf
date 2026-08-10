@@ -1,6 +1,6 @@
 # Multi-tenant plan — "The Shelf" as a product
 
-**Status:** Phases 0–4 are implemented and live in production — harden, tenancy foundation, per-club librarian role, hash routing, the Phase 3.5 scoping cleanup, and the Phase 4 lifecycle (create a club, invites, join, leave, delete, onboarding). Phases 5–7 (standard auth, per-club settings, frontend restructure) are still proposal — Phase 5 was rescoped 2026-08-09 from "add providers" to a conventional sign-in/create-account page, keeping identity providers first-class alongside email. See §8 for what's landed vs. what isn't, including what Phase 4 deliberately left open.
+**Status:** Phases 0–4 are implemented and live in production — harden, tenancy foundation, per-club librarian role, hash routing, the Phase 3.5 scoping cleanup, and the Phase 4 lifecycle (create a club, invites, join, leave, delete, onboarding). Phases 5-7 (standard auth, settings -- per-club and per-account, frontend restructure) are still proposal — Phase 5 was rescoped 2026-08-09 from "add providers" to a conventional sign-in/create-account page, keeping identity providers first-class alongside email. See §8 for what's landed vs. what isn't, including what Phase 4 deliberately left open.
 **Goal (decided 2026-07-26, revised 2026-07-27, see §10):** anyone can sign up at `sh3lf.net`, create their own private book club (no invite needed to create one), invite members, and run the wheel/meetings/reviews flow independently of every other club — free, open signup, Discord optional per club rather than required.
 
 This builds on the feasibility findings: the blocker isn't difficulty, it's that the data model changes under everything at once, and (as of writing) there were no tests to catch what breaks. That second half is now addressed — see §5.
@@ -248,7 +248,7 @@ Partial stopgap in place, not a substitute: `scripts/backup.sh` takes a verified
 - **Club creation limits** — rate-limit per user per day, or it's a spam vector.
 - **Slug rules** — validation, reserved words (`admin`, `api`, `c`, `new`…), squatting. Needed regardless for `/c/<slug>` routing, but squatting specifically only matters once strangers (not just people you know) can claim any slug they want.
 - **Lifecycle** — leave a club; transfer librarian; last librarian leaving must promote or archive, not orphan.
-- **Deletion** — delete a club, delete an account, with cascades that actually work.
+- **Deletion** — delete a club (done, Phase 4 slice 4e) and delete an account (**not done** — owned by Phase 6b; the cascades are already correct, the surface to trigger them doesn't exist).
 - **Moderation** — clubs still default to `private` (§10 item 2), so most content stays invite-only-visible even under open signup — but a stranger's account and a stranger's club are no longer the same trust level as a friend's. Needs at minimum a delete path and a way to reach you; a club explicitly marked public is now world-readable to anyone, including people you've never met.
 - **Legal** — Terms + Privacy once you hold accounts/content for people you don't personally know. Account deletion must genuinely delete.
 - **Support** — someone will lock themselves out of librarian mode.
@@ -369,7 +369,7 @@ Verified against a local database with two real clubs, over real HTTP to locally
 - **Sign-up is still Discord-only**, so "a stranger can start a club" means "a stranger with a Discord account" — and the entry point is a single provider button, not an account page. Phase 5 (rescoped, see below) is what makes the sentence fully true; Discord stays a first-class way in either way.
 - **`join_default_club()` still exists and still runs on every sign-in**, so anyone who signs in is added to the seeded club. That was the app's behavior long before Phase 4 and this preserves it rather than changing the existing club's terms mid-flight — but it is the one remaining "open door", and retiring it is a one-line change plus a decision about what a brand-new signed-in reader with no clubs should see.
 - **Transferring the librarian role** is `admin_grant_librarian`/`admin_revoke_librarian` in `admin-update`, which existed already; there's no single "transfer ownership" action, and `clubs.created_by` is recorded but never consulted for permissions.
-- **Moderation, Terms/Privacy, and account deletion** (§7) are untouched. Open signup plus other people's content is exactly the situation that makes them matter, and none of it is engineering-blocked.
+- **Moderation and Terms/Privacy** (§7) are untouched, and **account deletion** now has an owner (Phase 6b) but no implementation — §7's Legal item can't be satisfied until it exists. Open signup plus other people's content is exactly the situation that makes them matter, and none of it is engineering-blocked.
 - `/mybook` still only works for the seeded club — see the note in `discord-interactions`; guild → club is Phase 6.
 
 ### Phase 5 — Standard auth
@@ -399,9 +399,28 @@ Everything that doesn't depend on the two blockers below, so that when they clea
 
 **Also worth deciding here:** signed-out visitors currently see nothing but the sign-in gate — there is no public landing page, and a `public` club isn't actually readable without an account even though RLS allows it. A conventional signup flow usually has something to sign up *from*.
 
-### Phase 6 — Per-club settings
-Name, tagline, timezone (retire the hardcoded `America/Toronto`), cadence, own Discord webhook, per-club ICS token.
+### Phase 6 — Settings
+
+Added 2026-08-09: this was only ever *per-club* settings. There is no account settings page anywhere in the plan, and today a reader can change exactly two things about themselves — their book, and signing out. Everything else about them (display name, avatar, how they sign in) is decided by their identity provider and unchangeable from inside the app. Split into the club-facing half and the personal half, which share the same settings scaffolding.
+
+#### 6a — per-club settings *(the original Phase 6)*
+Name, tagline, timezone (retire the hardcoded `America/Toronto`), cadence, own Discord webhook, per-club ICS token. This is the "admin settings" surface — the librarian-facing counterpart to the member management that already lives in the Admin tab.
 **Exit:** nothing about the club is hardcoded.
+
+#### 6b — account settings *(new)*
+One page a reader reaches from their own name, owning what is currently unreachable:
+
+- **Display name and avatar.** **Blocked by a conflict that has to be resolved first:** `ensureUserRow` upserts `discord_username` from provider metadata on *every* sign-in, so a name the reader chose would be silently overwritten the next time they signed in. Either the write becomes insert-only, or a "this was customised" flag has to suppress it. This is also where `profiles` stops being written-but-unread (see 5b) and becomes the thing the app actually displays.
+- **Email address**, via `supabase.auth.updateUser` — needs confirmation, so blocked on Phase 5's SMTP.
+- **Password**: set one, change one, or have none because you only use a provider (5a).
+- **Linked identities**: connect or disconnect Discord and Google (5d), with the obvious guard — you can't remove your last way in. Disconnecting Discord also has a side effect worth surfacing: it clears `discord_id`, so `/mybook` and the winner @-ping stop working for that reader.
+- **My clubs**: the list, leaving (currently only in the footer), and which club a bare URL should land on — a real question now that a reader can be in several and `DEFAULT_CLUB_ID` decides for them.
+- **Delete my account.** §7 has owed this since open signup was decided, and §7's Legal item ("account deletion must genuinely delete") is not satisfiable without it. The cascades are already right, and worth stating because the outcome is a deliberate one: `shelf_users`, `profiles`, `club_members`, `shelf_reviews`, `shelf_comments`, `shelf_comment_reactions` and `shelf_librarians` all cascade from `auth.users`, while `reads.winner_id` is `on delete set null` and `winner_username` is plain text — so **the club's ledger keeps the pick, and the person disappears from it**. That's the right trade (a club's history shouldn't develop holes when someone leaves the product) but it should be said out loud on the confirmation screen rather than discovered.
+- **The last-librarian guard applies here too.** `leave_club` already refuses the sole librarian of a club; deleting an account has to make the same check across *every* club the reader administers, or it orphans them — with no UI anywhere to fix it afterwards.
+
+**Exit:** a reader can change their name, how they sign in, and leave entirely, without anyone touching SQL.
+
+**Sequencing note:** 6b's email/password items are blocked on Phase 5, but display name, my-clubs and account deletion are not — and account deletion is the one item here with a legal rather than a product deadline, since open signup is already live. Worth pulling forward independently of the rest of this phase.
 
 ### Phase 7 — Frontend restructure *(when justified)*
 3,815 lines of string-built HTML in one file, full re-render per change. Revisit when the pain justifies it — not before.
