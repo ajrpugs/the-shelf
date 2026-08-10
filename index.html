@@ -249,34 +249,37 @@
   .mono-code{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:0.12em; font-size:1.1rem; }
   .inv-opt{ font-size:0.85rem; opacity:0.8; display:inline-flex; gap:5px; align-items:center; }
   .invite-list{ margin-top:8px; }
-  .invite-row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:6px 0; border-top:1px solid var(--rule); }
+  .invite-row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:6px 0; border-top:1px solid var(--panel-border); }
   .invite-row.dead{ opacity:0.5; }
   .invite-code{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:0.1em; }
   .invite-meta{ font-size:0.82rem; opacity:0.75; }
   .invite-actions{ margin-left:auto; display:flex; gap:4px; }
   .empty-note{ font-size:0.88rem; opacity:0.72; margin-top:8px; }
   .club-switch{ display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; }
-  .club-switch a{ font-size:0.85rem; padding:2px 8px; border:1px solid var(--rule); border-radius:999px; text-decoration:none; }
-  .club-switch a.on{ background:var(--ink); color:var(--card); border-color:var(--ink); }
+  .club-switch a{ font-size:0.85rem; padding:2px 8px; border:1px solid var(--panel-border); border-radius:999px; text-decoration:none; color:var(--ink-soft); }
+  .club-switch a:hover{ color:var(--brass); border-color:var(--brass); }
+  /* The current club reads as cream-on-dark, not the inverted cream-on-cream that
+     var(--ink) on var(--card) produced -- both tokens are cream on this theme. */
+  .club-switch a.on{ background:var(--panel-2); color:var(--ink); border-color:var(--brass); }
   .btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
   .btn-danger:hover:not(:disabled){ background: transparent; color: var(--stamp-text); }
   .modal-actions button.btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
-  /* Sign-in gate: one row per provider, so adding one is data not layout. */
-  .provider-list{ display: flex; flex-direction: column; gap: 8px; align-items: flex-start; margin-top: 14px; }
+  /* Sign-in gate: one row per provider, so adding one is data not layout.
+     Centred and equal-width to match the card's centred copy. Text is --felt-dark
+     on the cream, NOT --ink: on this single dark theme --ink is itself cream
+     (text for dark panels), so pairing the two rendered cream on cream. */
+  .provider-list{ display: flex; flex-direction: column; gap: 8px; align-items: center; margin-top: 14px; }
   .btn-provider{
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 12px 20px; font-size: 13px; min-width: 260px;
-    background: var(--card); color: var(--ink); border: 1px solid var(--rule);
-  }
-  .btn-provider:hover{ background: var(--paper); }
-  .btn-provider svg{ width: 20px; height: 20px; flex: 0 0 auto; }
-  .btn-discord{
-    background: #5865F2; color: white; border-color: #5865F2;
-    display: inline-flex; align-items: center; gap: 8px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
     padding: 12px 20px; font-size: 13px;
+    width: 100%; max-width: 320px;
+    background: var(--card); color: var(--felt-dark); border: 1px solid var(--card);
   }
-  .btn-discord:hover{ background: #4752c4; }
-  .btn-discord svg{ width: 20px; height: 20px; }
+  .btn-provider:hover:not(:disabled){ filter: brightness(1.06); }
+  .btn-provider svg{ width: 20px; height: 20px; flex: 0 0 auto; }
+  /* Discord keeps its brand colour; everything else comes from .btn-provider. */
+  .btn-discord{ background: #5865F2; color: #fff; border-color: #5865F2; }
+  .btn-discord:hover:not(:disabled){ background: #4752c4; filter: none; }
 
   /* Submit form */
   .submit-form{ display: grid; gap: 8px; }
@@ -4168,7 +4171,7 @@ function render() {
     html += `<div class="card no-rule" style="margin-top:10px;">
       <div class="tools-label">Invitations</div>
       <div class="tool-row">
-        <button class="btn" id="inv-new">New invite link</button>
+        <button class="btn-primary" id="inv-new">New invite link</button>
         <label class="inv-opt">uses <input id="inv-max" type="number" min="1" max="500" placeholder="∞" style="width:64px"></label>
         <label class="inv-opt">expires in <input id="inv-days" type="number" min="1" max="365" placeholder="never" style="width:74px"> days</label>
       </div>`;
@@ -4428,12 +4431,12 @@ function renderNoClubs() {
     <div class="setup">
       <h2>You're not in a book club yet</h2>
       <p>Start one and invite your readers, or paste an invite code someone sent you.</p>
-      <p><button class="btn" id="nc-start">Start a club</button></p>
+      <p><button class="btn-primary" id="nc-start">Start a club</button></p>
       <label class="field">
         <span class="field-label">Have an invite code?</span>
         <input id="nc-code" type="text" maxlength="24" placeholder="ABCD1234EFGH" autocomplete="off" spellcheck="false" style="text-transform:uppercase">
       </label>
-      <p><button class="btn" id="nc-redeem">Join the club</button></p>
+      <p><button class="btn-primary" id="nc-redeem">Join the club</button></p>
       <p><a href="#/account" class="footer-link">Account settings</a></p>
     </div>`;
 }
@@ -4482,7 +4485,7 @@ function renderNewClub() {
         <input id="nc-public" type="checkbox">
         <span>List this club publicly. Leave it off and only people with the link or an invite can see it.</span>
       </label>
-      <p><button class="btn" id="nc-go">Create the club</button></p>
+      <p><button class="btn-primary" id="nc-go">Create the club</button></p>
     </div>`;
 }
 
@@ -4520,7 +4523,7 @@ function renderJoin(code) {
       <h2>You've been invited</h2>
       <p>Accept to join this book club. You can leave again whenever you like.</p>
       <p class="mono-code">${esc(code)}</p>
-      <p><button class="btn" id="join-go">Accept the invitation</button></p>
+      <p><button class="btn-primary" id="join-go">Accept the invitation</button></p>
       <p><a href="#/c/${esc(DEFAULT_CLUB_SLUG)}/reading" class="detail-back">No thanks</a></p>
     </div>`;
 }
@@ -4558,8 +4561,8 @@ function renderClubProblem() {
         : `<b>${esc(clubName())}</b> exists, but you're not a member — so there's nothing here to show you. Ask a librarian of that club for an invite link.`}</p>
       <p>
         ${myClubs.length
-          ? myClubs.map(c => `<button class="btn" data-go-club="${attr(c.slug)}">Go to ${esc(c.name)}</button>`).join(" ")
-          : `<button class="btn" data-go-default-club>Go to ${esc(DEFAULT_CLUB_SLUG)}</button>`}
+          ? myClubs.map(c => `<button class="btn-primary" data-go-club="${attr(c.slug)}">Go to ${esc(c.name)}</button>`).join(" ")
+          : `<button class="btn-primary" data-go-default-club>Go to ${esc(DEFAULT_CLUB_SLUG)}</button>`}
         <a href="#/new" class="footer-link" style="margin-left:8px;">or start your own club</a>
       </p>
     </div>`;
