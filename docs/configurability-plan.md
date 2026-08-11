@@ -1,10 +1,10 @@
 # The Shelf — configurability plan (Phase 8+)
 
-**This one is still a plan.** `docs/multi-tenant-plan.md` is the record of how the app became multi-tenant *structurally* — separate clubs, separate rows, enforced isolation. This document covers the half that didn't come with it: a club can be its own tenant but it still can't be **its own book club**. It picks books the way The Guild picks books, scores them on The Guild's rubric, and is told about it in The Guild's Discord.
+**This was a plan; it is now mostly a record.** Phases 8 through 11, and all of 12 except §2 (vote mode), are shipped and live. `docs/multi-tenant-plan.md` is the record of how the app became multi-tenant *structurally* — separate clubs, separate rows, enforced isolation. This document covers the half that didn't come with it: a club can be its own tenant, and can now genuinely be **its own book club** — its own selection mode, its own rating rubric, its own notification settings, its own Discord server. Vote mode (§2) is the one deliberately unbuilt piece; see §7's sequence table for why.
 
 Read `docs/multi-tenant-plan.md` §2 and §3 first. Several things below were already considered and answered there; where this plan reverses or narrows one of those answers, it says so explicitly.
 
-**Current tenancy: one club.** `the-guild`, 12 members, 17 reads, no webhook of its own. Nothing else exists yet. That is the single most useful fact in this document — every migration below can assume one well-known row, and every defect below can be fixed *before* it has a second tenant to hurt.
+**Tenancy at the time this plan was written: one club**, `the-guild`, 12 members, 17 reads, no webhook of its own — the fact that made every migration below safe to assume a single well-known row, and every defect fixable before it had a second tenant to hurt. That's no longer the live count (a second club exists, and the-guild has its own webhook now); this section is left as the historical premise, not a live status line.
 
 ---
 
@@ -188,20 +188,23 @@ Each phase is independently shippable and leaves the app working. Migrations lan
 | Phase | Contents | Size |
 |---|---|---|
 | **8 — Tenant correctness** ✅ | §0.1 webhook leak, §0.2 club branding in the header and gate, §0.3 required `club_id` | S |
-| **9 — Config foundation + selection** | `clubs.config`, `_shared/club-config.mjs`, `update_club` validation, §2 `rotation` / `pick` / `sitOut`, mode-aware Wheel tab | M |
-| **10 — Rating profiles** | §3 slots, DNF constraint, normalized total, profile snapshot on lock, score label | M |
-| **11 — Notification control** | §4.2 event toggles, §4.3 in-app activity + `last_seen_at`, §4.4 per-user prefs | M |
-| **12 — On demand only** | §2 `vote`, §5.1 export, §5.2 meeting phases, §5.4 guild mapping | L |
+| **9 — Config foundation + selection** ✅ | `clubs.config`, `_shared/club-config.mjs`, `update_club` validation, §2 `rotation` / `pick` / `sitOut`, mode-aware Wheel tab | M |
+| **10 — Rating profiles** ✅ | §3 slots, DNF constraint, normalized total, profile snapshot on lock, score label | M |
+| **11 — Notification control** ✅ | §4.2 event toggles, §4.3 in-app activity + `last_seen_at`, §4.4 per-user prefs | M |
+| **12 — On demand only** ◐ | §5.1 export ✅, §5.2 meeting phases ✅, §5.4 guild mapping ✅. §2 `vote` deliberately **not built** — see below | L |
 
 Phase 8 should ship on its own and soon; it is the only one with a live defect in it, and it is the only one that gets harder once a second club exists.
+
+**§2 `vote` mode stays unbuilt, on purpose.** Everything else in this document has shipped. Vote mode is the one item where the plan's own recommendation ("build it only after the cheap modes are live and someone has actually asked for it," §2) was followed rather than overridden: it's a real lifecycle — nomination window, voting window, close, tie-break — not a variant of the existing draw, and it needs two new tables, their own RLS, a realtime channel, and a tab, none of which piggyback on anything above. Build it when a club asks, not before.
 
 ## 8. Verification this plan owes
 
 The four layers in `multi-tenant-plan.md` §6 all still apply. New coverage each phase must add:
 
 - **Phase 8** ✅ — `rls-isolation.test.mjs`'s throwaway club now asserts it resolves *no* webhook, and a second test asserts the seeded club has one of its own (the deploy gate). `tests/tenant-correctness.test.mjs` covers the source-level half. Stated honestly: the source assertions prove the fallback is *absent*, not that the replacement behaves — nothing here executes an edge function, which is the gap §8's last paragraph already names.
-- **Phase 9** — `_shared/club-config.mjs` gets a `node --test` suite whose first assertion is that `normalizeConfig({})` equals today's behaviour, and `shelf-logic.mjs` gains rotation-cursor cases alongside `pickEligible`.
-- **Phase 10** — rehearse the DNF constraint change with `scripts/rehearse-migrations.sh` and confirm zero row changes; assert the normalized total is bit-identical for a five-category club.
-- **Phase 11** — `notification_prefs` joins the RLS isolation test, and both files in `supabase/backup-sql/` (a table missing from those is silently not backed up).
+- **Phase 9** ✅ — `_shared/club-config.mjs`'s `node --test` suite asserts `normalizeConfig({})` equals today's behaviour first; `shelf-logic.mjs` has rotation-cursor cases alongside `pickEligible`.
+- **Phase 10** ✅ — the DNF constraint change was rehearsed with `scripts/rehearse-migrations.sh` and confirmed zero row changes on push; the normalized total is asserted bit-identical to the old sum-of-five formula at the default profile.
+- **Phase 11** ✅ — `notification_prefs` joined the RLS isolation test (including a same-club-member-can't-see-another's-prefs case) and both files in `supabase/backup-sql/`; all 13 cases pass against the live project.
+- **Phase 12** ✅ (minus vote mode) — `buildExtraMeetings` has its own `node --test` coverage, including that one malformed row doesn't drop the others in the same save; `calendar-feed` was smoke-tested live post-deploy and confirmed existing half/full UIDs are unchanged.
 
 Still uncovered, unchanged: `render()` and the bulk of the client beyond a parse check, and end-to-end request handling in the edge functions.
