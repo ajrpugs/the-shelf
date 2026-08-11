@@ -203,7 +203,11 @@
     border-radius: 3px;
   }
 
-  input[type=text], input[type=password]{
+  /* number and datetime-local were left out of this rule for a long time, so the
+     librarian tools rendered three native white spinners and a native date widget
+     in among house-styled fields. They take the same treatment; only the padding
+     differs, since a spinner needs room on the right. */
+  input[type=text], input[type=password], input[type=number], input[type=datetime-local]{
     font-family: 'Courier Prime', monospace;
     background: var(--panel-2);
     border: 1px solid var(--panel-border);
@@ -213,8 +217,33 @@
     outline: none;
     border-radius: 2px;
   }
-  input[type=text]::placeholder{ color: var(--ink-soft); opacity: 0.7; }
-  input[type=text]:focus, input[type=password]:focus{ border-color: var(--stamp); }
+  input[type=number]{ padding-right: 6px; }
+  input[type=text]::placeholder, input[type=number]::placeholder{ color: var(--ink-soft); opacity: 0.7; }
+  input[type=text]:focus, input[type=password]:focus,
+  input[type=number]:focus, input[type=datetime-local]:focus{ border-color: var(--stamp); }
+  /* Safari/Chrome paint the datetime-local calendar glyph near-black on the dark
+     inset -- invert it back to cream rather than hiding it. */
+  input[type=datetime-local]::-webkit-calendar-picker-indicator{ filter: invert(0.85); cursor: pointer; }
+
+  /* Checkboxes. There were 12 unstyled ones on the librarian tools page alone,
+     rendering as system blue on dark felt next to fields that were themed. The
+     tick is a background-image rather than a ::after, because pseudo-elements on
+     replaced elements like <input> aren't reliably supported. */
+  input[type=checkbox]{
+    appearance: none; -webkit-appearance: none;
+    width: 16px; height: 16px; flex: 0 0 auto; margin: 0;
+    background: var(--panel-2);
+    border: 1px solid rgba(236,227,207,0.28);
+    border-radius: 2px; cursor: pointer;
+    transition: background-color 0.12s ease, border-color 0.12s ease;
+  }
+  input[type=checkbox]:hover:not(:disabled){ border-color: var(--brass); }
+  input[type=checkbox]:checked{
+    background-color: var(--stamp); border-color: var(--stamp);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6.2 4.7 9 10 3.2' fill='none' stroke='%23f6ecd0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 11px; background-position: center; background-repeat: no-repeat;
+  }
+  input[type=checkbox]:focus-visible{ outline: 2px solid var(--brass); outline-offset: 1px; }
 
   button{
     font-family: 'Courier Prime', monospace;
@@ -261,9 +290,19 @@
   /* The current club reads as cream-on-dark, not the inverted cream-on-cream that
      var(--ink) on var(--card) produced -- both tokens are cream on this theme. */
   .club-switch a.on{ background:var(--panel-2); color:var(--ink); border-color:var(--brass); }
-  .btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
-  .btn-danger:hover:not(:disabled){ background: transparent; color: var(--stamp-text); }
+  /* .btn-danger used to be byte-identical to .btn-primary -- same var(--stamp)
+     fill, plus a border in the same colour, so it contributed nothing. "Delete
+     this club" and "Save webhook" were indistinguishable. Inverted: destructive
+     is outlined and fills on hover, so solid stamp now means "this is the
+     primary action here" and an outline means "careful". The text is
+     --stamp-text, not --stamp: button text is 12px bold, which is under the
+     large-text threshold, so it needs the brightened token to clear AA. */
+  .btn-danger{ background: transparent; color: var(--stamp-text); border: 1px solid var(--stamp); }
+  .btn-danger:hover:not(:disabled){ background: var(--stamp); color: var(--card); filter: none; }
+  /* Inside a confirm modal the danger button IS the primary action, sitting next
+     to a ghost Cancel, so it stays solid there on purpose. */
   .modal-actions button.btn-danger{ background: var(--stamp); color: var(--card); border: 1px solid var(--stamp); }
+  .modal-actions button.btn-danger:hover:not(:disabled){ filter: brightness(1.08); }
   /* Sign-in gate: one row per provider, so adding one is data not layout.
      Centred and equal-width to match the card's centred copy. Text is --felt-dark
      on the cream, NOT --ink: on this single dark theme --ink is itself cream
@@ -809,9 +848,92 @@
   .leader-row .lbar > span{ display:block; height: 100%; background: var(--stamp); }
   .leader-row .lcount{ min-width: 24px; text-align: right; color: var(--ink-soft); font-size: 12px; }
 
-  /* Librarian tools */
+  /* Librarian dashboard */
   .tool-row{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  /* Consecutive rows used to sit flush at 0px -- measured 587->619 and 619->676
+     in the danger zone, which reads on screen as two overlapping buttons. */
+  .tool-row + .tool-row{ margin-top: 10px; }
   .tool-row-desc{ font-size: 12px; color: var(--ink-soft); font-style: italic; }
+
+  /* Settings forms: the content column is 720px and a lone 220px field left the
+     other two thirds empty, which is most of why these cards read as both tall
+     and sparse. Pair them up once there's room. */
+  .field-grid{ display: grid; gap: 0 18px; grid-template-columns: 1fr; }
+  @media (min-width: 640px){
+    .field-grid{ grid-template-columns: 1fr 1fr; }
+    .field-grid .field input{ max-width: 100%; }
+    .field-grid .field-wide{ grid-column: 1 / -1; }
+  }
+
+  /* A secret rendered as prose is a secret nobody can select cleanly. The
+     calendar feed URL gets a real read-only field instead. */
+  .secret-field{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  .secret-field input{
+    flex: 1; min-width: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; letter-spacing: 0.02em;
+  }
+
+  /* Second-level nav inside the librarian dashboard. Deliberately pills, not a
+     second underlined strip -- an underlined row directly under .tabs would read
+     as a competing copy of the same control. */
+  .sub-nav{ display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 16px; }
+  .sub-nav button{
+    background: transparent; color: var(--ink-soft);
+    border: 1px solid var(--panel-border); border-radius: 999px;
+    padding: 6px 14px; font-size: 11px; letter-spacing: 0.1em;
+  }
+  .sub-nav button:hover:not(.on){ color: var(--ink); border-color: var(--brass); }
+  .sub-nav button.on{ background: var(--panel-2); color: var(--brass); border-color: var(--brass); }
+  .sub-nav-select{ display: none; }
+  /* Four pills fit at 390px only just, and not at all with a longer club's
+     label sitting above them. Under 560px, hand the whole thing to a native
+     select rather than stacking a second scrolling strip under .tabs. */
+  @media (max-width: 560px){
+    .sub-nav{ display: none; }
+    .sub-nav-select{
+      display: block; width: 100%; margin: 0 0 16px;
+      font-family: 'Courier Prime', monospace; font-size: 12px;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      background: var(--panel-2); color: var(--ink);
+      border: 1px solid var(--panel-border); border-radius: 2px;
+      padding: 10px 12px;
+    }
+  }
+
+  /* Collapsed configuration. <details> is already the mechanism behind .row-menu,
+     so this adds no new machinery and survives a re-render for free. */
+  .cfg{ border-top: 1px solid var(--panel-border); }
+  .cfg:first-of-type{ border-top: none; }
+  .cfg > summary{
+    list-style: none; cursor: pointer; user-select: none;
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 12px 0;
+  }
+  .cfg > summary::-webkit-details-marker{ display: none; }
+  .cfg-name{ font-family: 'Fraunces', serif; font-weight: 600; font-size: 14px; color: var(--ink); }
+  .cfg-summary{ font-size: 12px; color: var(--ink-soft); font-style: italic; flex: 1; min-width: 0; }
+  .cfg-toggle{ font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--brass); }
+  .cfg[open] > summary .cfg-toggle::after{ content: " ▴"; }
+  .cfg:not([open]) > summary .cfg-toggle::after{ content: " ▾"; }
+  .cfg > summary:hover .cfg-name{ color: var(--brass); }
+  .cfg-body{ padding: 0 0 16px; }
+
+  /* Overview: the status strip and the attention list. */
+  .dash-stats{ display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 10px; }
+  .dash-stat{ background: var(--panel-2); border-radius: 2px; padding: 10px 12px; }
+  .dash-stat-n{ font-family: 'Fraunces', serif; font-weight: 700; font-size: 22px; line-height: 1.1; color: var(--ink); }
+  .dash-stat-l{ font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--stamp-text); margin-top: 4px; }
+  .attn-row{
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 0; border-bottom: 1px dotted rgba(236,227,207,0.12);
+  }
+  .attn-row:last-child{ border-bottom: none; }
+  .attn-text{ flex: 1; min-width: 180px; font-size: 13px; color: var(--ink); }
+  .attn-row.done .attn-text{ color: var(--ink-soft); }
+  .attn-mark{ flex: 0 0 auto; width: 18px; font-size: 13px; color: var(--green); }
+  .attn-row.todo .attn-mark{ color: var(--stamp-text); }
+  .dash-allclear{ font-size: 13px; color: var(--green); font-style: italic; padding: 6px 0; }
   .user-row{
     display: flex; align-items: center; gap: 10px;
     padding: 10px 0; border-bottom: 1px dotted rgba(236,227,207,0.12);
@@ -1391,6 +1513,15 @@ let reactions = [];          // shelf_comment_reactions rows (emoji on comments)
 let leaderboardQuery = "";    // live filter text for the leaderboard
 let globalSearchQuery = "";   // live filter text for the header search
 let currentTab = "reading";  // active top-level tab in the main view
+// Sub-section of the librarian dashboard. Lives in the URL's third segment so it
+// survives a reload and the back button; see parseRoute()/goToTab().
+const ADMIN_SECTIONS = [
+  { id: "overview", label: "Overview" },
+  { id: "readers", label: "Readers" },
+  { id: "settings", label: "Settings" },
+  { id: "data", label: "Data" },
+];
+let currentSubTab = "overview";
 let lastRenderedTab = null;  // currentTab as of the previous render() — lets us
                               // fade in tab content only on an actual tab switch,
                               // not on every background realtime refresh
@@ -3837,10 +3968,11 @@ function meetingRowHtml(m) {
   </div>`;
 }
 
-// The Calendar tab: subscribe URL, the upcoming-meetings timeline (merged across
-// current + next-up reads), and — for the librarian — a per-read editor that
-// pre-fills the next biweekly Wednesday 8pm slots.
-function calendarTabHtml(admin, currentlyReading, nextUp) {
+// The Calendar tab: subscribe URL and the upcoming-meetings timeline (merged
+// across current + next-up reads). The librarian's per-read editor used to be
+// appended here too; it now lives on the Librarian dashboard, so this renders
+// the same thing for everyone plus a pointer.
+function calendarTabHtml(admin) {
   const feed = CALENDAR_FEED_URL;
   const webcal = feed.replace(/^https?:\/\//, "webcal://");
   let html = `<section><div class="section-title">Meeting calendar</div>`;
@@ -3874,58 +4006,470 @@ function calendarTabHtml(admin, currentlyReading, nextUp) {
   </div>`;
   html += `<div class="me-hint" style="margin-top:6px;">Google Calendar: <b>Other calendars → From URL</b>, paste the URL. Apple/Outlook: click <b>Subscribe</b>. (Subscribed feeds refresh on the calendar's own schedule — usually within a few hours.)</div>`;
 
+  // The librarian's scheduling editor used to live here. It moved to the
+  // Librarian dashboard: it's a form only one person in the club can use, on a
+  // tab everyone else opens to check a date, reached by scrolling past the grid,
+  // both lists and the subscribe box. See meetingSchedulerHtml() and
+  // docs/librarian-dashboard-plan.md §3.5. Everything a member comes here for is
+  // unchanged.
   if (admin) {
-    const inFlight = [];
-    if (currentlyReading) inFlight.push(currentlyReading);
-    nextUp.forEach(h => inFlight.push(h));
-    html += `<div class="card no-rule" style="margin-top:14px;"><div class="mini-head">Schedule meetings (librarian)</div>`;
-    if (inFlight.length === 0) {
-      html += `<div class="empty-note">No active read to schedule. Spin the wheel first.</div>`;
-    } else {
-      // Rolling suggestion anchor: latest scheduled meeting so far, else now.
-      let anchor = null;
-      for (const m of meetings) { if (!anchor || m.at > anchor) anchor = m.at; }
-      // Never pre-fill a date in the past: if rolling forward off a stale
-      // meeting still lands behind us, suggest from today instead.
-      const suggestSlot = (from) => {
-        const d = nextBiweeklyWednesday(from);
-        return d.getTime() < Date.now() ? nextBiweeklyWednesday(null) : d;
-      };
-      inFlight.forEach(h => {
-        const mt = h.meetings || {};
-        const half = mt.half || {};
-        const full = mt.full || {};
-        let halfVal;
-        if (half.at) { halfVal = toClubInputValue(new Date(half.at)); anchor = new Date(half.at); }
-        else { anchor = suggestSlot(anchor); halfVal = toClubInputValue(anchor); }
-        let fullVal;
-        if (full.at) { fullVal = toClubInputValue(new Date(full.at)); anchor = new Date(full.at); }
-        else { anchor = suggestSlot(anchor); fullVal = toClubInputValue(anchor); }
-        const extra = Array.isArray(mt.extra) ? mt.extra : [];
-        html += `<div class="meeting-editor" data-me-ts="${attr(h.ts || '')}">
-          <div class="me-book-title">${esc(h.book || 'Untitled')}</div>
-          <div class="me-row">
-            <label>50% meeting (Toronto)<input type="datetime-local" data-me-field="half_at" value="${attr(halfVal)}"></label>
-            <label>Read up to<input type="text" data-me-field="half_upto" value="${attr(half.upTo || '')}" placeholder="e.g. Chapter 12"></label>
-          </div>
-          <div class="me-row">
-            <label>100% meeting (Toronto)<input type="datetime-local" data-me-field="full_at" value="${attr(fullVal)}"></label>
-          </div>
-          <div class="me-extra-list">${extra.map(x => extraMeetingRowHtml(x)).join("")}</div>
-          <div class="me-row">
-            <button type="button" class="btn-mini ghost" data-me-add-extra="${attr(h.ts || '')}">Add another meeting</button>
-            <button class="btn-mini" data-me-save="${attr(h.ts || '')}">Save meetings</button>
-            ${(half.at || full.at || extra.length) ? `<button class="btn-mini ghost" data-me-announce="${attr(h.ts || '')}">Announce in Discord</button>` : ''}
-          </div>
-        </div>`;
-      });
-      html += `<div class="me-hint">Prefilled with Wednesdays 8pm <b>Toronto time</b>, biweekly — adjust and Save. Times are always entered and shown in Toronto time, wherever you are. Clear a date (or Remove an extra meeting) to drop it.</div>`;
-    }
-    html += `</div>`;
+    html += `<div class="me-hint" style="margin-top:16px;">Scheduling moved — set discussion dates in the <a class="footer-link" href="${attr(tabHash("admin", "overview"))}">Librarian</a> tab.</div>`;
   }
 
   html += `</section>`;
   return html;
+}
+
+// The per-read meeting editor, moved off the Calendar tab (§3.5 of
+// docs/librarian-dashboard-plan.md). Pure markup move: the handlers in wireUp()
+// bind by document-wide querySelectorAll, so they keep working from here with no
+// change, and every payload is byte-for-byte what it was.
+//
+// The zone labels used to be the literal string "Toronto". clubs.timezone has
+// been configurable since Phase 6 and toClubInputValue() has always used
+// clubTz(), so the VALUES were right while the LABELS told every club outside
+// Toronto to enter times in a zone they don't use.
+function meetingSchedulerHtml(currentlyReading, nextUp) {
+  const inFlight = [];
+  if (currentlyReading) inFlight.push(currentlyReading);
+  (nextUp || []).forEach(h => inFlight.push(h));
+  const tz = clubTz();
+  const tzShort = tz.split("/").pop().replace(/_/g, " ");
+  let html = `<div class="card no-rule" style="margin-top:10px;"><div class="tools-label">Discussion dates</div>`;
+  if (inFlight.length === 0) {
+    html += `<div class="empty-note">No active read to schedule. Choose the club's next read first.</div></div>`;
+    return html;
+  }
+  // Rolling suggestion anchor: latest scheduled meeting so far, else now.
+  const meetings = allMeetings();
+  let anchor = null;
+  for (const m of meetings) { if (!anchor || m.at > anchor) anchor = m.at; }
+  // Never pre-fill a date in the past: if rolling forward off a stale
+  // meeting still lands behind us, suggest from today instead.
+  const suggestSlot = (from) => {
+    const d = nextBiweeklyWednesday(from);
+    return d.getTime() < Date.now() ? nextBiweeklyWednesday(null) : d;
+  };
+  inFlight.forEach(h => {
+    const mt = h.meetings || {};
+    const half = mt.half || {};
+    const full = mt.full || {};
+    let halfVal;
+    if (half.at) { halfVal = toClubInputValue(new Date(half.at)); anchor = new Date(half.at); }
+    else { anchor = suggestSlot(anchor); halfVal = toClubInputValue(anchor); }
+    let fullVal;
+    if (full.at) { fullVal = toClubInputValue(new Date(full.at)); anchor = new Date(full.at); }
+    else { anchor = suggestSlot(anchor); fullVal = toClubInputValue(anchor); }
+    const extra = Array.isArray(mt.extra) ? mt.extra : [];
+    html += `<div class="meeting-editor" data-me-ts="${attr(h.ts || '')}">
+      <div class="me-book-title">${esc(h.book || 'Untitled')}</div>
+      <div class="me-row">
+        <label>50% meeting (${esc(tzShort)})<input type="datetime-local" data-me-field="half_at" value="${attr(halfVal)}"></label>
+        <label>Read up to<input type="text" data-me-field="half_upto" value="${attr(half.upTo || '')}" placeholder="e.g. Chapter 12"></label>
+      </div>
+      <div class="me-row">
+        <label>100% meeting (${esc(tzShort)})<input type="datetime-local" data-me-field="full_at" value="${attr(fullVal)}"></label>
+      </div>
+      <div class="me-extra-list">${extra.map(x => extraMeetingRowHtml(x)).join("")}</div>
+      <div class="me-row">
+        <button type="button" class="btn-mini ghost" data-me-add-extra="${attr(h.ts || '')}">Add another meeting</button>
+        <button class="btn-mini" data-me-save="${attr(h.ts || '')}">Save meetings</button>
+        ${(half.at || full.at || extra.length) ? `<button class="btn-mini ghost" data-me-announce="${attr(h.ts || '')}">Announce in Discord</button>` : ''}
+      </div>
+    </div>`;
+  });
+  html += `<div class="me-hint">Prefilled with Wednesdays 8pm in <b>${esc(tz)}</b>, biweekly — adjust and Save. Times are always entered and shown in the club's zone, wherever you are. Clear a date (or Remove an extra meeting) to drop it.</div>`;
+  html += `</div>`;
+  return html;
+}
+
+// ---------- Librarian dashboard ----------
+// Was one 3,504px scroll of ten identical cards, ordered by the sequence the
+// features shipped in. Now four sub-sections ordered by how often a librarian
+// touches them; see docs/librarian-dashboard-plan.md.
+//
+// The route segment stays "admin" -- it's bookmarked, and the sub-section is the
+// URL's optional third segment so it survives a reload and the back button.
+function librarianDashboardHtml(currentlyReading, nextUp) {
+  const sec = ADMIN_SECTIONS.some(s => s.id === currentSubTab) ? currentSubTab : "overview";
+  let html = `<section>
+    <div class="section-title">Librarian dashboard</div>
+    <nav class="sub-nav" role="tablist" aria-label="Librarian sections">${ADMIN_SECTIONS.map(s =>
+      `<button class="${sec === s.id ? 'on' : ''}" role="tab" aria-selected="${sec === s.id ? 'true' : 'false'}" data-subtab="${attr(s.id)}">${esc(s.label)}</button>`
+    ).join("")}</nav>
+    <select class="sub-nav-select" id="sub-nav-select" aria-label="Librarian section">${ADMIN_SECTIONS.map(s =>
+      `<option value="${attr(s.id)}" ${sec === s.id ? 'selected' : ''}>${esc(s.label)}</option>`
+    ).join("")}</select>`;
+  if (sec === "readers") html += dashReadersHtml();
+  else if (sec === "settings") html += dashSettingsHtml();
+  else if (sec === "data") html += dashDataHtml();
+  else html += dashOverviewHtml(currentlyReading, nextUp);
+  html += `</section>`;
+  return html;
+}
+
+// A club with no reads and nobody else in it doesn't need a status readout --
+// it needs to be told what to do next. This is the one thing bookclubs.com's
+// admin dashboard is squarely aimed at, and the moment a librarian most needs it.
+function dashSetupChecklistHtml() {
+  const items = [
+    { done: users.length > 1, text: `Invite your readers`, go: tabHash("admin", "readers"), cta: "Invites" },
+    { done: eligibleEntries().length > 0, text: `Get a book on the shelf`, go: tabHash("reading"), cta: "Reading" },
+    { done: state.history.length > 0, text: `Choose the club's first read`, go: tabHash("wheel"), cta: "The Wheel" },
+    { done: !!clubSettings?.has_webhook, text: `Connect Discord so picks get announced (optional)`, go: tabHash("admin", "settings"), cta: "Settings" },
+    { done: false, text: `Check the club's timezone — meeting times are read as <b>${esc(clubTz())}</b>`, go: tabHash("admin", "settings"), cta: "Settings" },
+  ];
+  return `<div class="card no-rule">
+    <div class="tools-label">Getting started</div>
+    ${items.map(i => `<div class="attn-row ${i.done ? 'done' : 'todo'}">
+      <span class="attn-mark" aria-hidden="true">${i.done ? '✓' : '○'}</span>
+      <span class="attn-text">${i.text}</span>
+      <a class="btn-mini ghost" href="${attr(i.go)}" style="text-decoration:none;">${esc(i.cta)}</a>
+    </div>`).join("")}
+  </div>`;
+}
+
+// Every value here is already in memory after loadAll -- no query runs to draw
+// this. Everything is optional-chained and defaulted on purpose: app.innerHTML
+// is assigned once at the very end of render(), so a TypeError while building
+// this block would leave the page stuck on the boot placeholder with nothing but
+// a console entry to say why (see CLAUDE.md -> Gotchas -> UI).
+function dashOverviewHtml(currentlyReading, nextUp) {
+  const lastPick = state.history[0];
+  const noBook = users.filter(u => !((u.book || "").trim())).length;
+  const liveInvites = invites.filter(i => !inviteState(i).dead).length;
+  const eligible = eligibleEntries().length;
+
+  let html = `<div class="card no-rule">
+    <div class="tools-label">${esc(clubName())} at a glance</div>
+    <div class="dash-stats">
+      <div class="dash-stat"><div class="dash-stat-n">${state.roundNumber}</div><div class="dash-stat-l">Round</div></div>
+      <div class="dash-stat"><div class="dash-stat-n">${users.length}</div><div class="dash-stat-l">Members</div></div>
+      <div class="dash-stat"><div class="dash-stat-n">${eligible}</div><div class="dash-stat-l">On the shelf</div></div>
+      <div class="dash-stat"><div class="dash-stat-n">${state.history.length}</div><div class="dash-stat-l">Reads</div></div>
+      <div class="dash-stat"><div class="dash-stat-n">${liveInvites}</div><div class="dash-stat-l">Live invites</div></div>
+    </div>
+  </div>`;
+
+  // A brand-new club gets the checklist instead of an attention list that would
+  // just be five copies of "you haven't done anything yet".
+  if (state.history.length === 0 && users.length <= 1) {
+    html += dashSetupChecklistHtml();
+  } else {
+    const attn = [];
+    if (noBook > 0) attn.push({
+      text: `${noBook} reader${noBook === 1 ? " hasn't" : "s haven't"} set a book`,
+      go: tabHash("admin", "readers"), cta: "Readers",
+    });
+    if (currentlyReading) {
+      const mt = currentlyReading.meetings || {};
+      const hasAny = !!(mt.half?.at || mt.full?.at || (Array.isArray(mt.extra) && mt.extra.length));
+      if (!hasAny) attn.push({
+        text: `No discussion dates set for <b>${esc(currentlyReading.book || "the current read")}</b>`,
+        go: null, cta: null,
+      });
+      if (ratingsOpen(currentlyReading)) {
+        const rs = reviewsFor(currentlyReading.ts) || [];
+        attn.push({
+          // Links out rather than into the dashboard -- the ratings controls
+          // stayed on the Reading banner (plan §3.6), and a row that hands the
+          // librarian to another tab shouldn't look like one that scrolls.
+          text: `Ratings are open on <b>${esc(currentlyReading.book || "the current read")}</b> — ${rs.length} of ${users.length} have reviewed`,
+          go: tabHash("reading"), cta: "Reading ↗",
+        });
+      }
+    }
+    if (clubSettings && !clubSettings.has_webhook) attn.push({
+      text: `No Discord webhook — this club posts nothing to Discord`,
+      go: tabHash("admin", "settings"), cta: "Settings",
+    });
+    if (librarianIds.size <= 1) attn.push({
+      text: `You're the only librarian. If you leave, nobody can run the club`,
+      go: tabHash("admin", "readers"), cta: "Readers",
+    });
+
+    html += `<div class="card no-rule" style="margin-top:10px;">
+      <div class="tools-label">Needs your attention</div>`;
+    html += attn.length === 0
+      ? `<div class="dash-allclear">Nothing needs you right now.</div>`
+      : attn.map(a => `<div class="attn-row todo">
+          <span class="attn-mark" aria-hidden="true">•</span>
+          <span class="attn-text">${a.text}</span>
+          ${a.go ? `<a class="btn-mini ghost" href="${attr(a.go)}" style="text-decoration:none;">${esc(a.cta)}</a>` : ''}
+        </div>`).join("");
+    html += `</div>`;
+  }
+
+  // Moved here from the Calendar tab -- plan §3.5.
+  html += meetingSchedulerHtml(currentlyReading, nextUp);
+
+  const undoDesc = lastPick
+    ? `Reverses the pick of "${lastPick.book}" by ${lastPick.winner_username}.`
+    : `No picks yet to undo.`;
+  html += `<div class="card no-rule" style="margin-top:10px;">
+    <div class="tools-label">Correct a mistake</div>
+    <div class="tool-row">
+      <button class="btn-danger" id="undo-btn" ${state.history.length === 0 ? 'disabled' : ''}>Undo last spin</button>
+      <span class="tool-row-desc">${esc(undoDesc)}</span>
+    </div>
+  </div>`;
+  return html;
+}
+
+function dashReadersHtml() {
+  let html = `<div class="card no-rule"><div class="tools-label">Manage readers</div>`;
+  if (users.length === 0) {
+    html += `<div class="empty-note">No signed-in readers yet.</div>`;
+  } else {
+    const sorted = [...users].sort((a, b) => (a.discord_username || '').localeCompare(b.discord_username || ''));
+    sorted.forEach(u => {
+      const eliminated = state.eliminated.includes(u.id);
+      const book = (u.book || '').trim();
+      html += `
+        <div class="user-row">
+          ${u.avatar_url
+            ? `<img class="leader-avatar" src="${attr(u.avatar_url)}" alt="">`
+            : `<span class="leader-avatar-placeholder"></span>`}
+          <div class="user-row-content">
+            <div class="user-row-name"><a class="reader-link" href="${readerHref(u.id, u.discord_username)}">${esc(u.discord_username || 'Reader')}</a>${isLibrarianId(u.id) ? `<span class="user-row-tag lib">Librarian</span>` : ''}${eliminated ? `<span class="user-row-tag">Picked</span>` : ''}</div>
+            <div class="user-row-book">${book ? esc(book) : 'no book set'}</div>
+          </div>
+          <div class="user-row-actions">
+            <details class="row-menu">
+              <summary class="row-menu-toggle" title="Manage reader" aria-label="Manage reader">⋯</summary>
+              <div class="row-menu-list">
+                <button class="row-menu-item" data-admin-editbook="${attr(u.id)}">Edit book</button>
+                ${book ? `<button class="row-menu-item danger" data-admin-clear="${attr(u.id)}">Clear book</button>` : ''}
+                ${isLibrarianId(u.id)
+                  ? (u.id === session.user.id ? '' : `<button class="row-menu-item danger" data-admin-revoke-lib="${attr(u.id)}">Revoke librarian</button>`)
+                  : `<button class="row-menu-item" data-admin-grant-lib="${attr(u.id)}">Make librarian</button>`}
+                <button class="row-menu-item danger" data-admin-remove="${attr(u.id)}">Remove</button>
+              </div>
+            </details>
+          </div>
+        </div>
+      `;
+    });
+  }
+  html += `</div>`;
+
+  html += `<div class="card no-rule" style="margin-top:10px;">
+    <div class="tools-label">Invitations</div>
+    <div class="tool-row">
+      <button class="btn-primary" id="inv-new">New invite link</button>
+      <label class="inv-opt">uses <input id="inv-max" type="number" min="1" max="500" placeholder="∞" style="width:72px"></label>
+      <label class="inv-opt">expires in <input id="inv-days" type="number" min="1" max="365" placeholder="never" style="width:82px"> days</label>
+    </div>`;
+  if (!invites.length) {
+    html += `<div class="empty-note">No invites yet. Anyone with a link can join this club, so treat them like keys.</div>`;
+  } else {
+    html += `<div class="invite-list">`;
+    invites.forEach(i => {
+      const st = inviteState(i);
+      html += `<div class="invite-row ${st.dead ? 'dead' : ''}">
+        <code class="invite-code">${esc(i.code)}</code>
+        <span class="invite-meta">${esc(st.label)}${i.uses ? ` · used ${i.uses}×` : ''}</span>
+        <span class="invite-actions">
+          ${st.dead ? '' : `<button class="row-menu-item" data-inv-copy="${attr(i.code)}">Copy link</button>`}
+          ${st.dead ? '' : `<button class="row-menu-item danger" data-inv-revoke="${attr(i.code)}">Revoke</button>`}
+        </span>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function dashSettingsHtml() {
+  // Defaulted, not trusted. clubs.config's client and server normalizers are two
+  // hand-maintained copies and they have already drifted apart once in
+  // production: `notify` landed in supabase/functions/_shared/club-config.mjs
+  // without the copy in this file, so clubConfig().notify came back undefined,
+  // this card threw reading .draw off it mid-render, and because app.innerHTML is
+  // only assigned at the very end of render(), the whole page sat on the boot
+  // placeholder forever instead of visibly breaking one card.
+  //
+  // Keeping the two copies in step is still the actual requirement. This is the
+  // blast radius: with these fallbacks, the NEXT drift renders a card with the
+  // wrong defaults instead of taking the app down. Covered by
+  // tests/client-librarian-dashboard.test.mjs.
+  const cfg = clubConfig() || {};
+  const selCfg = cfg.selection || {};
+  const ratingCfg = cfg.rating || {};
+  const ratingCats = ratingCfg.categories || [];
+  const ratingScale = ratingCfg.scale ?? 20;
+  const notifyCfg = cfg.notify || {};
+
+  // The timezone is the one that actually mattered: it used to be a constant,
+  // so any club not in Toronto scheduled its meetings at the wrong hour.
+  let html = `<div class="card no-rule">
+    <div class="tools-label">Club settings</div>
+    <div class="field-grid">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input id="cs-name" type="text" maxlength="80" value="${attr(club?.name || "")}">
+      </label>
+      <label class="field">
+        <span class="field-label">Timezone</span>
+        <input id="cs-tz" type="text" maxlength="64" value="${attr(clubTz())}" spellcheck="false" list="cs-tz-list">
+        <datalist id="cs-tz-list">${COMMON_TIMEZONES.map(z => `<option value="${attr(z)}"></option>`).join("")}</datalist>
+        <span class="field-hint">Meeting times are read in this zone — "8pm" means 8pm here. Currently <b>${esc(nowInClubTz())}</b>.</span>
+      </label>
+      <label class="field field-wide">
+        <span class="field-label">Tagline</span>
+        <input id="cs-tagline" type="text" maxlength="160" placeholder="optional" value="${attr(club?.tagline || "")}">
+      </label>
+    </div>
+    <label class="field-inline">
+      <input id="cs-public" type="checkbox" ${club?.visibility === "public" ? "checked" : ""}>
+      <span>Listed publicly. Off means only people with the link or an invite can see it.</span>
+    </label>
+    <p><button class="btn-primary" id="cs-save">Save settings</button></p>
+  </div>`;
+
+  // ---- Reading selection (Phase 9, docs/configurability-plan.md §2) ----
+  // Each control saves itself immediately -- there's nothing to batch, and a
+  // librarian switching modes wants to see the Wheel tab change right away.
+  html += `<div class="card no-rule" style="margin-top:10px;">
+    <div class="tools-label">How the club picks its next read</div>
+    <div class="tool-row">
+      <button class="${selCfg.mode === 'wheel' ? 'btn-primary' : 'btn-ghost'}" data-sel-mode="wheel">Wheel</button>
+      <button class="${selCfg.mode === 'rotation' ? 'btn-primary' : 'btn-ghost'}" data-sel-mode="rotation">Rotation</button>
+      <button class="${selCfg.mode === 'pick' ? 'btn-primary' : 'btn-ghost'}" data-sel-mode="pick">Librarian picks</button>
+    </div>
+    <label class="field-inline" style="margin-top:10px;">
+      <input id="cs-sitout" type="checkbox" ${selCfg.sitOut ? "checked" : ""}>
+      <span>Picked readers sit out until the round turns over. Off means anyone can be picked again right away.</span>
+    </label>
+    <p class="invite-meta">Saves as soon as you choose.</p>
+  </div>`;
+
+  // ---- The two heavyweight cards, collapsed (plan §3.4) ----
+  // Between them they were 968px of a 3,504px page, to configure things most
+  // clubs set once. Native <details>, same mechanism as .row-menu.
+  html += `<div class="card no-rule" style="margin-top:10px;">`;
+
+  // Rating rubric (Phase 10, docs/configurability-plan.md §3). The five physical
+  // shelf_reviews columns stay fixed; this only decides which are switched on
+  // and what each is called. Unchecking a category doesn't touch existing scores
+  // in it -- they just stop being asked for (set-review enforces the same active
+  // list server-side). A read already locked keeps rendering under whatever
+  // rubric it was scored with (admin_set_rating's profile snapshot), so this
+  // never rewrites history.
+  html += `<details class="cfg">
+    <summary>
+      <span class="cfg-name">Rating rubric</span>
+      <span class="cfg-summary">${esc(ratingCfg.scoreLabel || "Club score")} · ${ratingCats.length} categor${ratingCats.length === 1 ? 'y' : 'ies'} out of ${ratingScale} each</span>
+      <span class="cfg-toggle">Edit</span>
+    </summary>
+    <div class="cfg-body">
+      <div class="field-grid">
+        <label class="field">
+          <span class="field-label">Score label</span>
+          <input id="cs-score-label" type="text" maxlength="40" value="${attr(ratingCfg.scoreLabel || "Club score")}">
+        </label>
+        <label class="field">
+          <span class="field-label">Per-category max (points)</span>
+          <input id="cs-rating-scale" type="number" min="2" max="20" value="${ratingScale}" style="max-width:90px;">
+        </label>
+      </div>
+      <div class="field-label" style="margin-top:12px;">Categories — at least one</div>
+      ${RATING_SLOTS.map(slot => {
+        const active = ratingCats.find(c => c.slot === slot);
+        return `<label class="field-inline" style="margin-top:6px; align-items:center;">
+          <input type="checkbox" data-rating-slot="${attr(slot)}" ${active ? "checked" : ""}>
+          <input type="text" data-rating-label="${attr(slot)}" maxlength="40" value="${attr(active ? active.label : RATING_SLOT_LABELS[slot])}" style="flex:1; max-width:280px;">
+        </label>`;
+      }).join("")}
+      <p><button class="btn-primary" id="cs-rating-save">Save rating rubric</button></p>
+    </div>
+  </details>`;
+
+  // Discord + calendar. Both live in club_secrets, which has no RLS policies at
+  // all, so they arrive via club-admin's get_club_settings rather than a direct
+  // read. The webhook is never echoed back -- only whether one is set.
+  const webhookState = clubSettings === null ? "…" : clubSettings.has_webhook ? "connected" : "not connected";
+  html += `<details class="cfg">
+    <summary>
+      <span class="cfg-name">Discord &amp; calendar</span>
+      <span class="cfg-summary">Webhook ${esc(webhookState)}${club?.discord_guild_id ? ` · server linked` : ''} · calendar feed ${clubSettings?.calendar_token ? "live" : "…"}</span>
+      <span class="cfg-toggle">Edit</span>
+    </summary>
+    <div class="cfg-body">
+      <p class="invite-meta">With no webhook, this club posts nothing to Discord.</p>
+      <label class="field">
+        <span class="field-label">Webhook URL</span>
+        <input id="cs-webhook" type="text" placeholder="https://discord.com/api/webhooks/… (blank to remove)" spellcheck="false">
+      </label>
+      <p><button class="btn-primary" id="cs-webhook-save">Save webhook</button></p>
+      <label class="field" style="margin-top:10px;">
+        <span class="field-label">Discord server ID (for /mybook)</span>
+        <input id="cs-guild-id" type="text" inputmode="numeric" maxlength="25" placeholder="blank = /mybook won't target this club" value="${attr(club?.discord_guild_id || "")}">
+        <span class="field-hint">Right-click your server icon in Discord → Copy Server ID (enable Developer Mode in Discord settings first if that option is missing).</span>
+      </label>
+      <p><button class="btn-primary" id="cs-guild-save">Save server ID</button></p>
+      <div class="field-label" style="margin-top:14px;">Calendar feed</div>
+      <span class="field-hint">Subscribe to this in Google, Apple or Outlook.</span>
+      <div class="secret-field">
+        <input type="text" readonly id="cs-cal-url" value="${attr(clubSettings?.calendar_token ? calendarFeedUrl(clubSettings.calendar_token) : "")}" placeholder="…">
+        ${clubSettings?.calendar_token ? `<button class="btn-ghost" id="cs-cal-copy">Copy</button>` : ""}
+      </div>
+      <div class="tool-row">
+        <button class="btn-danger" id="cs-cal-rotate">Reset feed URL</button>
+        <span class="tool-row-desc">Resetting stops every existing subscription — use it if the link leaks.</span>
+      </div>
+    </div>
+  </details>`;
+
+  // ---- Notifications (Phase 11, docs/configurability-plan.md §4.2) ----
+  const NOTIFY_ROWS = [
+    { key: "draw", label: "The wheel picks a reader" },
+    { key: "bookSet", label: "Someone adds or changes their book" },
+    { key: "meeting", label: "Discussion dates are set or changed" },
+    { key: "rating", label: "A score is locked in" },
+    { key: "mentionWinner", label: "@-mention the picked reader (needs \"the wheel picks a reader\" on)" },
+  ];
+  const notifyOn = NOTIFY_ROWS.filter(r => notifyCfg[r.key]).length;
+  html += `<details class="cfg">
+    <summary>
+      <span class="cfg-name">Discord notifications</span>
+      <span class="cfg-summary">${notifyOn} of ${NOTIFY_ROWS.length} events post</span>
+      <span class="cfg-toggle">Edit</span>
+    </summary>
+    <div class="cfg-body">
+      ${NOTIFY_ROWS.map(r => `
+        <label class="field-inline" style="margin-top:6px; align-items:center;">
+          <input type="checkbox" data-notify-key="${attr(r.key)}" ${notifyCfg[r.key] ? "checked" : ""}>
+          <span>${esc(r.label)}</span>
+        </label>`).join("")}
+      <p class="invite-meta" style="margin-top:6px;">Each saves as soon as you toggle it. These only matter once a webhook is set above.</p>
+    </div>
+  </details>`;
+
+  html += `</div>`;
+  return html;
+}
+
+function dashDataHtml() {
+  return `<div class="card no-rule">
+    <div class="tools-label">Export</div>
+    <div class="tool-row">
+      <button class="btn-primary" id="export-club-btn">Download club data</button>
+      <span class="tool-row-desc">Every read, member, review and comment in ${esc(clubName())}, as a JSON file.</span>
+    </div>
+  </div>
+  <div class="card no-rule" style="margin-top:10px;">
+    <div class="tools-label">Danger zone</div>
+    <div class="tool-row">
+      <button class="btn-danger" id="reset-btn">Reset the shelf</button>
+      <span class="tool-row-desc">Wipes history, every book, and the round counter. No undo.</span>
+    </div>
+    <div class="tool-row">
+      <button class="btn-danger" id="delete-club-btn">Delete this club</button>
+      <span class="tool-row-desc">Removes ${esc(clubName())} and everything in it — reads, reviews, comments, members. No undo.</span>
+    </div>
+  </div>`;
 }
 
 function computeStats() {
@@ -4401,6 +4945,9 @@ function render() {
 
   const route = parseRoute();
   if (route.tab) currentTab = route.tab;
+  // An unknown or absent sub-section falls back to the first one rather than
+  // rendering an empty dashboard.
+  currentSubTab = ADMIN_SECTIONS.some(s => s.id === route.sub) ? route.sub : "overview";
   // Scroll to top only on an actual navigation into a detail route (hash
   // changed since the last render), not on every re-render of the same page
   // triggered by a button click (reply, react, post/delete a comment, ...).
@@ -4479,7 +5026,9 @@ function render() {
     { id: "stats", label: "Stats" },
     { id: "reviews", label: "Reviews", badge: tabBadge(unread.reviews) },
     { id: "calendar", label: "Calendar" },
-    ...(admin ? [{ id: "admin", label: "Admin", adminTab: true }] : []),
+    // The route segment stays "admin" -- it's bookmarked, and renaming it would
+    // break every existing link for the sake of a label.
+    ...(admin ? [{ id: "admin", label: "Librarian", adminTab: true }] : []),
   ];
   if (!TABS.some(t => t.id === currentTab)) currentTab = "reading";
   html += `<nav class="tabs" role="tablist" aria-label="Sections">${TABS.map(t =>
@@ -4828,244 +5377,15 @@ function render() {
 
   // ---- Calendar: meetings + subscribe URL (+ librarian editor) ----
   if (currentTab === "calendar") {
-    html += calendarTabHtml(admin, currentlyReading, nextUp);
+    html += calendarTabHtml(admin);
   }
 
-  // ---- Admin: Librarian tools ----
+  // ---- Librarian dashboard ----
+  // The whole surface lives in librarianDashboardHtml(); render() only decides
+  // whether to show it. The route segment is still "admin" (bookmarks).
   if (currentTab === "admin" && admin) {
-    const lastPick = state.history[0];
-    const undoDesc = lastPick
-      ? `Reverses the pick of "${lastPick.book}" by ${lastPick.winner_username}.`
-      : `No picks yet to undo.`;
-    html += `
-      <section>
-        <div class="section-title">Librarian tools</div>
-        <div class="card no-rule">
-          <div class="tool-row">
-            <button class="btn-primary" id="undo-btn" ${state.history.length === 0 ? 'disabled' : ''}>Undo last spin</button>
-            <span class="tool-row-desc">${esc(undoDesc)}</span>
-          </div>
-        </div>
-        <div class="card no-rule" style="margin-top:10px;">
-          <div class="tools-label">Manage readers</div>
-    `;
-    if (users.length === 0) {
-      html += `<div class="empty-note">No signed-in readers yet.</div>`;
-    } else {
-      const sorted = [...users].sort((a, b) => (a.discord_username || '').localeCompare(b.discord_username || ''));
-      sorted.forEach(u => {
-        const eliminated = state.eliminated.includes(u.id);
-        const book = (u.book || '').trim();
-        html += `
-          <div class="user-row">
-            ${u.avatar_url
-              ? `<img class="leader-avatar" src="${attr(u.avatar_url)}" alt="">`
-              : `<span class="leader-avatar-placeholder"></span>`}
-            <div class="user-row-content">
-              <div class="user-row-name"><a class="reader-link" href="${readerHref(u.id, u.discord_username)}">${esc(u.discord_username || 'Reader')}</a>${isLibrarianId(u.id) ? `<span class="user-row-tag lib">Librarian</span>` : ''}${eliminated ? `<span class="user-row-tag">Picked</span>` : ''}</div>
-              <div class="user-row-book">${book ? esc(book) : 'no book set'}</div>
-            </div>
-            <div class="user-row-actions">
-              <details class="row-menu">
-                <summary class="row-menu-toggle" title="Manage reader" aria-label="Manage reader">⋯</summary>
-                <div class="row-menu-list">
-                  <button class="row-menu-item" data-admin-editbook="${attr(u.id)}">Edit book</button>
-                  ${book ? `<button class="row-menu-item danger" data-admin-clear="${attr(u.id)}">Clear book</button>` : ''}
-                  ${isLibrarianId(u.id)
-                    ? (u.id === session.user.id ? '' : `<button class="row-menu-item danger" data-admin-revoke-lib="${attr(u.id)}">Revoke librarian</button>`)
-                    : `<button class="row-menu-item" data-admin-grant-lib="${attr(u.id)}">Make librarian</button>`}
-                  <button class="row-menu-item danger" data-admin-remove="${attr(u.id)}">Remove</button>
-                </div>
-              </details>
-            </div>
-          </div>
-        `;
-      });
-    }
-    html += `</div>`;
-    // ---- Club settings (6a) ----
-    // The timezone is the one that actually mattered: it used to be a constant,
-    // so any club not in Toronto scheduled its meetings at the wrong hour.
-    html += `<div class="card no-rule" style="margin-top:10px;">
-      <div class="tools-label">Club settings</div>
-      <label class="field">
-        <span class="field-label">Name</span>
-        <input id="cs-name" type="text" maxlength="80" value="${attr(club?.name || "")}">
-      </label>
-      <label class="field">
-        <span class="field-label">Tagline</span>
-        <input id="cs-tagline" type="text" maxlength="160" placeholder="optional" value="${attr(club?.tagline || "")}">
-      </label>
-      <label class="field">
-        <span class="field-label">Timezone</span>
-        <input id="cs-tz" type="text" maxlength="64" value="${attr(clubTz())}" spellcheck="false" list="cs-tz-list">
-        <datalist id="cs-tz-list">${COMMON_TIMEZONES.map(z => `<option value="${attr(z)}"></option>`).join("")}</datalist>
-        <span class="field-hint">Meeting times are read in this zone — "8pm" means 8pm here. Currently <b>${esc(nowInClubTz())}</b>.</span>
-      </label>
-      <label class="field-inline">
-        <input id="cs-public" type="checkbox" ${club?.visibility === "public" ? "checked" : ""}>
-        <span>Listed publicly. Off means only people with the link or an invite can see it.</span>
-      </label>
-      <p><button class="btn-primary" id="cs-save">Save settings</button></p>
-    </div>`;
-
-    // ---- Reading selection (Phase 9, docs/configurability-plan.md §2) ----
-    // Each control saves itself immediately, same as the webhook/calendar
-    // actions below -- there's nothing to batch, and a librarian switching
-    // modes wants to see the Wheel tab change right away.
-    { const selCfg = clubConfig().selection;
-    html += `<div class="card no-rule" style="margin-top:10px;">
-      <div class="tools-label">How the club picks its next read</div>
-      <div class="tool-row">
-        <button class="${selCfg.mode === 'wheel' ? 'btn-primary' : 'btn-ghost'}" data-sel-mode="wheel">Wheel</button>
-        <button class="${selCfg.mode === 'rotation' ? 'btn-primary' : 'btn-ghost'}" data-sel-mode="rotation">Rotation</button>
-        <button class="${selCfg.mode === 'pick' ? 'btn-primary' : 'btn-ghost'}" data-sel-mode="pick">Librarian picks</button>
-      </div>
-      <label class="field-inline" style="margin-top:10px;">
-        <input id="cs-sitout" type="checkbox" ${selCfg.sitOut ? "checked" : ""}>
-        <span>Picked readers sit out until the round turns over. Off means anyone can be picked again right away.</span>
-      </label>
-    </div>`;
-    }
-
-    // ---- Rating rubric (Phase 10, docs/configurability-plan.md §3) ----
-    // The five physical shelf_reviews columns stay fixed; this only decides
-    // which are switched on and what each is called. Unchecking a category
-    // doesn't touch existing scores in it -- they just stop being asked for
-    // (set-review enforces the same active list server-side) and stop
-    // showing up in new reviews or the breakdown on future locks. A read
-    // already locked keeps rendering under whatever rubric it was scored
-    // with (see admin_set_rating's profile snapshot), so this never rewrites
-    // history.
-    { const ratingCfg = clubConfig().rating;
-    html += `<div class="card no-rule" style="margin-top:10px;">
-      <div class="tools-label">Rating rubric</div>
-      <label class="field">
-        <span class="field-label">Score label</span>
-        <input id="cs-score-label" type="text" maxlength="40" value="${attr(ratingCfg.scoreLabel)}" style="max-width:220px;">
-      </label>
-      <label class="field">
-        <span class="field-label">Per-category max (points)</span>
-        <input id="cs-rating-scale" type="number" min="2" max="20" value="${ratingCfg.scale}" style="max-width:80px;">
-      </label>
-      <div class="field-label" style="margin-top:12px;">Categories — at least one</div>
-      ${RATING_SLOTS.map(slot => {
-        const active = ratingCfg.categories.find(c => c.slot === slot);
-        return `<label class="field-inline" style="margin-top:6px;">
-          <input type="checkbox" data-rating-slot="${attr(slot)}" ${active ? "checked" : ""}>
-          <input type="text" data-rating-label="${attr(slot)}" maxlength="40" value="${attr(active ? active.label : RATING_SLOT_LABELS[slot])}" style="flex:1; max-width:280px;">
-        </label>`;
-      }).join("")}
-      <p><button class="btn-primary" id="cs-rating-save">Save rating rubric</button></p>
-    </div>`;
-    }
-
-    // ---- Notifications (Phase 11, docs/configurability-plan.md §4.2) ----
-    { const notifyCfg = clubConfig().notify;
-    const NOTIFY_ROWS = [
-      { key: "draw", label: "The wheel picks a reader" },
-      { key: "bookSet", label: "Someone adds or changes their book" },
-      { key: "meeting", label: "Discussion dates are set or changed" },
-      { key: "rating", label: "A score is locked in" },
-      { key: "mentionWinner", label: "@-mention the picked reader (needs \"the wheel picks a reader\" on)" },
-    ];
-    html += `<div class="card no-rule" style="margin-top:10px;">
-      <div class="tools-label">Discord notifications</div>
-      ${NOTIFY_ROWS.map(r => `
-        <label class="field-inline" style="margin-top:6px;">
-          <input type="checkbox" data-notify-key="${attr(r.key)}" ${notifyCfg[r.key] ? "checked" : ""}>
-          <span>${esc(r.label)}</span>
-        </label>`).join("")}
-      <p class="invite-meta" style="margin-top:6px;">Each saves as soon as you toggle it. These only matter once a webhook is set below.</p>
-    </div>`;
-    }
-
-    // ---- Discord + calendar (6a) ----
-    // Both live in club_secrets, which has no RLS policies at all, so they arrive
-    // via club-admin's get_club_settings rather than a direct read. The webhook is
-    // never echoed back — only whether one is set.
-    html += `<div class="card no-rule" style="margin-top:10px;">
-      <div class="tools-label">Discord &amp; calendar</div>
-      <div class="tool-row">
-        <span class="tool-row-desc">
-          Discord webhook: <b>${clubSettings === null ? "…" : clubSettings.has_webhook ? "set" : "not set"}</b>.
-          With none, this club posts nothing to Discord.
-        </span>
-      </div>
-      <label class="field">
-        <span class="field-label">Webhook URL</span>
-        <input id="cs-webhook" type="text" placeholder="https://discord.com/api/webhooks/… (blank to remove)" spellcheck="false">
-      </label>
-      <p><button class="btn-primary" id="cs-webhook-save">Save webhook</button></p>
-      <label class="field" style="margin-top:10px;">
-        <span class="field-label">Discord server ID (for /mybook)</span>
-        <input id="cs-guild-id" type="text" inputmode="numeric" maxlength="25" placeholder="blank = /mybook won't target this club" value="${attr(club?.discord_guild_id || "")}" style="max-width:220px;">
-        <span class="field-hint">Right-click your server icon in Discord → Copy Server ID (enable Developer Mode in Discord settings first if that option is missing).</span>
-      </label>
-      <p><button class="btn-primary" id="cs-guild-save">Save server ID</button></p>
-      <div class="tool-row" style="margin-top:6px;">
-        <span class="tool-row-desc">
-          Calendar feed — subscribe to this in Google/Apple/Outlook:
-          ${clubSettings?.calendar_token
-            ? `<br><code class="invite-code">${esc(calendarFeedUrl(clubSettings.calendar_token))}</code>`
-            : "<br>…"}
-        </span>
-      </div>
-      <div class="tool-row">
-        ${clubSettings?.calendar_token ? `<button class="btn-primary" id="cs-cal-copy">Copy feed URL</button>` : ""}
-        <button class="btn-danger" id="cs-cal-rotate">Reset feed URL</button>
-        <span class="tool-row-desc">Resetting stops every existing subscription — use it if the link leaks.</span>
-      </div>
-    </div>`;
-
-    // ---- Invites (4d) ----
-    html += `<div class="card no-rule" style="margin-top:10px;">
-      <div class="tools-label">Invitations</div>
-      <div class="tool-row">
-        <button class="btn-primary" id="inv-new">New invite link</button>
-        <label class="inv-opt">uses <input id="inv-max" type="number" min="1" max="500" placeholder="∞" style="width:64px"></label>
-        <label class="inv-opt">expires in <input id="inv-days" type="number" min="1" max="365" placeholder="never" style="width:74px"> days</label>
-      </div>`;
-    if (!invites.length) {
-      html += `<div class="empty-note">No invites yet. Anyone with a link can join this club, so treat them like keys.</div>`;
-    } else {
-      html += `<div class="invite-list">`;
-      invites.forEach(i => {
-        const st = inviteState(i);
-        html += `<div class="invite-row ${st.dead ? 'dead' : ''}">
-          <code class="invite-code">${esc(i.code)}</code>
-          <span class="invite-meta">${esc(st.label)}${i.uses ? ` · used ${i.uses}×` : ''}</span>
-          <span class="invite-actions">
-            ${st.dead ? '' : `<button class="row-menu-item" data-inv-copy="${attr(i.code)}">Copy link</button>`}
-            ${st.dead ? '' : `<button class="row-menu-item danger" data-inv-revoke="${attr(i.code)}">Revoke</button>`}
-          </span>
-        </div>`;
-      });
-      html += `</div>`;
-    }
-    html += `</div>`;
-
-    html += `<div class="card no-rule" style="margin-top:10px;">
-      <div class="tools-label">Export</div>
-      <div class="tool-row">
-        <button class="btn-primary" id="export-club-btn">Download club data</button>
-        <span class="tool-row-desc">Every read, member, review and comment in ${esc(clubName())}, as a JSON file.</span>
-      </div>
-    </div>`;
-
-    html += `<div class="card no-rule" style="margin-top:10px;">
-      <div class="tools-label">Danger zone</div>
-      <div class="tool-row">
-        <button class="btn-danger" id="reset-btn">Reset the shelf</button>
-        <span class="tool-row-desc">Wipes history, every book, and the round counter. No undo.</span>
-      </div>
-      <div class="tool-row">
-        <button class="btn-danger" id="delete-club-btn">Delete this club</button>
-        <span class="tool-row-desc">Removes ${esc(clubName())} and everything in it — reads, reviews, comments, members. No undo.</span>
-      </div>
-    </div>`;
-    html += `</section>`;
-  } // end admin tab
+    html += librarianDashboardHtml(currentlyReading, nextUp);
+  }
 
   html += `</div>`; // end .tab-body
 
@@ -5194,20 +5514,24 @@ function parseRoute() {
   // clubSlug is resolved against the `clubs` table as of Phase 4 slice 4b --
   // see resolveClubFromRoute(). A route with no slug (including every older
   // #book=/#shelf=/#reader= detail route) means "the default club".
-  const club = hash.match(/^#\/c\/([^/]+)\/?([a-z]*)$/);
-  if (club) return { name: "main", clubSlug: decodeURIComponent(club[1]), tab: club[2] || null };
-  return { name: "main", clubSlug: null, tab: null };
+  // The optional third segment is the librarian dashboard's sub-section
+  // (#/c/<slug>/admin/settings). It's optional so every two-segment URL already
+  // in someone's bookmarks keeps resolving, landing on the default sub-section.
+  const club = hash.match(/^#\/c\/([^/]+)\/?([a-z]*)\/?([a-z]*)$/);
+  if (club) return { name: "main", clubSlug: decodeURIComponent(club[1]), tab: club[2] || null, sub: club[3] || null };
+  return { name: "main", clubSlug: null, tab: null, sub: null };
 }
 
-function tabHash(id) {
-  return `#/c/${clubSlug()}/${id}`;
+function tabHash(id, sub) {
+  return sub ? `#/c/${clubSlug()}/${id}/${sub}` : `#/c/${clubSlug()}/${id}`;
 }
 
-function goToTab(id) {
-  const target = tabHash(id);
+function goToTab(id, sub) {
+  const target = tabHash(id, sub);
   if (location.hash === target) {
     // Already there -- hashchange won't fire, so drive the render ourselves.
     currentTab = id;
+    if (sub) currentSubTab = sub;
     render();
   } else {
     location.hash = target;
@@ -5583,7 +5907,7 @@ function renderClubOnboarding() {
       title: "Invite your readers",
       body: others > 0
         ? `${others} other ${others === 1 ? "reader has" : "readers have"} joined.`
-        : `Create an invite link in the <b>Admin</b> tab and send it to them. Anyone with the link can join.`,
+        : `Create an invite link in the <b>Librarian</b> tab and send it to them. Anyone with the link can join.`,
     },
     {
       done: withBooks > 0,
@@ -6234,6 +6558,25 @@ function wireUp() {
       goToTab(id);
     });
   });
+
+  // Librarian dashboard sub-sections. Same rule as above: the switch goes
+  // through goToTab(), or parseRoute() reverts it on the very next render.
+  document.querySelectorAll("[data-subtab]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.subtab;
+      if (!id || id === currentSubTab) return;
+      document.activeElement?.blur?.();
+      goToTab("admin", id);
+    });
+  });
+  // The narrow-viewport equivalent -- four pills don't fit under a strip that
+  // already scrolls, so under 560px the CSS swaps in this select instead.
+  document.getElementById("sub-nav-select")?.addEventListener("change", (e) => {
+    const id = e.currentTarget.value;
+    e.currentTarget.blur();
+    if (id && id !== currentSubTab) goToTab("admin", id);
+  });
+
   const tabStrip = document.querySelector(".tabs");
   if (tabStrip) {
     tabStrip.classList.toggle("has-overflow", tabStrip.scrollWidth > tabStrip.clientWidth + 1);
