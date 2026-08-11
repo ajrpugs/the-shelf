@@ -1308,6 +1308,25 @@ const clubName = () => club?.name ?? "The Shelf";
 const HOUSE_TAGLINE = "Everyone drops a book on the shelf. The wheel picks one at random — that's the next read. Once you've been picked, you sit out until the whole shelf has had a turn.";
 const clubTagline = () => (club?.tagline || "").trim() || HOUSE_TAGLINE;
 
+// Phase 9 (docs/configurability-plan.md §1/§2): per-club config, read whole.
+// This is a straight copy of supabase/functions/_shared/club-config.mjs's
+// normalizeConfig -- the client can't import a Deno-side .mjs, so it carries
+// its own copy the same way the three Discord-embed helpers do. Change one,
+// change both, or the browser and the edge function can disagree about what
+// an absent key means.
+const SELECTION_MODES = ["wheel", "rotation", "pick"];
+function normalizeConfig(raw) {
+  const r = (raw && typeof raw === "object") ? raw : {};
+  const s = (r.selection && typeof r.selection === "object") ? r.selection : {};
+  return {
+    selection: {
+      mode: SELECTION_MODES.includes(s.mode) ? s.mode : "wheel",
+      sitOut: s.sitOut === false ? false : true,
+    },
+  };
+}
+const clubConfig = () => normalizeConfig(club?.config);
+
 // ---------- State ----------
 const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
 let state = emptyState();
@@ -1400,6 +1419,10 @@ function normalizeState(raw) {
       meetings: h.meetings ?? null,
     })) : [],
     roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
+    // Phase 9: who config.selection.mode === "rotation" picked last, so the
+    // client can show "up next" the same way admin-update computes it.
+    // Unused (stays null) for a club not in rotation mode.
+    rotationCursor: typeof r.rotationCursor === "string" ? r.rotationCursor : null,
   };
 }
 
@@ -2254,7 +2277,7 @@ async function resolveClubFromRoute() {
   clubDataLoaded = false;
   try {
     const { data, error } = await supabase
-      .from("clubs").select("id, slug, name, tagline, visibility, timezone, suspended_at").eq("slug", wanted).maybeSingle();
+      .from("clubs").select("id, slug, name, tagline, visibility, timezone, suspended_at, config").eq("slug", wanted).maybeSingle();
     if (error) throw error;
     if (!data) { club = null; clubStatus = "not_found"; return; }
     club = data;
@@ -2619,7 +2642,7 @@ async function loadAll() {
       supabase.from("shelf_state").select("data").eq("club_id", clubId()).single(),
       // Membership + book + role for this club. Replaces the unscoped
       // `shelf_users.select("*")`, which pulled every reader of every club.
-      supabase.from("club_members").select("user_id, role, book").eq("club_id", clubId()),
+      supabase.from("club_members").select("user_id, role, book, joined_at").eq("club_id", clubId()),
       supabase.from("shelf_reviews").select("*").eq("club_id", clubId()),
       supabase.from("shelf_comments").select("*").eq("club_id", clubId()),
       supabase.from("reads")
@@ -2637,6 +2660,7 @@ async function loadAll() {
     state = normalizeState({
       eliminated: sData?.data?.eliminated,
       roundNumber: sData?.data?.roundNumber,
+      rotationCursor: sData?.data?.rotationCursor,
       history: (!readsErr && readsData) ? readsData : [],
     });
     // `users` is this club's membership joined with each member's identity:
@@ -2659,7 +2683,7 @@ async function loadAll() {
     const identityById = new Map(identities.map(u => [u.id, u]));
     users = members
       .filter(m => identityById.has(m.user_id))
-      .map(m => ({ ...identityById.get(m.user_id), book: m.book, role: m.role }));
+      .map(m => ({ ...identityById.get(m.user_id), book: m.book, role: m.role, joined_at: m.joined_at }));
     // Roles come from the same fetch, so the Admin gate can't drift from the
     // membership list the rest of the UI is rendering.
     librarianIds = new Set(members.filter(m => m.role === "librarian").map(m => m.user_id));
@@ -3049,6 +3073,33 @@ function eligibleEntries() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Phase 9: who's pickable right now under the club's own config, in
+// eligibleEntries()'s { id, name, book, avatar_url } shape so rotation/pick
+// rendering can share markup with the wheel's. Mirrors what admin-update's
+// draw action computes server-side ("pool" there) -- with sit-out on, that's
+// readers with a book set who haven't already gone this round; with it off,
+// everyone with a book set. Display only: the server re-derives this itself
+// rather than trusting anything the client sends.
+function selectionPool() {
+  const elim = new Set(state.eliminated);
+  const sitOut = clubConfig().selection.sitOut;
+  return users
+    .filter(u => u.book && u.book.trim() && (!sitOut || !elim.has(u.id)))
+    .map(u => ({ id: u.id, name: u.discord_username || "Reader", book: u.book, avatar_url: u.avatar_url, joined_at: u.joined_at }));
+}
+
+// Phase 9 (mode: "rotation"): the pickable pool in stable join order, mirrors
+// _shared/shelf-logic.mjs's pickRotation. queue[0] is "up next" once the
+// cursor rotation is currently on has been rotated past.
+function rotationQueue() {
+  const pool = selectionPool();
+  const cursor = state.rotationCursor;
+  const sorted = [...pool].sort((a, b) => (a.joined_at || "").localeCompare(b.joined_at || ""));
+  const at = cursor == null ? -1 : sorted.findIndex(u => u.id === cursor);
+  if (at === -1) return sorted;
+  return [...sorted.slice(at + 1), ...sorted.slice(0, at + 1)];
+}
+
 // Book-cover images drawn as the background of each wheel slice. Kept as live
 // <img> elements (canvas can only draw already-loaded images) keyed by reader
 // id, and re-resolved when a reader's book changes.
@@ -3309,6 +3360,55 @@ async function runDraw() {
   } catch (err) {
     spinning = false;
     setFlash("err", friendlyError(err, "spin the wheel"));
+    render();
+  }
+}
+
+// Phase 9 (mode: "rotation" or "pick"): same draw action as runDraw, minus
+// the canvas spin -- there's no wheel to animate. `payload` carries
+// `{ user_id }` for pick mode; rotation needs nothing, the server derives who
+// is next from shelf_state.data.rotationCursor. Reuses `spinning` as the
+// in-flight guard so the two draw paths can't race each other.
+async function runNonWheelDraw(payload = {}) {
+  if (spinning) return;
+  if (!session) { setFlash("err", "Sign in first."); return; }
+  spinning = true;
+  render();
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-update`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ action: "draw", club_id: clubId(), payload }),
+    });
+    spinning = false;
+    if (res.status === 401 || res.status === 403) {
+      setFlash("err", "Not authorized — librarian only.");
+      render();
+      return;
+    }
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      setFlash("err", `Choosing failed: ${t || res.statusText}`);
+      render();
+      return;
+    }
+    const body = await res.json();
+    const prevRound = state.roundNumber;
+    if (body.state) state = normalizeState(body.state);
+    const picked = state.history[0];
+    if (body.roundAdvanced && state.roundNumber > prevRound) {
+      setFlash("info", `Round ${prevRound} closed. Round ${state.roundNumber} is open — everyone's back on the shelf.`);
+    } else if (picked) {
+      setFlash("info", `${picked.winner_username || "A reader"} was picked to read "${picked.book || "a book"}".`);
+    }
+    goToTab("reading");
+  } catch (err) {
+    spinning = false;
+    setFlash("err", friendlyError(err, "choose the next read"));
     render();
   }
 }
@@ -4276,32 +4376,91 @@ function render() {
   } // end shelf tab
 
   // ---- The Wheel: Choose our next read ----
+  // Phase 9 (docs/configurability-plan.md §2): the tab stays "The Wheel" in
+  // every mode -- renaming it per-club would just be another thing to keep in
+  // sync -- but what's inside it depends on config.selection.mode. Only
+  // `wheel` gets the canvas and the spin animation; `rotation` and `pick`
+  // show a plain reader list, since there's nothing random to draw.
   if (currentTab === "wheel") {
+  const selMode = clubConfig().selection.mode;
   html += `<section><div class="section-title">Choose our next read</div>`;
-  if (eligibleCount === 0) {
-    html += `<div class="wheel-empty">Add a book above to fill the shelf.</div>`;
+  const noneNote = `<div style="font-size: 12px; color: var(--muted); font-style: italic;">Only the librarian can choose the next read.</div>`;
+  if (selMode === "rotation") {
+    const queue = rotationQueue();
+    if (queue.length === 0) {
+      html += `<div class="wheel-empty">Add a book above to fill the shelf.</div>`;
+    } else {
+      html += `<div class="card no-rule">`;
+      queue.forEach((u, i) => {
+        html += `
+          <div class="user-row">
+            ${u.avatar_url ? `<img class="leader-avatar" src="${attr(u.avatar_url)}" alt="">` : `<span class="leader-avatar-placeholder"></span>`}
+            <div class="user-row-content">
+              <div class="user-row-name">${esc(u.name)}${i === 0 ? `<span class="user-row-tag lib">Up next</span>` : ''}</div>
+              <div class="user-row-book">${esc(u.book)}</div>
+            </div>
+          </div>
+        `;
+      });
+      html += `</div>`;
+      html += `<div class="spin-caption">${queue.length} in the rotation</div>`;
+    }
+    html += `<div class="spin-actions">`;
+    html += admin
+      ? `<button class="btn-primary" id="rotation-draw-btn" ${(queue.length === 0 || spinning) ? 'disabled' : ''}>${spinning ? 'Choosing…' : 'Choose next read'}</button>`
+      : noneNote;
+    html += `</div>`;
+  } else if (selMode === "pick") {
+    const pool = selectionPool();
+    if (pool.length === 0) {
+      html += `<div class="wheel-empty">Add a book above to fill the shelf.</div>`;
+    } else if (admin) {
+      html += `<div class="card no-rule" style="display:flex; flex-direction:column; gap:6px;">`;
+      pool.forEach(u => {
+        html += `<button class="row-menu-item" data-pick-user="${attr(u.id)}" ${spinning ? 'disabled' : ''}>${esc(u.name)} — ${esc(u.book)}</button>`;
+      });
+      html += `</div>`;
+    } else {
+      html += `<div class="card no-rule">`;
+      pool.forEach(u => {
+        html += `
+          <div class="user-row">
+            ${u.avatar_url ? `<img class="leader-avatar" src="${attr(u.avatar_url)}" alt="">` : `<span class="leader-avatar-placeholder"></span>`}
+            <div class="user-row-content">
+              <div class="user-row-name">${esc(u.name)}</div>
+              <div class="user-row-book">${esc(u.book)}</div>
+            </div>
+          </div>
+        `;
+      });
+      html += `</div>`;
+      html += `<div class="spin-actions">${noneNote}</div>`;
+    }
   } else {
-    // The canvas has nothing for a screen reader to read beyond a static
-    // label, so describe it with the actual roster -- hidden visually,
-    // present in the DOM for anyone not looking at the spinning wheel.
-    html += `
-      <div class="wheel-holder">
-        <div class="wheel-pointer"></div>
-        <canvas id="wheel-canvas" class="wheel-canvas" role="img" aria-label="Wheel of eligible readers" aria-describedby="wheel-reader-list"></canvas>
-      </div>
-      <ul id="wheel-reader-list" class="sr-only">
-        ${eligibleSubs.map(e => `<li>${esc(e.name)} — ${esc(e.book)}</li>`).join("")}
-      </ul>
-      <div class="spin-caption">${eligibleCount} book${eligibleCount === 1 ? '' : 's'} on the shelf</div>
-    `;
+    if (eligibleCount === 0) {
+      html += `<div class="wheel-empty">Add a book above to fill the shelf.</div>`;
+    } else {
+      // The canvas has nothing for a screen reader to read beyond a static
+      // label, so describe it with the actual roster -- hidden visually,
+      // present in the DOM for anyone not looking at the spinning wheel.
+      html += `
+        <div class="wheel-holder">
+          <div class="wheel-pointer"></div>
+          <canvas id="wheel-canvas" class="wheel-canvas" role="img" aria-label="Wheel of eligible readers" aria-describedby="wheel-reader-list"></canvas>
+        </div>
+        <ul id="wheel-reader-list" class="sr-only">
+          ${eligibleSubs.map(e => `<li>${esc(e.name)} — ${esc(e.book)}</li>`).join("")}
+        </ul>
+        <div class="spin-caption">${eligibleCount} book${eligibleCount === 1 ? '' : 's'} on the shelf</div>
+      `;
+    }
+    html += `<div class="spin-actions">`;
+    html += admin
+      ? `<button class="btn-primary" id="spin-btn" ${(eligibleCount === 0 || spinning) ? 'disabled' : ''}>${spinning ? 'Choosing…' : 'Choose our next read'}</button>`
+      : noneNote;
+    html += `</div>`;
   }
-  html += `<div class="spin-actions">`;
-  if (admin) {
-    html += `<button class="btn-primary" id="spin-btn" ${(eligibleCount === 0 || spinning) ? 'disabled' : ''}>${spinning ? 'Choosing…' : 'Choose our next read'}</button>`;
-  } else {
-    html += `<div style="font-size: 12px; color: var(--muted); font-style: italic;">Only the librarian can choose the next read.</div>`;
-  }
-  html += `</div></section>`;
+  html += `</section>`;
   } // end wheel tab
 
   // ---- Leaderboard (finished reads, ranked by Guild rating) ----
@@ -4563,6 +4722,25 @@ function render() {
       </label>
       <p><button class="btn-primary" id="cs-save">Save settings</button></p>
     </div>`;
+
+    // ---- Reading selection (Phase 9, docs/configurability-plan.md §2) ----
+    // Each control saves itself immediately, same as the webhook/calendar
+    // actions below -- there's nothing to batch, and a librarian switching
+    // modes wants to see the Wheel tab change right away.
+    { const selCfg = clubConfig().selection;
+    html += `<div class="card no-rule" style="margin-top:10px;">
+      <div class="tools-label">How the club picks its next read</div>
+      <div class="tool-row">
+        <button class="${selCfg.mode === 'wheel' ? 'btn-primary' : 'btn-ghost'}" data-sel-mode="wheel">Wheel</button>
+        <button class="${selCfg.mode === 'rotation' ? 'btn-primary' : 'btn-ghost'}" data-sel-mode="rotation">Rotation</button>
+        <button class="${selCfg.mode === 'pick' ? 'btn-primary' : 'btn-ghost'}" data-sel-mode="pick">Librarian picks</button>
+      </div>
+      <label class="field-inline" style="margin-top:10px;">
+        <input id="cs-sitout" type="checkbox" ${selCfg.sitOut ? "checked" : ""}>
+        <span>Picked readers sit out until the round turns over. Off means anyone can be picked again right away.</span>
+      </label>
+    </div>`;
+    }
 
     // ---- Discord + calendar (6a) ----
     // Both live in club_secrets, which has no RLS policies at all, so they arrive
@@ -5886,6 +6064,15 @@ function wireUp() {
   const spinBtn = document.getElementById("spin-btn");
   if (spinBtn) spinBtn.addEventListener("click", runDraw);
 
+  // Phase 9: the non-wheel draw paths. Rotation needs no payload -- the
+  // server derives who's next from shelf_state.data.rotationCursor -- and
+  // pick sends the chosen reader's id.
+  const rotationBtn = document.getElementById("rotation-draw-btn");
+  if (rotationBtn) rotationBtn.addEventListener("click", () => runNonWheelDraw({}));
+  document.querySelectorAll("[data-pick-user]").forEach(el => {
+    el.addEventListener("click", () => runNonWheelDraw({ user_id: el.dataset.pickUser }));
+  });
+
   const undoBtn = document.getElementById("undo-btn");
   if (undoBtn) undoBtn.addEventListener("click", async () => {
     const last = state.history[0];
@@ -5944,6 +6131,23 @@ function wireUp() {
     setFlash("info", "Club settings saved.");
     await loadMyClubs();
     render();
+  });
+
+  // ---- Reading selection (Phase 9) ----
+  async function saveSelection(patch) {
+    const body = await callClubAdmin("update_club", { club_id: clubId(), selection: patch });
+    if (!body?.club) { render(); return; }
+    club = { ...club, ...body.club };
+    setFlash("info", "Reading selection saved.");
+    render();
+  }
+  document.querySelectorAll("[data-sel-mode]").forEach(el => {
+    el.addEventListener("click", (e) => { e.currentTarget.blur(); saveSelection({ mode: el.dataset.selMode }); });
+  });
+  document.getElementById("cs-sitout")?.addEventListener("change", (e) => {
+    const checked = e.currentTarget.checked;
+    e.currentTarget.blur();
+    saveSelection({ sitOut: checked });
   });
 
   document.getElementById("cs-webhook-save")?.addEventListener("click", async (e) => {

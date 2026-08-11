@@ -16,12 +16,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   pickEligible,
+  pickRotation,
+  pickChosen,
   advanceIfEmpty,
   rollbackUndo,
   clampRatingTotal,
   clampCategoryScore,
   buildMeeting,
 } from "../_shared/shelf-logic.mjs";
+import { normalizeConfig } from "../_shared/club-config.mjs";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -156,11 +159,15 @@ type HistoryItem = {
   meetings?: Meetings | null; // 50% / 100% discussion dates for this read
 };
 
-// shelf_state.data now holds only these two fields — history moved out to
-// the `reads` table (Phase 0 of docs/multi-tenant-plan.md).
+// shelf_state.data now holds only these fields — history moved out to the
+// `reads` table (Phase 0 of docs/multi-tenant-plan.md). rotationCursor is
+// Phase 9: the id config.selection.mode === "rotation" chose last, so the
+// deterministic queue can pick up where it left off across draws. Unused
+// (stays null) for any club not in rotation mode.
 type GameState = {
   eliminated: string[];       // user ids
   roundNumber: number;
+  rotationCursor: string | null;
 };
 
 // --- Open Library cover lookup + Discord webhook -----------------------------
@@ -460,6 +467,7 @@ function normalizeGameState(raw: any): GameState {
   return {
     eliminated: Array.isArray(r.eliminated) ? r.eliminated : [],
     roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
+    rotationCursor: typeof r.rotationCursor === "string" ? r.rotationCursor : null,
   };
 }
 
@@ -518,8 +526,13 @@ Deno.serve(async (req) => {
   // but every write path here stops, including a librarian's own. There's no
   // UI for setting this; an operator flips it by hand (see the migration).
   const { data: clubRow } = await client
-    .from("clubs").select("suspended_at").eq("id", clubId).maybeSingle();
+    .from("clubs").select("suspended_at, config").eq("id", clubId).maybeSingle();
   if (clubRow?.suspended_at) return json({ error: "This club has been suspended." }, 403);
+
+  // Phase 9: how this club picks its next read. Every club whose row predates
+  // this key gets normalizeConfig({})'s defaults -- today's wheel/sit-out
+  // behaviour -- so this is safe to compute unconditionally.
+  const clubConfig = normalizeConfig(clubRow?.config);
 
   // shelf_state.data now holds only { eliminated, roundNumber } -- history
   // lives in the `reads` table. `version` guards against two concurrent admin
@@ -601,20 +614,62 @@ Deno.serve(async (req) => {
             discord_id: who?.discord_id ?? null,
           };
         });
-        const { eligible, chosen } = pickEligible(readers, gameState.eliminated);
-        const pickRound = gameState.roundNumber;
-        let newEliminated = [...gameState.eliminated, chosen.id];
-        let newRoundNumber = pickRound;
-        // If this pick emptied the eligible pool, roll to the next round.
-        if (advanceIfEmpty(eligible.length)) {
-          newEliminated = [];
-          newRoundNumber = pickRound + 1;
-          roundAdvanced = true;
+
+        // Phase 9 (docs/configurability-plan.md §2): sit-out governs whether a
+        // pick is removed from the pool until the round turns over. With it
+        // off, the eligible pool is simply everyone with a book set -- nobody
+        // is ever added to `eliminated`, so the round never auto-advances by
+        // emptying (a librarian still can, via new_round).
+        const pool = clubConfig.selection.sitOut
+          ? readers.filter(r => !gameState.eliminated.includes(r.id))
+          : readers;
+        if (!pool.length) throw new Error("no eligible readers");
+
+        let chosen: (typeof readers)[number];
+        if (clubConfig.selection.mode === "pick") {
+          // The librarian names who's next; validated against the real pool
+          // rather than trusted from the request.
+          const chosenId = String(payload.user_id ?? "");
+          if (!chosenId) throw new Error("user_id required for pick mode");
+          ({ chosen } = pickChosen(pool, chosenId));
+        } else if (clubConfig.selection.mode === "rotation") {
+          // Stable join order, not the wheel's randomness -- the cursor is
+          // the fairness guarantee.
+          const { data: memberRows, error: ordErr } = await client
+            .from("club_members")
+            .select("user_id, joined_at")
+            .eq("club_id", clubId)
+            .order("joined_at", { ascending: true });
+          if (ordErr) throw ordErr;
+          const order = (memberRows ?? []).map((m: { user_id: string }) => m.user_id);
+          const chosenId = pickRotation(order, pool.map(r => r.id), gameState.rotationCursor);
+          chosen = pool.find(r => r.id === chosenId)!;
+        } else {
+          // pool already excludes eliminated readers (when sit-out is on), so
+          // handing pickEligible an empty eliminated set is a no-op filter --
+          // its return shape (eligible, chosen) is what the bookkeeping below
+          // still expects.
+          ({ chosen } = pickEligible(pool, []));
         }
-        const conflict = await writeGameState({ eliminated: newEliminated, roundNumber: newRoundNumber });
+
+        const pickRound = gameState.roundNumber;
+        let newEliminated = gameState.eliminated;
+        let newRoundNumber = pickRound;
+        if (clubConfig.selection.sitOut) {
+          newEliminated = [...gameState.eliminated, chosen.id];
+          // If this pick emptied the eligible pool, roll to the next round.
+          if (advanceIfEmpty(pool.length)) {
+            newEliminated = [];
+            newRoundNumber = pickRound + 1;
+            roundAdvanced = true;
+          }
+        }
+        const newRotationCursor = clubConfig.selection.mode === "rotation" ? chosen.id : gameState.rotationCursor;
+        const conflict = await writeGameState({ eliminated: newEliminated, roundNumber: newRoundNumber, rotationCursor: newRotationCursor });
         if (conflict) return conflict;
         gameState.eliminated = newEliminated;
         gameState.roundNumber = newRoundNumber;
+        gameState.rotationCursor = newRotationCursor;
 
         const ts = new Date().toISOString();
         const { error: insErr } = await client
@@ -627,8 +682,10 @@ Deno.serve(async (req) => {
         break;
       }
       case "new_round": {
-        // Manual round advance (librarian override).
-        const conflict = await writeGameState({ eliminated: [], roundNumber: gameState.roundNumber + 1 });
+        // Manual round advance (librarian override). rotationCursor carries
+        // forward unchanged -- it's about who's next in the rotation queue,
+        // not about which round is open.
+        const conflict = await writeGameState({ eliminated: [], roundNumber: gameState.roundNumber + 1, rotationCursor: gameState.rotationCursor });
         if (conflict) return conflict;
         gameState.eliminated = [];
         gameState.roundNumber += 1;
@@ -636,10 +693,14 @@ Deno.serve(async (req) => {
         break;
       }
       case "reset": {
-        const conflict = await writeGameState({ eliminated: [], roundNumber: 1 });
+        // Wipes the shelf entirely (books, past reads), so the rotation
+        // queue starts over too rather than remembering a cursor into a
+        // roster that's about to be cleared.
+        const conflict = await writeGameState({ eliminated: [], roundNumber: 1, rotationCursor: null });
         if (conflict) return conflict;
         gameState.eliminated = [];
         gameState.roundNumber = 1;
+        gameState.rotationCursor = null;
         // Wipe this club's books and this club's past reads so its shelf is
         // truly empty. Both deletes used to be table-wide (`.neq("id", <zero
         // uuid>)`), which with a second club present would have destroyed every
@@ -670,7 +731,14 @@ Deno.serve(async (req) => {
           .neq("id", last.id);
         if (srErr) throw srErr;
         const rolled = rollbackUndo(sameRoundReads ?? [], gameState.eliminated, gameState.roundNumber, last);
-        const conflict = await writeGameState({ eliminated: rolled.eliminated, roundNumber: rolled.roundNumber });
+        // rotationCursor is deliberately NOT rolled back to whatever it was
+        // before the undone pick: it only affects which reader rotation
+        // offers next, not who's eligible, so a stale cursor after an undo is
+        // a minor ordering nit (rotation skips one extra queue slot) rather
+        // than a fairness bug. Recovering the exact prior value would need
+        // storing it on every `reads` row, which is more machinery than a
+        // Phase 9-sized feature earns.
+        const conflict = await writeGameState({ eliminated: rolled.eliminated, roundNumber: rolled.roundNumber, rotationCursor: gameState.rotationCursor });
         if (conflict) return conflict;
         gameState.eliminated = rolled.eliminated;
         gameState.roundNumber = rolled.roundNumber;
@@ -802,7 +870,11 @@ Deno.serve(async (req) => {
         if (!userId) throw new Error("user_id required");
         await removeMember(client, clubId, userId);
         const newEliminated = gameState.eliminated.filter(id => id !== userId);
-        const conflict = await writeGameState({ eliminated: newEliminated, roundNumber: gameState.roundNumber });
+        // A removed member who was the rotation cursor is handled for free:
+        // they're gone from club_members, so the next draw's `order` query
+        // won't contain them and pickRotation treats a cursor absent from the
+        // queue the same as an unset one.
+        const conflict = await writeGameState({ eliminated: newEliminated, roundNumber: gameState.roundNumber, rotationCursor: gameState.rotationCursor });
         if (conflict) return conflict;
         gameState.eliminated = newEliminated;
         break;
@@ -879,7 +951,12 @@ Deno.serve(async (req) => {
     .eq("club_id", clubId)
     .order("ts", { ascending: false });
   if (readsErr) return json({ error: readsErr.message }, 500);
-  const state = { eliminated: gameState.eliminated, roundNumber: gameState.roundNumber, history: readsRows ?? [] };
+  const state = {
+    eliminated: gameState.eliminated,
+    roundNumber: gameState.roundNumber,
+    rotationCursor: gameState.rotationCursor,
+    history: readsRows ?? [],
+  };
 
   // Fire-and-await the Discord webhook after the pick is durable. Failures are
   // logged but do not affect the response — a busted webhook shouldn't block

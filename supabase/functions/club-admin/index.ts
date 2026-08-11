@@ -15,6 +15,7 @@
 // same as every other function here.)
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { validateSelectionPatch } from "../_shared/club-config.mjs";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -373,11 +374,36 @@ Deno.serve(async (req) => {
           return json({ error: "A club's link can't be changed — it would break every invite already sent." }, 400);
         }
 
+        // Phase 9 (docs/configurability-plan.md §2): how this club picks its
+        // next read. Validated against club-config.mjs's mode list rather
+        // than duplicating it here, so accepted modes can't drift from what
+        // normalizeConfig actually understands. Only the keys the caller sent
+        // are merged onto the club's existing raw config -- a partial patch,
+        // not a full replace, so an older client that never learned about a
+        // later config key can't clobber it back to unset.
+        if (body.selection !== undefined) {
+          const raw = (body.selection && typeof body.selection === "object")
+            ? body.selection as Record<string, unknown>
+            : {};
+          const v = validateSelectionPatch(raw);
+          if ("error" in v) return json({ error: v.error }, 400);
+          const { data: existing, error: cfgErr } = await client
+            .from("clubs").select("config").eq("id", clubId).maybeSingle();
+          if (cfgErr) throw cfgErr;
+          const currentConfig = (existing?.config && typeof existing.config === "object")
+            ? existing.config as Record<string, unknown>
+            : {};
+          const currentSelection = (currentConfig.selection && typeof currentConfig.selection === "object")
+            ? currentConfig.selection as Record<string, unknown>
+            : {};
+          patch.config = { ...currentConfig, selection: { ...currentSelection, ...v.selection } };
+        }
+
         if (!Object.keys(patch).length) return json({ error: "nothing to update" }, 400);
 
         const { data: updated, error } = await client
           .from("clubs").update(patch).eq("id", clubId)
-          .select("id, slug, name, tagline, visibility, timezone").single();
+          .select("id, slug, name, tagline, visibility, timezone, config").single();
         if (error) throw error;
         return json({ ok: true, club: updated });
       }

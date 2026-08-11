@@ -767,3 +767,19 @@ alter table public.shelf_users
 
 alter table public.clubs
   add column if not exists suspended_at timestamptz;
+
+-- 29. Phase 9: clubs.config ---------------------------------------------------
+-- The load-bearing decision of docs/configurability-plan.md: one jsonb column
+-- per club, read whole for one club at a time, holding every per-club
+-- behavioural knob (starting with §2's selection mode / sit-out). Validation
+-- lives in club-admin's update_club via
+-- supabase/functions/_shared/club-config.mjs, not a CHECK constraint -- the
+-- size guard here is only a backstop. See 20260810150000_club_config.sql.
+
+alter table public.clubs
+  add column if not exists config jsonb not null default '{}'::jsonb;
+
+alter table public.clubs drop constraint if exists clubs_config_size_chk;
+alter table public.clubs
+  add constraint clubs_config_size_chk
+  check (octet_length(config::text) <= 8192);

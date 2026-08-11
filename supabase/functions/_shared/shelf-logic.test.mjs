@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   pickEligible,
+  pickRotation,
+  pickChosen,
   advanceIfEmpty,
   rollbackUndo,
   clampRatingTotal,
@@ -25,6 +27,49 @@ test("pickEligible throws when nobody is eligible", () => {
 
 test("pickEligible throws on an empty reader list", () => {
   assert.throws(() => pickEligible([], []), /no eligible readers/);
+});
+
+// ---- pickRotation (Phase 9, config.selection.mode === "rotation") ---------
+
+test("pickRotation picks the front of the queue when there's no cursor yet", () => {
+  assert.equal(pickRotation(["a", "b", "c"], ["a", "b", "c"], null), "a");
+});
+
+test("pickRotation advances to whoever comes after the cursor in join order", () => {
+  assert.equal(pickRotation(["a", "b", "c"], ["a", "b", "c"], "a"), "b");
+});
+
+test("pickRotation wraps back to the front after the last member", () => {
+  assert.equal(pickRotation(["a", "b", "c"], ["a", "b", "c"], "c"), "a");
+});
+
+test("pickRotation restricts the queue to eligible ids, skipping the rest", () => {
+  // b has no book set right now (not in eligibleIds) -- rotation skips them
+  // without losing their place in `order` for when they're eligible again.
+  assert.equal(pickRotation(["a", "b", "c"], ["a", "c"], "a"), "c");
+});
+
+test("pickRotation treats a cursor that's no longer eligible as unset", () => {
+  // The previous winner cleared their book (or left); indexOf is -1, so the
+  // pick falls back to the front of the remaining queue instead of throwing.
+  assert.equal(pickRotation(["a", "b", "c"], ["b", "c"], "a"), "b");
+});
+
+test("pickRotation throws when nobody is eligible", () => {
+  assert.throws(() => pickRotation(["a", "b"], [], null), /no eligible readers/);
+});
+
+// ---- pickChosen (Phase 9, config.selection.mode === "pick") ---------------
+
+test("pickChosen returns the named reader when they're in the eligible pool", () => {
+  const eligible = [{ id: "a" }, { id: "b" }];
+  const { chosen } = pickChosen(eligible, "b");
+  assert.equal(chosen.id, "b");
+});
+
+test("pickChosen rejects a reader who isn't actually eligible", () => {
+  const eligible = [{ id: "a" }];
+  assert.throws(() => pickChosen(eligible, "z"), /isn't eligible/);
 });
 
 // ---- advanceIfEmpty -------------------------------------------------------

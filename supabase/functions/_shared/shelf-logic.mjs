@@ -21,6 +21,38 @@ export function advanceIfEmpty(eligibleCountBeforePick) {
   return eligibleCountBeforePick - 1 === 0;
 }
 
+// draw (config.selection.mode === "rotation", Phase 9): deterministic
+// replacement for pickEligible's random choice. `order` is every member id in
+// stable join order (club_members.joined_at ascending); `eligibleIds`
+// restricts it to who's actually pickable right now -- has a book set, and,
+// when sit-out is on, hasn't already gone this round. `cursor` is the id
+// rotation chose last (shelf_state.data.rotationCursor), or null before
+// rotation has ever run in this club.
+//
+// Wraps around the *eligible* queue rather than restarting at the front of
+// `order`, so a round that just turned over picks up from wherever the last
+// round left off instead of always favoring whoever joined first. If the
+// previous cursor is no longer eligible (book cleared, or the member left),
+// indexOf returns -1 and the pick lands on the front of the queue, same as an
+// unset cursor.
+export function pickRotation(order, eligibleIds, cursor) {
+  const eligibleSet = new Set(eligibleIds);
+  const queue = order.filter(id => eligibleSet.has(id));
+  if (queue.length === 0) throw new Error("no eligible readers");
+  const at = cursor === null || cursor === undefined ? -1 : queue.indexOf(cursor);
+  return queue[(at + 1) % queue.length];
+}
+
+// draw (config.selection.mode === "pick", Phase 9): the librarian names who's
+// next. Validates against the real eligible pool rather than trusting the
+// request -- same shape as pickEligible's return so the caller's bookkeeping
+// (elimination, round-advance) doesn't need a third code path.
+export function pickChosen(eligible, chosenId) {
+  const chosen = eligible.find(u => u.id === chosenId);
+  if (!chosen) throw new Error("that reader isn't eligible right now");
+  return { eligible, chosen };
+}
+
 // undo_last_spin: roll roundNumber/eliminated back after popping `last` off
 // the front of history. `historyAfterShift` is history with `last` already
 // removed.
