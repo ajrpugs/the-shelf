@@ -32,12 +32,6 @@ const cors = {
 // Base URL of the live app, so Discord embeds can link back to a book's page.
 const SITE_URL = "https://sh3lf.net/";
 
-// Fallback club for a request that doesn't name one. Matches the seeded row in
-// supabase/schema.sql. Keeping the default means a frontend deployed before
-// slice 4b (which started sending club_id) keeps working, since functions and
-// the frontend are deployed separately and one is always briefly older.
-const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
-
 // Derive the client type from an actual createClient(...) call rather than from
 // `ReturnType<typeof createClient>`. The latter resolves supabase-js's generic
 // defaults to never/unknown instead of the any/"public" a real call infers, so
@@ -434,23 +428,31 @@ async function postRatingToDiscord(
   }
 }
 
-// The club's own Discord webhook, falling back to the project-wide env secret.
+// The club's own Discord webhook, and nothing else. A club with none posts
+// nothing, which is exactly what the Admin tab promises.
 //
-// Phase 6a: a club supplies its own webhook (or none, and gets no Discord posts).
-// The env secret stays as the fallback so the seeded club keeps working without
-// anyone re-entering anything, and so a club that wants the shared channel can
-// simply not set one. club_secrets has no RLS policies -- only the service role
-// can read this, which is the whole reason the table exists.
+// This used to fall back to the project-wide DISCORD_WEBHOOK_URL env secret --
+// i.e. the seeded club's channel -- so that the seeded club kept working without
+// anyone re-entering anything. That was safe only while one club existed. With a
+// second, a stranger's club would announce its draws, meeting times and locked
+// scores, with member names and avatars, into a Discord server none of its
+// members are in. Phase 8 removes the fallback; the seeded club's URL now lives
+// in its own club_secrets row like everyone else's.
+//
+// club_secrets has no RLS policies -- only the service role can read this, which
+// is the whole reason the table exists.
+//
+// Three copies of this exist (here, set-book, discord-interactions). Change all
+// three or one channel silently keeps the old behaviour.
 async function webhookFor(client: AdminClient, clubId: string): Promise<string | undefined> {
   try {
     const { data } = await client
       .from("club_secrets").select("discord_webhook_url").eq("club_id", clubId).maybeSingle();
-    const own = (data?.discord_webhook_url as string | null) || null;
-    if (own) return own;
+    return (data?.discord_webhook_url as string | null) || undefined;
   } catch (err) {
     console.error("club webhook lookup failed:", err);
+    return undefined;
   }
-  return Deno.env.get("DISCORD_WEBHOOK_URL") || undefined;
 }
 
 function normalizeGameState(raw: any): GameState {
@@ -489,12 +491,17 @@ Deno.serve(async (req) => {
   let body: { action?: string; club_id?: string; payload?: Record<string, unknown> };
   try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
 
-  // The caller names the club; the gate below is what makes that safe. An absent
-  // club_id means the seeded club, so an older deployed frontend keeps working
-  // through the window where functions and frontend are at different versions.
-  const clubId = String(body.club_id ?? DEFAULT_CLUB_ID);
+  // The caller names the club; the gate below is what makes that safe.
+  //
+  // Required, as of Phase 8. It used to default to the seeded club so that a
+  // frontend deployed before slice 4b (which started sending club_id) kept
+  // working through the window where the two are at different versions. That
+  // window closed several phases ago, and the default's remaining effect was to
+  // turn any future action that forgot to pass a club into a silent write against
+  // somebody else's club. A 400 is the whole point: the failure is loud.
+  const clubId = String(body.club_id ?? "");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clubId)) {
-    return json({ error: "invalid club_id" }, 400);
+    return json({ error: "club_id required" }, 400);
   }
 
   // Club-scoped, not global: a shelf_librarians row makes someone a librarian

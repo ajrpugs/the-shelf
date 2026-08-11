@@ -1300,6 +1300,13 @@ let myNameCustomised = false; // true once they've chosen it, which stops sign-i
 const clubId = () => club?.id ?? DEFAULT_CLUB_ID;
 const clubSlug = () => club?.slug ?? DEFAULT_CLUB_SLUG;
 const clubName = () => club?.name ?? "The Shelf";
+// What the header explains under the club's name. A club that wrote a tagline in
+// Admin -> Club settings gets its own words (it was stored and length-checked
+// from Phase 6 but rendered nowhere until Phase 8); a club that hasn't gets the
+// house description of how the wheel works. Both go through esc() at the use
+// site -- a tagline is member-supplied text.
+const HOUSE_TAGLINE = "Everyone drops a book on the shelf. The wheel picks one at random — that's the next read. Once you've been picked, you sit out until the whole shelf has had a turn.";
+const clubTagline = () => (club?.tagline || "").trim() || HOUSE_TAGLINE;
 
 // ---------- State ----------
 const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
@@ -4160,9 +4167,9 @@ function render() {
 
   let html = `
     <header>
-      <div class="eyebrow">The Guild · Round ${state.roundNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
+      <div class="eyebrow">${esc(clubName())} · Round ${state.roundNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
       <h1>The Shelf</h1>
-      <div class="sub">Everyone drops a book on the shelf. The wheel picks one at random — that's the next read. Once you've been picked, you sit out until the whole shelf has had a turn.</div>
+      <div class="sub">${esc(clubTagline())}</div>
       <div class="rule"></div>
       <div class="signed-in-strip">
         ${avatar ? `<img class="avatar" src="${attr(avatar)}" alt="">` : ''}
@@ -5157,7 +5164,7 @@ const clubNeedsOnboarding = () =>
 
 function renderDetailMissing(app, back, loading, msg) {
   app.innerHTML = `
-    <header><div class="eyebrow">The Guild</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">${esc(clubName())}</div><h1>The Shelf</h1><div class="rule"></div></header>
     ${back}
     <div class="setup">
       <h2>${loading ? 'Loading…' : 'Book not found'}</h2>
@@ -5697,7 +5704,12 @@ function renderLoginGate() {
   const only = AUTH_PROVIDERS.filter(p => p.enabled);
   return `
     <header>
-      <div class="eyebrow">The Guild</div>
+      <!-- Deliberately not a club name. This is the product's front door, reached
+           before any club is resolved (resolveClubFromRoute needs a session to
+           check membership, so the club variable is still null here) -- and
+           naming one club on it told every visitor they were arriving somewhere
+           they mostly weren't. -->
+      <div class="eyebrow">Book club</div>
       <h1>The Shelf</h1>
       <div class="sub">A book-club picker where the wheel of names decides.</div>
       <div class="rule"></div>

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 "The Shelf" is a multi-club book-club picker, live at **https://sh3lf.net/**. Readers sign in (Discord or Google), each set one book, and a librarian spins a wheel that randomly picks an eligible reader. Picked readers sit out until the round turns over. On top of that sit a rubric review system (members score a finished read 1–20 across five categories, averaged into a /100 "Guild score") and per-book comment threads.
 
-Any signed-in reader can **create a club** (`#/new`, 3 per day), invite people with a code (`#/join/<code>`), leave, or delete a club they run. **Which club a page shows comes from the URL** (`#/c/<slug>/<tab>`); **which club a write touches comes from a `club_id` in the request** — never from a constant. `DEFAULT_CLUB_ID` survives only as the fallback for a request that names no club, which is what lets the frontend and the edge functions deploy in either order.
+Any signed-in reader can **create a club** (`#/new`, 3 per day), invite people with a code (`#/join/<code>`), leave, or delete a club they run. **Which club a page shows comes from the URL** (`#/c/<slug>/<tab>`); **which club a write touches comes from a `club_id` in the request** — never from a constant, and as of Phase 8 never from a default either: `admin-update`, `set-book`, `set-review` and `post-comment` all 400 on an absent `club_id`. `DEFAULT_CLUB_ID` survives only in `calendar-feed` (a tokenless feed URL predates the token) and `discord-interactions` (a slash command carries a guild, never a club).
 
 There is **no build step and no framework**. The frontend is a single `index.html` (~5,900 lines) — a vanilla JS ES module that pulls `@supabase/supabase-js` from esm.sh and renders everything by hand, including a `<canvas>` spinning wheel. All persistence is Supabase (Postgres + Realtime + Edge Functions).
 
@@ -90,7 +90,10 @@ These are the things that have actually bitten. Most cost a bug before they were
 ### Multi-club
 
 - **A caller naming its own `club_id` is only safe because every function re-authorizes against it.** `admin-update` requires the librarian role for that club; `set-book`, `set-review` and `post-comment` require membership of it. **Never add a club-scoped action without that check.**
+- **`club_id` is required, not defaulted.** Those four functions 400 with `club_id required` when it's absent. They used to fall back to the seeded club so an older frontend kept working across a deploy window; the effect that outlived the window was that any action forgetting to pass a club wrote to The Guild instead of failing. **A new club-scoped action must fail loudly, never guess.**
+- **`webhookFor()` returns the club's own webhook or nothing** — no fallback to the `DISCORD_WEBHOOK_URL` env secret. That fallback meant a club with no webhook posted its draws, meeting times and locked scores, with member names and avatars, into the seeded club's Discord server, while the Admin tab promised the opposite. It never fired only because no second club existed. The seeded club's URL now lives in its own `club_secrets` row like everyone else's, and **a club with no webhook gets silence** — which is what `docs/configurability-plan.md` §4.3 is for. All three copies (`admin-update`, `set-book`, `discord-interactions`) must stay in step; `tests/tenant-correctness.test.mjs` fails if any of them reads the env var again.
 - `set-book` deliberately **updates** rather than upserts the membership row — an upsert would let any caller insert themselves into any club and appear on its shelf.
+- **The header is the club's, not The Guild's.** The eyebrow is `clubName()` and `.sub` is `clubTagline()` — the tagline was stored and length-checked from Phase 6 but rendered nowhere until Phase 8. `HOUSE_TAGLINE` is the fallback for a club that hasn't written one. The sign-in gate deliberately carries **no** club name: it's reached before `resolveClubFromRoute()` can run (that needs a session to check membership), so there is no club to name.
 - **Meeting times are pinned to the club's zone** (`clubs.timezone` via `clubTz()`), not the browser's. `clubWallToInstant` / `toClubInputValue` convert wall-clock ↔ UTC via `Intl.DateTimeFormat`, so DST is handled for whichever zone the club uses. Never use bare `new Date("...T20:00")` on a `datetime-local` value, and **never let an edge function parse one** — their local time is UTC, so `T20:00` would read as 8pm UTC. This is entirely client-side; no edge function reads `timezone`, because they only handle instants. `clubDTFFor(tz)` builds the formatter per call — the zone changes when you switch clubs, and a cached one would keep the previous club's.
 
 ### Auth
@@ -165,7 +168,7 @@ supabase functions deploy discord-interactions --no-verify-jwt
 supabase functions deploy calendar-feed --no-verify-jwt
 
 # Server-side secrets (never in the HTML)
-supabase secrets set DISCORD_WEBHOOK_URL='...'   # fallback for clubs with none of their own
+supabase secrets set DISCORD_WEBHOOK_URL='...'   # UNUSED since Phase 8 — safe to unset
 supabase secrets set DISCORD_PUBLIC_KEY='...'    # from the Discord app portal
 
 # Local database (see below)
@@ -174,6 +177,9 @@ supabase db reset
 
 # Cross-tenant RLS isolation check. Hits the LINKED live project — it needs real
 # members to simulate JWTs for — and cleans up the throwaway club it creates.
+# Also carries the Phase 8 deploy gate: it fails if the seeded club has no
+# club_secrets.discord_webhook_url of its own, because deploying the three Discord
+# functions in that state silently stops its posts.
 node --test supabase/tests/rls-isolation.test.mjs
 ```
 
@@ -214,6 +220,6 @@ This repo is linked to Supabase project ref `yoobgxxyvcmsianfczam` (`supabase/.t
 ## Secrets & config
 
 - **Public, in the HTML:** `SUPABASE_URL`, `SUPABASE_ANON_KEY` — safe to commit.
-- **Server-side only:** `DISCORD_WEBHOOK_URL` (the fallback for clubs with no webhook of their own), `DISCORD_PUBLIC_KEY`. `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are injected into functions automatically.
+- **Server-side only:** `DISCORD_PUBLIC_KEY`. `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are injected into functions automatically. `DISCORD_WEBHOOK_URL` is **no longer read by anything** — Phase 8 removed the fallback that made it every club's webhook of last resort (see Gotchas → Multi-club). It can be unset.
 - **Per-club secrets** live in `club_secrets`, reachable only through `club-admin`.
 - **Sign-in providers** are `AUTH_PROVIDERS` in `index.html`. `enabled` is a deploy-time switch, not feature detection: there's no way to ask Supabase whether a provider is configured, and a live-looking button that errors is worse than an absent one. **Email/password accounts are deliberately not offered** — see `docs/multi-tenant-plan.md` §4.

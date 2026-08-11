@@ -23,6 +23,25 @@ import { join } from "node:path";
 
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 
+// A throwaway slug that satisfies clubs_slug_shape_chk:
+//   ^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$  and  no '--'
+// i.e. 3..32 chars, alphanumeric at both ends. This test originally interpolated
+// a whole randomUUID() into the slug, which was fine until the shape constraint
+// landed (20260808150000) and silently made every insert here a 23514 -- so both
+// tests in this file were failing before they asserted anything, and nobody saw
+// it because this file is deliberately not part of the default `node --test`
+// run. 12 hex chars is 48 bits, ample for a row that is deleted seconds later.
+// The club *id* stays a full uuid; only the slug has a shape to satisfy.
+function throwawaySlug(prefix) {
+  const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
+  const slug = `${prefix}-${suffix}`;
+  assert.ok(
+    /^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$/.test(slug) && !slug.includes("--"),
+    `throwaway slug "${slug}" would violate clubs_slug_shape_chk — shorten the prefix`,
+  );
+  return slug;
+}
+
 function runSql(sql) {
   const dir = mkdtempSync(join(tmpdir(), "shelf-rls-"));
   const file = join(dir, "query.sql");
@@ -80,7 +99,9 @@ test("RLS isolates a private club's data from everyone but its own members", asy
   assert.ok(userA && userB, "need at least 2 existing club_members on the default club to run this test");
 
   const testClubId = randomUUID();
-  const testSlug = `rls-isolation-test-${testClubId}`;
+  const testSlug = throwawaySlug("rls-isolation");
+  // book_ts is plain text with no constraint, so this one can stay long and
+  // obvious -- it's what makes a stray row recognisable if cleanup ever fails.
   const testTs = `rls-isolation-test-${testClubId}`;
   const testCommentId = randomUUID();
 
@@ -142,6 +163,31 @@ test("RLS isolates a private club's data from everyone but its own members", asy
       `);
       assert.deepEqual(toCounts(row), { reads: 1, state: 1, reviews: 1, comments: 1, reactions: 1, members: 1 });
     });
+
+    // Phase 8 (§0.1). webhookFor() used to resolve the club's own webhook and
+    // then, finding none, fall back to the DISCORD_WEBHOOK_URL env secret -- the
+    // seeded club's channel. So this throwaway club, and every real club created
+    // by a stranger, would have posted its draws, meeting times and locked scores
+    // into a Discord server none of its members are in, while the Admin tab said
+    // "With none, this club posts nothing to Discord."
+    //
+    // The env secret is not visible from SQL, so what this asserts is the input
+    // the three copies of webhookFor now read and nothing else: a fresh club's
+    // club_secrets row carries no webhook, therefore resolves to undefined,
+    // therefore posts nothing. tests/tenant-correctness.test.mjs holds the other
+    // half -- that no copy reads the env var any more.
+    await t.test("a fresh club resolves no Discord webhook", () => {
+      // Exactly what club-admin's create_club inserts: a row with a club_id and
+      // nothing else. A club with no club_secrets row at all resolves to
+      // undefined too, but the row is the case that used to be misread as
+      // "configured, fall through".
+      runSql(`insert into club_secrets (club_id) values ('${testClubId}');`);
+      const [row] = runSql(`
+        select discord_webhook_url is null as no_webhook
+        from club_secrets where club_id = '${testClubId}';
+      `);
+      assert.equal(row.no_webhook, true, "a newly created club must carry no webhook of its own");
+    });
   } finally {
     runSql(`
       delete from shelf_comment_reactions where club_id = '${testClubId}';
@@ -149,10 +195,35 @@ test("RLS isolates a private club's data from everyone but its own members", asy
       delete from shelf_reviews where club_id = '${testClubId}';
       delete from reads where club_id = '${testClubId}';
       delete from shelf_state where club_id = '${testClubId}';
+      delete from club_secrets where club_id = '${testClubId}';
       delete from club_members where club_id = '${testClubId}';
       delete from clubs where id = '${testClubId}';
     `);
   }
+});
+
+// Phase 8 deploy gate, not an isolation check.
+//
+// Removing the env fallback is safe for every club except the one that was
+// relying on it. The seeded club has been posting through DISCORD_WEBHOOK_URL
+// since Phase 6a with no webhook of its own, so deploying the three functions
+// before its URL is in club_secrets makes it go quiet -- no error, no warning,
+// just a club that stops announcing its draws.
+//
+// This test failing means: open Admin -> Club settings on the seeded club and
+// paste the webhook URL in (club-admin's set_club_webhook), THEN deploy. It is a
+// separate test rather than an assertion inside the one above because its
+// subject is production data, not the throwaway club.
+test("the seeded club has a webhook of its own, so removing the env fallback keeps it posting", () => {
+  const [row] = runSql(`
+    select coalesce(discord_webhook_url, '') <> '' as has_webhook
+    from club_secrets where club_id = '${DEFAULT_CLUB_ID}';
+  `) ?? [];
+  assert.ok(
+    row && row.has_webhook === true,
+    "the seeded club has no club_secrets.discord_webhook_url. Set it in Admin -> Club settings " +
+      "before deploying admin-update / set-book / discord-interactions, or its Discord posts stop.",
+  );
 });
 
 // Phase 3.5: the keys that identify a club's state and its reads are per-club,
@@ -161,12 +232,14 @@ test("RLS isolates a private club's data from everyone but its own members", asy
 test("club state and read keys are scoped per club", async (t) => {
   const clubOne = randomUUID();
   const clubTwo = randomUUID();
+  const slugOne = throwawaySlug("key-scoping-one");
+  const slugTwo = throwawaySlug("key-scoping-two");
   const sharedTs = `key-scoping-test-${randomUUID()}`;
 
   runSql(`
     insert into clubs (id, slug, name, visibility) values
-      ('${clubOne}', 'key-scoping-one-${clubOne}', 'Key scoping one', 'private'),
-      ('${clubTwo}', 'key-scoping-two-${clubTwo}', 'Key scoping two', 'private');
+      ('${clubOne}', '${slugOne}', 'Key scoping one', 'private'),
+      ('${clubTwo}', '${slugTwo}', 'Key scoping two', 'private');
     insert into shelf_state (club_id) values ('${clubOne}'), ('${clubTwo}');
   `);
 

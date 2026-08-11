@@ -23,10 +23,6 @@ const cors = {
 // Base URL of the live app, so Discord embeds can link back to the book's page.
 const SITE_URL = "https://sh3lf.net/";
 
-// Fallback club for a request that does not name one (see clubId below).
-// Matches the seeded row in supabase/schema.sql.
-const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
-
 // --- Open Library cover lookup -----------------------------------------------
 
 function normalizeForMatch(s: string): string {
@@ -116,23 +112,23 @@ function createServiceClient(url: string, key: string) {
 }
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
-// The club's own Discord webhook, falling back to the project-wide env secret.
+// The club's own Discord webhook, and nothing else. A club with none posts
+// nothing, which is exactly what the Admin tab promises.
 //
-// Phase 6a: a club supplies its own webhook (or none, and gets no Discord posts).
-// The env secret stays as the fallback so the seeded club keeps working without
-// anyone re-entering anything, and so a club that wants the shared channel can
-// simply not set one. club_secrets has no RLS policies -- only the service role
-// can read this, which is the whole reason the table exists.
+// Phase 8 removed a fallback to the project-wide DISCORD_WEBHOOK_URL env secret
+// -- the seeded club's channel -- which would have leaked every other club's
+// book-set posts into a server none of its members are in. See the fuller note
+// on the copy in admin-update; a third copy lives in discord-interactions, and
+// all three must change together.
 async function webhookFor(client: ServiceClient, clubId: string): Promise<string | undefined> {
   try {
     const { data } = await client
       .from("club_secrets").select("discord_webhook_url").eq("club_id", clubId).maybeSingle();
-    const own = (data?.discord_webhook_url as string | null) || null;
-    if (own) return own;
+    return (data?.discord_webhook_url as string | null) || undefined;
   } catch (err) {
     console.error("club webhook lookup failed:", err);
+    return undefined;
   }
-  return Deno.env.get("DISCORD_WEBHOOK_URL") || undefined;
 }
 
 // --- Server ------------------------------------------------------------------
@@ -161,11 +157,11 @@ Deno.serve(async (req) => {
   const book = String(body.book ?? "").trim();
 
   // The caller names the club (Phase 4 slice 4b); the membership check below is
-  // what makes that safe. Absent means the seeded club, so a frontend deployed
-  // before this change keeps working.
-  const clubId = String(body.club_id ?? DEFAULT_CLUB_ID);
+  // what makes that safe. Required as of Phase 8 -- the old default to the seeded
+  // club existed only to survive a deploy-ordering window that has long closed.
+  const clubId = String(body.club_id ?? "");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clubId)) {
-    return json({ error: "invalid club_id" }, 400);
+    return json({ error: "club_id required" }, 400);
   }
 
   const admin = createServiceClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);

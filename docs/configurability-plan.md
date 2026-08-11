@@ -10,6 +10,13 @@ Read `docs/multi-tenant-plan.md` §2 and §3 first. Several things below were al
 
 ## 0. Fix first: three places the seeded club leaks into everyone else's
 
+**Status: done (Phase 8).** All three are fixed in the working tree; the section is kept as the record of *why*, since none of the three is visible in the code that replaced it. Two things about the fix that the plan below did not anticipate:
+
+- **The seeded club had no webhook of its own** — confirmed against production, not assumed. So removing the fallback makes it go *silent* rather than keep working, and the ordering in §0.1 is a hard prerequisite, not a nicety. `supabase/tests/rls-isolation.test.mjs` now fails until `club_secrets.discord_webhook_url` is set for `the-guild`, which turns that prerequisite into something that can't be forgotten.
+- **`renderClubProblem` had already been fixed** (its eyebrow reads "Book club"), and the third literal the plan meant is in `renderDetailMissing`, not there. The line numbers in §0.2 below are from an earlier revision of the file.
+
+Verification added: `tests/tenant-correctness.test.mjs` (offline; asserts the fallback is absent from all three copies, that the four functions require `club_id`, that every client call site passes one, and that no header eyebrow is a club-name literal) plus the two new cases in `rls-isolation.test.mjs`.
+
 These are not features. They are live defects in what Phase 4–7 already shipped, and each one gets worse the moment a second club exists.
 
 ### 0.1 Every club posts into The Guild's Discord
@@ -180,7 +187,7 @@ Each phase is independently shippable and leaves the app working. Migrations lan
 
 | Phase | Contents | Size |
 |---|---|---|
-| **8 — Tenant correctness** | §0.1 webhook leak, §0.2 club branding in the header and gate, §0.3 required `club_id` | S |
+| **8 — Tenant correctness** ✅ | §0.1 webhook leak, §0.2 club branding in the header and gate, §0.3 required `club_id` | S |
 | **9 — Config foundation + selection** | `clubs.config`, `_shared/club-config.mjs`, `update_club` validation, §2 `rotation` / `pick` / `sitOut`, mode-aware Wheel tab | M |
 | **10 — Rating profiles** | §3 slots, DNF constraint, normalized total, profile snapshot on lock, score label | M |
 | **11 — Notification control** | §4.2 event toggles, §4.3 in-app activity + `last_seen_at`, §4.4 per-user prefs | M |
@@ -192,7 +199,7 @@ Phase 8 should ship on its own and soon; it is the only one with a live defect i
 
 The four layers in `multi-tenant-plan.md` §6 all still apply. New coverage each phase must add:
 
-- **Phase 8** — extend `supabase/tests/rls-isolation.test.mjs`'s throwaway club to assert it resolves *no* webhook. The leak is exactly the kind of thing that passes every existing test.
+- **Phase 8** ✅ — `rls-isolation.test.mjs`'s throwaway club now asserts it resolves *no* webhook, and a second test asserts the seeded club has one of its own (the deploy gate). `tests/tenant-correctness.test.mjs` covers the source-level half. Stated honestly: the source assertions prove the fallback is *absent*, not that the replacement behaves — nothing here executes an edge function, which is the gap §8's last paragraph already names.
 - **Phase 9** — `_shared/club-config.mjs` gets a `node --test` suite whose first assertion is that `normalizeConfig({})` equals today's behaviour, and `shelf-logic.mjs` gains rotation-cursor cases alongside `pickEligible`.
 - **Phase 10** — rehearse the DNF constraint change with `scripts/rehearse-migrations.sh` and confirm zero row changes; assert the normalized total is bit-identical for a five-category club.
 - **Phase 11** — `notification_prefs` joins the RLS isolation test, and both files in `supabase/backup-sql/` (a table missing from those is silently not backed up).

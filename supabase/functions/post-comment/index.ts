@@ -15,10 +15,6 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Fallback club for a request that does not name one (see clubId below). Every
-// query is scoped by the resolved club -- a `book_ts` is only unique within one.
-const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
@@ -42,11 +38,12 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
 
   // The caller names the club (Phase 4 slice 4b); the membership check below is
-  // what makes that safe. Absent means the seeded club, so an older deployed
-  // frontend keeps working.
-  const clubId = String(body.club_id ?? DEFAULT_CLUB_ID);
+  // what makes that safe. Required as of Phase 8 -- every query here is scoped by
+  // the resolved club (a `book_ts` is only unique within one), so guessing at the
+  // club is worse than refusing.
+  const clubId = String(body.club_id ?? "");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clubId)) {
-    return json({ error: "invalid club_id" }, 400);
+    return json({ error: "club_id required" }, 400);
   }
 
   const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
