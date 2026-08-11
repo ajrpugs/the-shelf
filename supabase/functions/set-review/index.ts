@@ -15,6 +15,7 @@
 // same as set-book.)
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { normalizeConfig, RATING_SLOTS } from "../_shared/club-config.mjs";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -22,13 +23,17 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const CATEGORIES = ["plot", "characters", "pacing", "language", "themes"] as const;
+// The five physical shelf_reviews columns. Phase 10: which of these are
+// "active" for a given club, and their per-category max, comes from that
+// club's config.rating (read server-side below) -- never from the request.
+const CATEGORIES = RATING_SLOTS;
 
-// A category score must be an integer 1..20.
-function coerceScore(v: unknown): number {
+// A category score must be an integer 1..scale (the club's configured
+// per-category max, default 20).
+function coerceScore(v: unknown, scale: number): number {
   const n = Math.round(Number(v));
-  if (!Number.isFinite(n) || n < 1 || n > 20) {
-    throw new Error("each category score must be a whole number from 1 to 20");
+  if (!Number.isFinite(n) || n < 1 || n > scale) {
+    throw new Error(`each category score must be a whole number from 1 to ${scale}`);
   }
   return n;
 }
@@ -114,8 +119,15 @@ Deno.serve(async (req) => {
   // that added this column. Clearing your own review above stays allowed (a
   // reduction, not new activity); submitting a new one below does not.
   const { data: clubRow } = await admin
-    .from("clubs").select("suspended_at").eq("id", clubId).maybeSingle();
+    .from("clubs").select("suspended_at, config").eq("id", clubId).maybeSingle();
   if (clubRow?.suspended_at) return json({ error: "This club has been suspended." }, 403);
+
+  // Phase 10: which categories this club actually scores, and their max --
+  // read from the club's own config, never trusted from the request. A club
+  // whose row predates this feature gets normalizeConfig's defaults: all five
+  // slots, scale 20 -- today's behaviour.
+  const ratingCfg = normalizeConfig(clubRow?.config).rating;
+  const activeSlots = new Set(ratingCfg.categories.map((c: { slot: string }) => c.slot));
 
   // Reviews are only accepted on the *current* read — the oldest pick that
   // hasn't been given a committed score yet — and only while the librarian has
@@ -133,14 +145,20 @@ Deno.serve(async (req) => {
   const dnf = body.dnf === true;
 
   // A DNF review carries no rubric scores -- the reader didn't finish the
-  // book, so there's nothing to score. A scored review still requires all
-  // five categories, same as before.
+  // book, so there's nothing to score. A scored review requires every
+  // category this club currently has active (Phase 10: that's no longer
+  // necessarily all five) -- an inactive slot is always written null,
+  // regardless of what the request sent for it, so a club that later
+  // re-activates a slot doesn't inherit stale values nobody meant to score.
   let scores: Record<string, number | null>;
   if (dnf) {
     scores = Object.fromEntries(CATEGORIES.map(c => [c, null]));
   } else {
     try {
-      scores = Object.fromEntries(CATEGORIES.map(c => [c, coerceScore((body as Record<string, unknown>)[c])]));
+      scores = Object.fromEntries(CATEGORIES.map(c => [
+        c,
+        activeSlots.has(c) ? coerceScore((body as Record<string, unknown>)[c], ratingCfg.scale) : null,
+      ]));
     } catch (err) {
       return json({ error: (err as Error).message }, 400);
     }

@@ -80,11 +80,12 @@ export function clampRatingTotal(raw) {
   return Math.max(0, Math.min(100, n));
 }
 
-// admin_set_rating: per-category breakdown clamps to 1..20; bad values are
-// dropped (undefined), not thrown.
-export function clampCategoryScore(raw) {
+// admin_set_rating: per-category breakdown clamps to 1..scale (Phase 10: a
+// club's configured per-category max, default 20); bad values are dropped
+// (undefined), not thrown.
+export function clampCategoryScore(raw, scale = 20) {
   const c = Math.round(Number(raw));
-  return Number.isFinite(c) ? Math.max(1, Math.min(20, c)) : undefined;
+  return Number.isFinite(c) ? Math.max(1, Math.min(scale, c)) : undefined;
 }
 
 // admin_set_meeting: build one meeting phase (half/full) from raw input.

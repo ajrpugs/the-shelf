@@ -1308,13 +1308,39 @@ const clubName = () => club?.name ?? "The Shelf";
 const HOUSE_TAGLINE = "Everyone drops a book on the shelf. The wheel picks one at random — that's the next read. Once you've been picked, you sit out until the whole shelf has had a turn.";
 const clubTagline = () => (club?.tagline || "").trim() || HOUSE_TAGLINE;
 
-// Phase 9 (docs/configurability-plan.md §1/§2): per-club config, read whole.
-// This is a straight copy of supabase/functions/_shared/club-config.mjs's
-// normalizeConfig -- the client can't import a Deno-side .mjs, so it carries
-// its own copy the same way the three Discord-embed helpers do. Change one,
-// change both, or the browser and the edge function can disagree about what
-// an absent key means.
+// Phase 9/10 (docs/configurability-plan.md §1/§2/§3): per-club config, read
+// whole. This is a straight copy of supabase/functions/_shared/club-config.mjs's
+// normalizeConfig (+ normalizeRatingProfile) -- the client can't import a
+// Deno-side .mjs, so it carries its own copy the same way the three
+// Discord-embed helpers do. Change one, change both, or the browser and the
+// edge function can disagree about what an absent key means.
 const SELECTION_MODES = ["wheel", "rotation", "pick"];
+const RATING_SLOTS = ["plot", "characters", "pacing", "language", "themes"];
+const RATING_SLOT_LABELS = {
+  plot: "Plot", characters: "Characters", pacing: "Organization / Pacing",
+  language: "Use of Language", themes: "Themes / Ideas",
+};
+const DEFAULT_RATING_CATEGORIES = RATING_SLOTS.map(slot => ({ slot, label: RATING_SLOT_LABELS[slot] }));
+function normalizeRatingProfile(raw) {
+  const r = (raw && typeof raw === "object") ? raw : {};
+  const scale = Number.isInteger(r.scale) && r.scale >= 2 && r.scale <= 20 ? r.scale : 20;
+  let categories = Array.isArray(r.categories) ? r.categories : null;
+  if (categories) {
+    const seen = new Set();
+    categories = categories
+      .filter(c => c && typeof c === "object" && RATING_SLOTS.includes(c.slot) && !seen.has(c.slot) && seen.add(c.slot))
+      .slice(0, RATING_SLOTS.length)
+      .map(c => ({
+        slot: c.slot,
+        label: (typeof c.label === "string" && c.label.trim()) ? c.label.trim().slice(0, 40) : RATING_SLOT_LABELS[c.slot],
+      }));
+  }
+  if (!categories || !categories.length) categories = DEFAULT_RATING_CATEGORIES;
+  const scoreLabel = (typeof r.scoreLabel === "string" && r.scoreLabel.trim())
+    ? r.scoreLabel.trim().slice(0, 40)
+    : "Club score";
+  return { scale, categories, scoreLabel };
+}
 function normalizeConfig(raw) {
   const r = (raw && typeof raw === "object") ? raw : {};
   const s = (r.selection && typeof r.selection === "object") ? r.selection : {};
@@ -1323,9 +1349,23 @@ function normalizeConfig(raw) {
       mode: SELECTION_MODES.includes(s.mode) ? s.mode : "wheel",
       sitOut: s.sitOut === false ? false : true,
     },
+    rating: normalizeRatingProfile(r.rating),
   };
 }
 const clubConfig = () => normalizeConfig(club?.config);
+// A locked read's own rubric snapshot (Phase 10), falling back to the club's
+// live config for a read locked before this existed, or one still in
+// progress. See admin-update's admin_set_rating -- same fallback rule there.
+const ratingProfileFor = (h) => (h && h.rating && h.rating.profile) ? normalizeRatingProfile(h.rating.profile) : clubConfig().rating;
+// Mirrors club-config.mjs's normalizeRatingTotal -- keep both in sync. With
+// the full 5-category/scale-20 default this is bit-identical to the old
+// "sum five categories" formula (5*20=100), so every existing score means
+// exactly what it always did.
+function normalizeTotal(values, scale) {
+  if (!values.length || !scale) return null;
+  const sum = values.reduce((a, b) => a + b, 0);
+  return Math.round((sum / (values.length * scale)) * 100);
+}
 
 // ---------- State ----------
 const emptyState = () => ({ eliminated: [], history: [], roundNumber: 1 });
@@ -2909,7 +2949,7 @@ function setRatingsOpen(bookTs, open) {
   callAdmin("admin_set_ratings_open", { ts: bookTs, open: !!open });
 }
 
-// Librarian snapshots the current member average into the committed Guild score,
+// Librarian snapshots the current member average into the committed score,
 // which drops the read onto the leaderboard (and promotes the next-up read).
 async function lockInScore(bookTs) {
   const agg = aggregateRubric(bookTs);
@@ -2917,7 +2957,7 @@ async function lockInScore(bookTs) {
   const h = state.history.find(x => x.ts === bookTs);
   const title = h?.book || "this read";
   const ok = await confirmModal(
-    `Lock in the Guild score for "${title}" at ${agg.total}/100 (${agg.band.label}), averaged from ${agg.count} review${agg.count === 1 ? '' : 's'}? It moves to the leaderboard.`,
+    `Lock in the ${scoreLabel()} for "${title}" at ${agg.total}/100 (${agg.band.label}), averaged from ${agg.count} review${agg.count === 1 ? '' : 's'}? It moves to the leaderboard.`,
     { title: "Lock in this score?", confirmLabel: "Lock in", danger: false },
   );
   if (!ok) return;
@@ -2928,13 +2968,18 @@ async function lockInScore(bookTs) {
 
 // Review wizard: one rubric category per page (so the club can score them one
 // at a time on the call), each showing the four band descriptions, then a final
-// summary + note page. Values default to the reader's prior review, or 12.
-function bandKeyOf(v) { return v >= 16 ? "exc" : v >= 11 ? "great" : v >= 6 ? "good" : "bad"; }
+// summary + note page. Values default to the reader's prior review, or 60% of
+// the club's scale (12 at the default scale 20 -- unchanged).
+function bandKeyOf(v) {
+  for (const t of ratingBandTiers(RATING_SCALE)) { if (v >= t.min) return t.band; }
+  return "bad";
+}
 
 function openRubricModal(bookTs, bookTitle) {
   const mine = myReviewFor(bookTs);
+  const defaultVal = Math.round(RATING_SCALE * 0.6);
   const vals = {};
-  RUBRIC.forEach(({ key }) => { vals[key] = (mine && !mine.dnf && Number.isFinite(Number(mine[key]))) ? Number(mine[key]) : 12; });
+  RUBRIC.forEach(({ key }) => { vals[key] = (mine && !mine.dnf && Number.isFinite(Number(mine[key]))) ? Number(mine[key]) : defaultVal; });
   let note = mine?.note || "";
   let step = 0; // 0..4 = categories, then the summary page
 
@@ -2955,14 +3000,14 @@ function openRubricModal(bookTs, bookTitle) {
         <div class="rubric-dots">${RUBRIC.map((_, i) => `<span class="${i === step ? 'on' : (i < step ? 'done' : '')}"></span>`).join("")}</div>
         <p class="rubric-sub">Scoring <b>${title}</b> — tap the band you agree on, then fine-tune.</p>
         <div class="band-cards">
-          ${RUBRIC_BANDS.map(b => `
+          ${ratingBandTiers(RATING_SCALE).map(b => `
             <button type="button" class="band-card ${b.cls} ${b.band === activeKey ? 'active' : ''}" data-band="${b.band}" data-mid="${b.mid}">
               <span class="band-card-head"><b>${b.label}</b><span class="band-range">${b.range}</span></span>
               <span class="band-desc">${esc(bands[b.band])}</span>
             </button>`).join("")}
         </div>
         <div class="rubric-slider">
-          <input type="range" min="1" max="20" step="1" value="${v}" id="rub-slider">
+          <input type="range" min="1" max="${RATING_SCALE}" step="1" value="${v}" id="rub-slider">
           <span class="rubric-val" id="rub-slval">${v}</span>
         </div>
         <div class="modal-actions">
@@ -2986,8 +3031,7 @@ function openRubricModal(bookTs, bookTitle) {
   }
 
   function renderSummary() {
-    let total = 0;
-    RUBRIC.forEach(({ key }) => { total += vals[key]; });
+    const total = normalizeTotal(RUBRIC.map(({ key }) => vals[key]), RATING_SCALE);
     const band = ratingBand(total);
     back.innerHTML = `
       <div class="modal rubric-modal">
@@ -3850,14 +3894,16 @@ function ratingTotal(h) {
 }
 
 // ---------- Member rubric reviews ----------
-// The five rubric categories, in the order they appear on the Guild scorecard,
-// each with the descriptions for the four bands (from the Guild rubric) shown
-// as scoring guidance in the review wizard.
+// The full catalog of the five possible rubric categories, each with the
+// descriptions for the four bands (from the Guild rubric) shown as scoring
+// guidance in the review wizard. This prose stays the same regardless of a
+// club's config (Phase 10 configures which slots are active and what they're
+// *labeled*, not the scoring-guidance text underneath).
 // `short` is the compact one-word form used in the per-reviewer score
 // breakdown line (bd-reviewer-scores) — derived by hand rather than sliced
 // from `label`, since "Use of Language"/"Organization / Pacing"/"Themes /
 // Ideas" don't reduce to a sensible word by taking e.g. the first one.
-const RUBRIC = [
+const RUBRIC_ALL = [
   { key: "plot", label: "Plot", short: "Plot", bands: {
     exc: "An exceptional, original, or deeply engaging story is consistently developed throughout the novel.",
     great: "An engaging story is developed throughout the novel. May contain exceptional or original moments.",
@@ -3889,13 +3935,43 @@ const RUBRIC = [
     bad: "Themes or ideas are explored clumsily. Any reflection or emotional response results from their frustrating or poor quality.",
   } },
 ];
-// Band metadata (1..20 scale), best first. `mid` is the value a band card sets.
-const RUBRIC_BANDS = [
-  { band: "exc", cls: "band-exc", label: "Excellent", range: "16–20", mid: 18 },
-  { band: "great", cls: "band-great", label: "Great", range: "11–15", mid: 13 },
-  { band: "good", cls: "band-good", label: "Good", range: "6–10", mid: 8 },
-  { band: "bad", cls: "band-bad", label: "Bad", range: "1–5", mid: 3 },
-];
+
+// Phase 10: the club-scoped active subset of RUBRIC_ALL, in the club's own
+// order and under the club's own labels -- what every one of the ~20
+// call sites below actually reads, day to day. Refreshed by refreshRubric()
+// at the top of every render(), which is early enough: nothing that reads
+// RUBRIC is reachable except through a click handler wired up after a render
+// has already happened. RATING_SCALE/SCORE_LABEL travel the same way.
+let RUBRIC = RUBRIC_ALL;
+let RATING_SCALE = 20;
+let SCORE_LABEL = "Club score";
+function refreshRubric() {
+  const rc = clubConfig().rating;
+  RATING_SCALE = rc.scale;
+  SCORE_LABEL = rc.scoreLabel;
+  RUBRIC = rc.categories.map(c => {
+    const base = RUBRIC_ALL.find(r => r.key === c.slot) || RUBRIC_ALL[0];
+    return { ...base, label: c.label };
+  });
+}
+function scoreLabel() { return SCORE_LABEL; }
+
+// Category-score band tiers for a given scale, fractions matching the /100
+// total bands (80/55/30) exactly -- at the default scale 20 this reproduces
+// today's fixed 16/11/6 thresholds bit-for-bit. `min` is each tier's lower
+// bound; `mid` is the value a band card in the review wizard sets.
+function ratingBandTiers(scale) {
+  const mid = (a, b) => Math.round((a + b) / 2);
+  const exc = Math.max(1, Math.round(scale * 0.8));
+  const great = Math.max(1, Math.round(scale * 0.55));
+  const good = Math.max(1, Math.round(scale * 0.3));
+  return [
+    { band: "exc", cls: "band-exc", label: "Excellent", range: `${exc}–${scale}`, mid: mid(exc, scale), min: exc },
+    { band: "great", cls: "band-great", label: "Great", range: `${great}–${exc - 1}`, mid: mid(great, exc - 1), min: great },
+    { band: "good", cls: "band-good", label: "Good", range: `${good}–${great - 1}`, mid: mid(good, great - 1), min: good },
+    { band: "bad", cls: "band-bad", label: "Bad", range: `1–${good - 1}`, mid: mid(1, good - 1), min: 1 },
+  ];
+}
 // Whether the librarian has opened member reviews on a read.
 function ratingsOpen(h) {
   return !!(h && h.ratingsOpen);
@@ -3909,19 +3985,19 @@ function currentReadTs() {
 function isCurrentRead(h) {
   return !!h && h.ts === currentReadTs();
 }
-// Per-category band on the 1..20 scale (same cutoffs as the /100 bands ÷ 5).
-function categoryBand(score) {
+// Per-category band, scaled to the club's own per-category max (same
+// fractions as the /100 total bands).
+function categoryBand(score, scale = RATING_SCALE) {
   if (score == null || !Number.isFinite(score)) return null;
-  if (score >= 16) return { label: "Excellent", cls: "band-exc" };
-  if (score >= 11) return { label: "Great", cls: "band-great" };
-  if (score >= 6) return { label: "Good", cls: "band-good" };
+  const tiers = ratingBandTiers(scale);
+  for (const t of tiers) { if (score >= t.min) return { label: t.label, cls: t.cls }; }
   return { label: "Bad", cls: "band-bad" };
 }
 function reviewsFor(bookTs) {
   return bookTs ? reviews.filter(r => r.book_ts === bookTs) : [];
 }
 function reviewTotal(r) {
-  return RUBRIC.reduce((s, { key }) => s + (Number(r[key]) || 0), 0);
+  return normalizeTotal(RUBRIC.map(({ key }) => Number(r[key]) || 0), RATING_SCALE);
 }
 // Superlatives drawn from the member-review data: the read the club disagreed
 // on most (highest spread of totals), and the harshest / most generous
@@ -3967,13 +4043,13 @@ function aggregateRubric(bookTs) {
   const rs = reviewsFor(bookTs).filter(r => !r.dnf);
   if (!rs.length) return null;
   const cats = {};
-  let total = 0;
+  const avgs = [];
   for (const { key } of RUBRIC) {
     const avg = rs.reduce((s, r) => s + (Number(r[key]) || 0), 0) / rs.length;
     cats[key] = avg;
-    total += avg;
+    avgs.push(avg);
   }
-  const roundedTotal = Math.round(total);
+  const roundedTotal = normalizeTotal(avgs, RATING_SCALE);
   return { count: rs.length, cats, total: roundedTotal, band: ratingBand(roundedTotal) };
 }
 
@@ -4018,7 +4094,7 @@ function bannerHtml(pick, { stamp, admin, showRate }) {
       actions = `
         <button class="btn-mini" data-rate-ts="${attr(pick.ts || '')}">${mine && !mine.dnf ? 'Edit my review' : 'Rate this read'}</button>
         <button class="btn-mini ghost" data-dnf-ts="${attr(pick.ts || '')}">${mine && mine.dnf ? 'Edit DNF note' : 'Didn’t finish it?'}</button>
-        ${(admin && agg) ? `<button class="btn-mini lock" data-lock-ts="${attr(pick.ts || '')}">Lock in Guild score</button>` : ''}
+        ${(admin && agg) ? `<button class="btn-mini lock" data-lock-ts="${attr(pick.ts || '')}">Lock in ${esc(scoreLabel())}</button>` : ''}
         ${admin ? `<button class="btn-mini ghost" data-openratings-ts="${attr(pick.ts || '')}" data-open="0">Close ratings</button>` : ''}`;
     }
     reviewBlock = `
@@ -4217,6 +4293,13 @@ function render() {
     app.innerHTML = BOOT_PLACEHOLDER;
     return;
   }
+
+  // Phase 10: club is resolved and its data loaded, so config.rating is
+  // meaningful now -- refresh before ANY route below, including the detail
+  // pages (book/tag/reader/recap) that read RUBRIC/RATING_SCALE/scoreLabel()
+  // through their own early returns rather than falling through to the main
+  // view further down.
+  refreshRubric();
 
   const route = parseRoute();
   if (route.tab) currentTab = route.tab;
@@ -4497,7 +4580,7 @@ function render() {
           </span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
           ${admin
-            ? `<button class="score-pill ${band ? band.cls : 'score-pill-empty'}" data-admin-rate="${attr(h.ts || '')}" title="Set score (librarian)" aria-label="Set Guild score for ${attr(h.book || 'this read')}">${band ? total : '＋'}</button>`
+            ? `<button class="score-pill ${band ? band.cls : 'score-pill-empty'}" data-admin-rate="${attr(h.ts || '')}" title="Set score (librarian)" aria-label="Set ${attr(scoreLabel())} for ${attr(h.book || 'this read')}">${band ? total : '＋'}</button>`
             : (band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`)}
         </div>
       `;
@@ -4739,6 +4822,38 @@ function render() {
         <input id="cs-sitout" type="checkbox" ${selCfg.sitOut ? "checked" : ""}>
         <span>Picked readers sit out until the round turns over. Off means anyone can be picked again right away.</span>
       </label>
+    </div>`;
+    }
+
+    // ---- Rating rubric (Phase 10, docs/configurability-plan.md §3) ----
+    // The five physical shelf_reviews columns stay fixed; this only decides
+    // which are switched on and what each is called. Unchecking a category
+    // doesn't touch existing scores in it -- they just stop being asked for
+    // (set-review enforces the same active list server-side) and stop
+    // showing up in new reviews or the breakdown on future locks. A read
+    // already locked keeps rendering under whatever rubric it was scored
+    // with (see admin_set_rating's profile snapshot), so this never rewrites
+    // history.
+    { const ratingCfg = clubConfig().rating;
+    html += `<div class="card no-rule" style="margin-top:10px;">
+      <div class="tools-label">Rating rubric</div>
+      <label class="field">
+        <span class="field-label">Score label</span>
+        <input id="cs-score-label" type="text" maxlength="40" value="${attr(ratingCfg.scoreLabel)}" style="max-width:220px;">
+      </label>
+      <label class="field">
+        <span class="field-label">Per-category max (points)</span>
+        <input id="cs-rating-scale" type="number" min="2" max="20" value="${ratingCfg.scale}" style="max-width:80px;">
+      </label>
+      <div class="field-label" style="margin-top:12px;">Categories — at least one</div>
+      ${RATING_SLOTS.map(slot => {
+        const active = ratingCfg.categories.find(c => c.slot === slot);
+        return `<label class="field-inline" style="margin-top:6px;">
+          <input type="checkbox" data-rating-slot="${attr(slot)}" ${active ? "checked" : ""}>
+          <input type="text" data-rating-label="${attr(slot)}" maxlength="40" value="${attr(active ? active.label : RATING_SLOT_LABELS[slot])}" style="flex:1; max-width:280px;">
+        </label>`;
+      }).join("")}
+      <p><button class="btn-primary" id="cs-rating-save">Save rating rubric</button></p>
     </div>`;
     }
 
@@ -5388,24 +5503,38 @@ function bookBadges(h) {
   return badges;
 }
 
-// The Guild review block for a past read: the committed (or live) /100 score,
-// the per-category breakdown, each member's scores + notes, and a rate button.
+// The review block for a past read: the committed (or live) /100 score, the
+// per-category breakdown, each member's scores + notes, and a rate button.
 function guildReviewHtml(h) {
-  const agg = aggregateRubric(h.ts);
   const committed = ratingTotal(h);
-  // Per-category source: live member reviews first, else a locked-in breakdown.
+  // Per-category source: a committed read always renders its own locked-in
+  // snapshot (Phase 10) -- the rubric it was actually scored under, labels
+  // and all -- never today's live config, which may have since renamed or
+  // dropped a category. An in-progress read has no snapshot yet, so it shows
+  // the live member-review average instead.
+  const agg = committed == null ? aggregateRubric(h.ts) : null;
   let cats = null;
-  if (agg) cats = agg.cats;
-  else if (h.rating && RUBRIC.some(({ key }) => Number.isFinite(Number(h.rating[key])))) {
+  let catList = RUBRIC; // { key, label } source for the breakdown below
+  let catScale = RATING_SCALE;
+  if (committed != null && h.rating) {
+    const profile = ratingProfileFor(h);
+    catList = profile.categories.map(c => ({ key: c.slot, label: c.label }));
+    catScale = profile.scale;
     cats = {};
-    RUBRIC.forEach(({ key }) => { cats[key] = Number(h.rating[key]); });
+    for (const { key } of catList) {
+      const v = Number(h.rating[key]);
+      if (Number.isFinite(v)) cats[key] = v;
+    }
+    if (!Object.keys(cats).length) cats = null;
+  } else if (agg) {
+    cats = agg.cats;
   }
   const headTotal = committed != null ? committed : (agg ? agg.total : null);
   const headBand = committed != null ? ratingBand(committed) : (agg ? agg.band : null);
   const dnfCount = reviewsFor(h.ts).filter(r => r.dnf).length;
   const dnfSuffix = dnfCount ? ` · ${dnfCount} DNF` : '';
 
-  let html = `<div class="bd-block bd-review ${headBand ? headBand.cls : ''}"><div class="bd-block-head">Guild review</div>`;
+  let html = `<div class="bd-block bd-review ${headBand ? headBand.cls : ''}"><div class="bd-block-head">${esc(scoreLabel())} review</div>`;
   const badges = bookBadges(h);
   if (badges.length) {
     html += `<div class="bd-badges">${badges.map(b => `<span class="bd-badge">${b.emoji} ${esc(b.label)}</span>`).join("")}</div>`;
@@ -5425,10 +5554,11 @@ function guildReviewHtml(h) {
 
   if (cats) {
     html += `<div class="bd-rubric" style="margin-top:14px;">`;
-    for (const { key, label } of RUBRIC) {
+    for (const { key, label } of catList) {
       const v = cats[key];
-      const b = categoryBand(v);
-      const pct = Math.max(0, Math.min(100, (v / 20) * 100));
+      if (v == null) continue;
+      const b = categoryBand(v, catScale);
+      const pct = Math.max(0, Math.min(100, (v / catScale) * 100));
       html += `<div class="bd-rubric-row ${b ? b.cls : ''}">
         <span class="bd-rubric-label">${esc(label)}</span>
         <span class="bd-rubric-bar"><span style="width:${pct}%"></span></span>
@@ -5452,11 +5582,11 @@ function guildReviewHtml(h) {
         </div>`;
         continue;
       }
-      const t = RUBRIC.reduce((s, { key }) => s + (Number(r[key]) || 0), 0);
+      const t = reviewTotal(r);
       const b = ratingBand(t);
       html += `<div class="bd-reviewer">
         <div class="bd-reviewer-head">${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<a class="reader-link" href="${readerHref(r.user_id, name)}"><b>${esc(name)}</b></a> · ${t}/100 <span class="score-pill ${b.cls}">${b.label}</span></div>
-        <div class="bd-reviewer-scores">${RUBRIC.map(({ key, short }) => `${esc(short)} ${r[key]}`).join(" · ")}</div>
+        <div class="bd-reviewer-scores">${RUBRIC.filter(({ key }) => r[key] != null).map(({ key, short }) => `${esc(short)} ${r[key]}`).join(" · ")}</div>
         ${r.note ? `<div class="bd-reviewer-note">“${esc(r.note)}”</div>` : ""}
       </div>`;
     }
@@ -6150,6 +6280,25 @@ function wireUp() {
     saveSelection({ sitOut: checked });
   });
 
+  // ---- Rating rubric (Phase 10) ----
+  document.getElementById("cs-rating-save")?.addEventListener("click", async (e) => {
+    e.currentTarget.blur();
+    const categories = RATING_SLOTS
+      .filter(slot => document.querySelector(`[data-rating-slot="${slot}"]`)?.checked)
+      .map(slot => ({ slot, label: document.querySelector(`[data-rating-label="${slot}"]`)?.value ?? "" }));
+    if (!categories.length) { setFlash("err", "Pick at least one rating category."); render(); return; }
+    const scale = Number(document.getElementById("cs-rating-scale")?.value ?? 20);
+    const scoreLabelInput = document.getElementById("cs-score-label")?.value ?? "";
+    const body = await callClubAdmin("update_club", {
+      club_id: clubId(),
+      rating: { categories, scale, scoreLabel: scoreLabelInput },
+    });
+    if (!body?.club) { render(); return; }
+    club = { ...club, ...body.club };
+    setFlash("info", "Rating rubric saved.");
+    render();
+  });
+
   document.getElementById("cs-webhook-save")?.addEventListener("click", async (e) => {
     e.currentTarget.blur();
     const input = document.getElementById("cs-webhook");
@@ -6281,8 +6430,8 @@ function wireUp() {
       const ts = el.dataset.adminRate;
       const h = state.history.find(x => x.ts === ts);
       const current = ratingTotal(h);
-      const next = await promptModal(`Set the Guild score (0–100) for "${h?.book || 'this read'}". Leave blank to clear.`, {
-        title: "Set Guild score", defaultValue: current == null ? "" : String(current), placeholder: "0–100", confirmLabel: "Save",
+      const next = await promptModal(`Set the ${scoreLabel()} (0–100) for "${h?.book || 'this read'}". Leave blank to clear.`, {
+        title: `Set ${scoreLabel()}`, defaultValue: current == null ? "" : String(current), placeholder: "0–100", confirmLabel: "Save",
       });
       if (next === null) return; // cancelled
       const trimmed = next.trim();

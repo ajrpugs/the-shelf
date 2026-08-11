@@ -125,7 +125,7 @@ test("the header and the sign-in gate carry no club's name as a literal", () => 
     "clubTagline() must render through esc()",
   );
   assert.ok(
-    html.includes('${esc(clubName())} · Round '),
-    "the main header eyebrow should name the club, escaped",
+    html.includes('<h1>${esc(clubName())}</h1>'),
+    "the main header hero should name the club, escaped",
   );
 });

@@ -783,3 +783,19 @@ alter table public.clubs drop constraint if exists clubs_config_size_chk;
 alter table public.clubs
   add constraint clubs_config_size_chk
   check (octet_length(config::text) <= 8192);
+
+-- 30. Phase 10: rating profiles ------------------------------------------
+-- A club's config.rating decides which of shelf_reviews' five typed columns
+-- are "active" and what each is labeled -- the physical columns are unchanged,
+-- so this is purely a relaxation of the DNF constraint: a scored review now
+-- needs only one active category filled in, not all five. See
+-- 20260811100000_rating_profiles.sql.
+
+alter table public.shelf_reviews drop constraint if exists shelf_reviews_dnf_scores_chk;
+alter table public.shelf_reviews
+  add constraint shelf_reviews_dnf_scores_chk
+  check (
+    (dnf and plot is null and characters is null and pacing is null and language is null and themes is null)
+    or
+    (not dnf and (plot is not null or characters is not null or pacing is not null or language is not null or themes is not null))
+  );

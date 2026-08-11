@@ -18,6 +18,53 @@
 // default for every club, including one whose config predates this key.
 export const SELECTION_MODES = ["wheel", "rotation", "pick"];
 
+// §3: the rating rubric. shelf_reviews keeps its five typed columns
+// (plot/characters/pacing/language/themes) physically -- these are slots a
+// club turns on or off and labels, not a free-form category list. The long
+// scoring-guidance prose per slot stays client-only (index.html's
+// RUBRIC_ALL); the server only ever needs to know which slots are active,
+// what they're called, and the per-category max.
+export const RATING_SLOTS = ["plot", "characters", "pacing", "language", "themes"];
+
+const RATING_SLOT_LABELS = {
+  plot: "Plot",
+  characters: "Characters",
+  pacing: "Organization / Pacing",
+  language: "Use of Language",
+  themes: "Themes / Ideas",
+};
+
+const DEFAULT_RATING_CATEGORIES = RATING_SLOTS.map(slot => ({ slot, label: RATING_SLOT_LABELS[slot] }));
+
+// A locked read snapshots the rubric it was scored under (admin-update's
+// admin_set_rating), so a later rename/reorder of the club's live categories
+// can't scramble what a past score means. Same normalizer as the live
+// config's rating key -- a read locked before this snapshot existed has no
+// `profile` field at all, and normalizing `undefined` here is exactly
+// today's behaviour, which is the fallback callers should use for those rows.
+export function normalizeRatingProfile(raw) {
+  const r = (raw && typeof raw === "object") ? raw : {};
+  const scale = Number.isInteger(r.scale) && r.scale >= 2 && r.scale <= 20 ? r.scale : 20;
+  let categories = Array.isArray(r.categories) ? r.categories : null;
+  if (categories) {
+    const seen = new Set();
+    categories = categories
+      .filter(c => c && typeof c === "object" && RATING_SLOTS.includes(c.slot) && !seen.has(c.slot) && seen.add(c.slot))
+      .slice(0, RATING_SLOTS.length)
+      .map(c => ({
+        slot: c.slot,
+        label: (typeof c.label === "string" && c.label.trim()) ? c.label.trim().slice(0, 40) : RATING_SLOT_LABELS[c.slot],
+      }));
+  }
+  // Zero valid entries (missing key, empty array, garbage) falls back to all
+  // five under their canonical labels -- today's behaviour.
+  if (!categories || !categories.length) categories = DEFAULT_RATING_CATEGORIES;
+  const scoreLabel = (typeof r.scoreLabel === "string" && r.scoreLabel.trim())
+    ? r.scoreLabel.trim().slice(0, 40)
+    : "Club score";
+  return { scale, categories, scoreLabel };
+}
+
 export function normalizeConfig(raw) {
   const r = (raw && typeof raw === "object") ? raw : {};
   const s = (r.selection && typeof r.selection === "object") ? r.selection : {};
@@ -29,6 +76,7 @@ export function normalizeConfig(raw) {
       // (missing, a stray string) stays on the safe/familiar side.
       sitOut: s.sitOut === false ? false : true,
     },
+    rating: normalizeRatingProfile(r.rating),
   };
 }
 
@@ -50,4 +98,54 @@ export function validateSelectionPatch(body) {
     patch.sitOut = body.sitOut;
   }
   return { selection: patch };
+}
+
+// update_club's validation for a rating-profile patch. Same shape as
+// validateSelectionPatch: returns { rating } (a partial to merge) or
+// { error }. Slots are restricted to RATING_SLOTS -- the five physical
+// shelf_reviews columns -- so a club can never name a category the schema
+// doesn't have a place for.
+export function validateRatingPatch(body) {
+  const patch = {};
+  if (body.scale !== undefined) {
+    const n = Math.round(Number(body.scale));
+    if (!Number.isInteger(n) || n < 2 || n > 20) return { error: "scale must be a whole number from 2 to 20" };
+    patch.scale = n;
+  }
+  if (body.scoreLabel !== undefined) {
+    const label = String(body.scoreLabel ?? "").trim();
+    if (!label) return { error: "score label can't be empty" };
+    if (label.length > 40) return { error: "score label is too long (40 characters max)" };
+    patch.scoreLabel = label;
+  }
+  if (body.categories !== undefined) {
+    if (!Array.isArray(body.categories) || !body.categories.length) {
+      return { error: "pick at least one rating category" };
+    }
+    const seen = new Set();
+    const categories = [];
+    for (const c of body.categories) {
+      const slot = c && c.slot;
+      if (!RATING_SLOTS.includes(slot)) return { error: `unknown category "${slot}"` };
+      if (seen.has(slot)) return { error: `"${slot}" is listed twice` };
+      seen.add(slot);
+      const label = String((c && c.label) ?? "").trim();
+      if (!label) return { error: "every category needs a label" };
+      if (label.length > 40) return { error: "category labels are limited to 40 characters" };
+      categories.push({ slot, label });
+    }
+    patch.categories = categories;
+  }
+  return { rating: patch };
+}
+
+// The normalization Phase 10 asks for: a category count / scale independent
+// way to land on a /100 total. With the full 5-category, scale-20 default
+// this is bit-identical to the old "sum five categories" formula (5*20=100),
+// which is what keeps every existing Guild score meaning the same thing.
+// `values` are already restricted to the active categories.
+export function normalizeRatingTotal(values, scale) {
+  if (!values.length || !scale) return null;
+  const sum = values.reduce((a, b) => a + b, 0);
+  return Math.round((sum / (values.length * scale)) * 100);
 }

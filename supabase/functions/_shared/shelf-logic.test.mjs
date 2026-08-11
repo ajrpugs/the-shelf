@@ -144,6 +144,12 @@ test("clampCategoryScore returns undefined (not throw) on bad input", () => {
   assert.equal(clampCategoryScore(undefined), undefined);
 });
 
+test("clampCategoryScore clamps to a club's own scale (Phase 10)", () => {
+  assert.equal(clampCategoryScore(0, 10), 1);
+  assert.equal(clampCategoryScore(15, 10), 10);
+  assert.equal(clampCategoryScore(7, 10), 7);
+});
+
 // ---- buildMeeting -----------------------------------------------------------
 
 test("buildMeeting returns undefined for empty/blank input (clears the phase)", () => {

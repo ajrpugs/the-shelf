@@ -133,14 +133,20 @@ async function removeMember(client: AdminClient, clubId: string, userId: string)
 
 type Rating = {
   total: number;
-  // Optional per-category breakdown (1..20 each) snapshotted from member
-  // reviews when the librarian locks in the Guild score.
+  // Optional per-category breakdown (1..scale each) snapshotted from member
+  // reviews when the librarian locks in the score.
   plot?: number;
   characters?: number;
   pacing?: number;
   language?: number;
   themes?: number;
   reviews?: number; // how many member reviews the snapshot averaged
+  // Phase 10: the rubric this read was actually scored under -- scale and
+  // which slots were active/labeled what -- so a later change to the club's
+  // live rating config can't retroactively scramble what a locked score
+  // means. Absent on anything locked before this existed; callers fall back
+  // to normalizeRatingProfile(undefined) for those rows.
+  profile?: { scale: number; categories: { slot: string; label: string }[] };
 };
 // A book-club meeting for a read: the 50% checkpoint (with how far to read) and
 // the 100% finish meeting. Each `at` is an ISO instant; either may be absent
@@ -779,13 +785,22 @@ Deno.serve(async (req) => {
         } else {
           const rating: Rating = { total: clampRatingTotal(raw) };
           // Optional per-category breakdown, sent when locking in an aggregate
-          // of member reviews. Each is clamped to 1..20; bad values are dropped.
+          // of member reviews. Restricted to this club's currently-active
+          // slots (never trust the request's own category list) and clamped
+          // to 1..scale; bad or inactive values are dropped.
+          const activeSlots = new Set(clubConfig.rating.categories.map((c: { slot: string }) => c.slot));
           for (const cat of ["plot", "characters", "pacing", "language", "themes"] as const) {
-            const c = clampCategoryScore((payload as Record<string, unknown>)[cat]);
+            if (!activeSlots.has(cat)) continue;
+            const c = clampCategoryScore((payload as Record<string, unknown>)[cat], clubConfig.rating.scale);
             if (c !== undefined) rating[cat] = c;
           }
           const rc = Math.round(Number((payload as Record<string, unknown>).reviews));
           if (Number.isFinite(rc) && rc > 0) rating.reviews = rc;
+          // Phase 10: snapshot the live profile at lock time, server-derived
+          // -- never trust a `profile` the client might send -- so this read
+          // renders under the rubric it was actually scored with even after
+          // the club later renames or reorders its categories.
+          rating.profile = { scale: clubConfig.rating.scale, categories: clubConfig.rating.categories };
           newRating = rating;
           // Announce the score only when it actually changed (a re-lock of the
           // same total stays silent, matching the meeting no-op behavior).
