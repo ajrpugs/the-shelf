@@ -9,6 +9,7 @@ import {
   clampRatingTotal,
   clampCategoryScore,
   buildMeeting,
+  buildExtraMeetings,
 } from "./shelf-logic.mjs";
 
 // ---- pickEligible --------------------------------------------------------
@@ -178,4 +179,42 @@ test("buildMeeting truncates an overlong upTo to 200 chars", () => {
   const long = "x".repeat(250);
   const m = buildMeeting("2026-08-05T20:00:00.000Z", long);
   assert.equal(m.upTo.length, 200);
+});
+
+// ---- buildExtraMeetings (Phase 12 §5.2) --------------------------------------
+
+test("buildExtraMeetings keeps a valid row, ISO-normalizing the date", () => {
+  const out = buildExtraMeetings([{ key: "extra-1", label: "Week 3", at: "2026-08-05T20:00:00.000Z" }]);
+  assert.deepEqual(out, [{ key: "extra-1", label: "Week 3", at: "2026-08-05T20:00:00.000Z" }]);
+});
+
+test("buildExtraMeetings drops a row with a bad key, blank label, or unparsable date", () => {
+  assert.deepEqual(buildExtraMeetings([{ key: "not a valid key!", label: "X", at: "2026-08-05T20:00:00.000Z" }]), []);
+  assert.deepEqual(buildExtraMeetings([{ key: "extra-1", label: "  ", at: "2026-08-05T20:00:00.000Z" }]), []);
+  assert.deepEqual(buildExtraMeetings([{ key: "extra-1", label: "X", at: "not a date" }]), []);
+  assert.deepEqual(buildExtraMeetings([{ key: "extra-1", label: "X", at: "" }]), []);
+});
+
+test("buildExtraMeetings drops one bad row without losing the others in the same save", () => {
+  const out = buildExtraMeetings([
+    { key: "extra-1", label: "Good", at: "2026-08-05T20:00:00.000Z" },
+    { key: "extra-1", label: "Duplicate key", at: "2026-08-06T20:00:00.000Z" },
+    { key: "not valid", label: "Bad key", at: "2026-08-07T20:00:00.000Z" },
+    { key: "extra-2", label: "", at: "2026-08-08T20:00:00.000Z" },
+    { key: "extra-3", label: "Also good", at: "2026-08-09T20:00:00.000Z" },
+  ]);
+  assert.deepEqual(out.map(x => x.key), ["extra-1", "extra-3"]);
+});
+
+test("buildExtraMeetings caps at 10 rows", () => {
+  const rows = Array.from({ length: 15 }, (_, i) => ({
+    key: `extra-${i}`, label: `Meeting ${i}`, at: "2026-08-05T20:00:00.000Z",
+  }));
+  assert.equal(buildExtraMeetings(rows).length, 10);
+});
+
+test("buildExtraMeetings returns [] for non-array input rather than throwing", () => {
+  assert.deepEqual(buildExtraMeetings(undefined), []);
+  assert.deepEqual(buildExtraMeetings(null), []);
+  assert.deepEqual(buildExtraMeetings("nope"), []);
 });

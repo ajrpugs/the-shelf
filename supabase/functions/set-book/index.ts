@@ -13,6 +13,7 @@
 // on any missing header, without the nice error message.)
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { normalizeConfig } from "../_shared/club-config.mjs";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -191,8 +192,9 @@ Deno.serve(async (req) => {
   // A suspended club is a moderation hold, not a delete -- see the migration
   // that added this column. No UI sets it; an operator does by hand.
   const { data: clubRow } = await admin
-    .from("clubs").select("suspended_at").eq("id", clubId).maybeSingle();
+    .from("clubs").select("suspended_at, config").eq("id", clubId).maybeSingle();
   if (clubRow?.suspended_at) return json({ error: "This club has been suspended." }, 403);
+  const clubConfig = normalizeConfig(clubRow?.config);
 
   const prev = (membership.book ?? "").trim();
 
@@ -220,8 +222,10 @@ Deno.serve(async (req) => {
   }
 
   // Post to Discord only when a book is set/changed. Clearing stays quiet.
+  // Phase 11 §4.2: notify.bookSet lets a club that finds this noisy turn it
+  // off without giving up Discord for draws/meetings/scores.
   const bookChanged = book && book !== prev;
-  if (bookChanged) {
+  if (bookChanged && clubConfig.notify.bookSet) {
     const webhookUrl = await webhookFor(admin, clubId);
     if (webhookUrl) {
       const cover = await fetchCover(book);

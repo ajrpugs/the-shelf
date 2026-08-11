@@ -1,8 +1,9 @@
 // Supabase Edge Function: calendar-feed
 //
 // Serves one club's meeting schedule as a subscribable iCalendar (.ics) feed
-// built from the `reads` table. Each read can carry a 50% and a 100% meeting;
-// this emits one VEVENT per scheduled meeting. Read-only and unauthenticated —
+// built from the `reads` table. Each read can carry a 50% meeting, a 100%
+// meeting, and (Phase 12 §5.2) any number of additional named phases; this
+// emits one VEVENT per scheduled meeting. Read-only and unauthenticated —
 // calendar clients (Google/Apple/Outlook) can't send a Supabase apikey, let
 // alone a JWT — so which club you get is decided by an unguessable per-club
 // token instead: `?token=<club_secrets.calendar_token>`.
@@ -29,11 +30,16 @@ const MEETING_MINUTES = 60; // each discussion is a 1-hour event
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 
 type Meeting = { at?: string; upTo?: string };
+// Phase 12 §5.2: any number of named phases beyond half/full. `key` is
+// client-assigned once (index.html) and is exactly what UID is built from
+// below -- it must never change once a phase exists, or every subscriber
+// gets a duplicate rather than an update.
+type ExtraMeeting = { key?: string; label?: string; at?: string };
 type HistoryItem = {
   round?: number;
   book?: string;
   ts?: string;
-  meetings?: { half?: Meeting; full?: Meeting } | null;
+  meetings?: { half?: Meeting; full?: Meeting; extra?: ExtraMeeting[] } | null;
 };
 
 // RFC 5545 basic-UTC timestamp: 20260805T230000Z
@@ -84,23 +90,23 @@ function buildIcs(history: HistoryItem[], clubName: string): string {
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     `X-WR-CALNAME:${icsText(clubName)} — Book Club`,
-    "X-WR-CALDESC:50% and 100% discussion meetings for the current and past reads.",
+    "X-WR-CALDESC:Discussion meetings for the current and past reads.",
     "X-PUBLISHED-TTL:PT1H",
     "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
   ];
 
-  const addEvent = (h: HistoryItem, phase: "half" | "full", m: Meeting) => {
-    if (!m.at) return;
-    const start = new Date(m.at);
+  // `uidSuffix` is what makes an event the SAME event across feed refreshes --
+  // for half/full it's the literal phase name, unchanged since before Phase
+  // 12; for an extra phase it's that phase's client-assigned `key`. Changing
+  // any of these later would duplicate the event for everyone already
+  // subscribed, the same trap as a club-scoping the whole UID would be.
+  const addEvent = (h: HistoryItem, uidSuffix: string, summarySuffix: string, desc: string, at: string) => {
+    const start = new Date(at);
     if (isNaN(start.getTime())) return;
     const end = new Date(start.getTime() + MEETING_MINUTES * 60 * 1000);
     const book = (h.book || "a read").trim();
-    const pct = phase === "half" ? "50%" : "100%";
-    const summary = `📖 ${book} — ${pct}`;
-    let desc = phase === "half"
-      ? (m.upTo ? `Discuss up to ${m.upTo}.` : "Halfway discussion.")
-      : "Finish-the-book discussion.";
-    desc += ` The Shelf: ${SITE_URL}#book=${h.round ?? ""}`;
+    const summary = `📖 ${book} — ${summarySuffix}`;
+    const fullDesc = `${desc} The Shelf: ${SITE_URL}#book=${h.round ?? ""}`;
     lines.push(
       "BEGIN:VEVENT",
       // Deliberately NOT club-scoped, even though `ts` is only unique per club
@@ -108,12 +114,12 @@ function buildIcs(history: HistoryItem[], clubName: string): string {
       // new, duplicating it for everyone already subscribed. Two clubs can only
       // collide here by drawing in the same millisecond, and each feed is served
       // to its own subscribers anyway.
-      `UID:shelf-${h.ts ?? h.round ?? ""}-${phase}@theshelf`,
+      `UID:shelf-${h.ts ?? h.round ?? ""}-${uidSuffix}@theshelf`,
       `DTSTAMP:${dtstamp}`,
       `DTSTART:${icsStamp(start)}`,
       `DTEND:${icsStamp(end)}`,
       `SUMMARY:${icsText(summary)}`,
-      `DESCRIPTION:${icsText(desc)}`,
+      `DESCRIPTION:${icsText(fullDesc)}`,
       `URL:${SITE_URL}#book=${h.round ?? ""}`,
       "END:VEVENT",
     );
@@ -122,8 +128,22 @@ function buildIcs(history: HistoryItem[], clubName: string): string {
   for (const h of history) {
     const mt = h.meetings;
     if (!mt) continue;
-    if (mt.half) addEvent(h, "half", mt.half);
-    if (mt.full) addEvent(h, "full", mt.full);
+    if (mt.half?.at) {
+      addEvent(h, "half", "50%", mt.half.upTo ? `Discuss up to ${mt.half.upTo}.` : "Halfway discussion.", mt.half.at);
+    }
+    if (mt.full?.at) {
+      addEvent(h, "full", "100%", "Finish-the-book discussion.", mt.full.at);
+    }
+    for (const ex of mt.extra ?? []) {
+      if (!ex?.key || !ex.at) continue;
+      // Sanitized on read, not just trusted from storage: admin-update's
+      // buildExtraMeetings already validates this shape at write time, but a
+      // reader here shouldn't be the thing that turns a stray character into
+      // a UID collision.
+      const safeKey = String(ex.key).replace(/[^a-zA-Z0-9-]/g, "").slice(0, 40) || "extra";
+      const label = (ex.label || "Meeting").trim();
+      addEvent(h, safeKey, label, `${label} discussion.`, ex.at);
+    }
   }
 
   lines.push("END:VCALENDAR");

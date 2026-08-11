@@ -23,6 +23,7 @@ import {
   clampRatingTotal,
   clampCategoryScore,
   buildMeeting,
+  buildExtraMeetings,
 } from "../_shared/shelf-logic.mjs";
 import { normalizeConfig } from "../_shared/club-config.mjs";
 
@@ -152,7 +153,10 @@ type Rating = {
 // the 100% finish meeting. Each `at` is an ISO instant; either may be absent
 // until the librarian schedules it.
 type Meeting = { at: string; upTo?: string };
-type Meetings = { half?: Meeting; full?: Meeting };
+// Phase 12 §5.2: any number of named phases beyond half/full. `key` is
+// client-assigned once and is what calendar-feed keys each VEVENT's UID on.
+type ExtraMeeting = { key: string; label: string; at: string };
+type Meetings = { half?: Meeting; full?: Meeting; extra?: ExtraMeeting[] };
 
 type HistoryItem = {
   round: number;
@@ -327,8 +331,8 @@ async function postMeetingsToDiscord(
     const t = Math.floor(new Date(iso).getTime() / 1000);
     return `<t:${t}:F> · <t:${t}:R>`;
   };
-  const cleared = !args.next || (!args.next.half && !args.next.full);
-  const hadAny = !!(args.prev && (args.prev.half || args.prev.full));
+  const cleared = !args.next || (!args.next.half && !args.next.full && !args.next.extra?.length);
+  const hadAny = !!(args.prev && (args.prev.half || args.prev.full || args.prev.extra?.length));
 
   const embed: Record<string, unknown> = {
     title: args.book || "—",
@@ -352,6 +356,9 @@ async function postMeetingsToDiscord(
     }
     if (args.next!.full?.at) {
       fields.push({ name: "100% · finish the book", value: stamp(args.next!.full!.at) });
+    }
+    for (const ex of args.next!.extra ?? []) {
+      fields.push({ name: ex.label, value: stamp(ex.at) });
     }
     embed.fields = fields;
   }
@@ -834,9 +841,10 @@ Deno.serve(async (req) => {
         break;
       }
       case "admin_set_meeting": {
-        // Librarian sets the 50% / 100% discussion dates for a read, identified
-        // by its history timestamp. Empty dates clear that phase; clearing both
-        // drops the meetings block entirely.
+        // Librarian sets the discussion dates for a read, identified by its
+        // history timestamp: 50%/100% plus, Phase 12 §5.2, any number of
+        // named extra phases. Empty dates clear that phase; clearing
+        // everything drops the meetings block entirely.
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
         const { data: entry, error: findErr } = await client
@@ -846,12 +854,14 @@ Deno.serve(async (req) => {
         if (!entry) throw new Error("history item not found");
         const half = buildMeeting(payload.half_at, payload.half_upto);
         const full = buildMeeting(payload.full_at, undefined);
+        const extra = buildExtraMeetings(payload.extra);
         const prev = entry.meetings ?? null;
         let next: Meetings | null = null;
-        if (half || full) {
+        if (half || full || extra.length) {
           next = {};
           if (half) next.half = half;
           if (full) next.full = full;
+          if (extra.length) next.extra = extra;
         }
         const { error: updErr } = await client
           .from("reads").update({ meetings: next })
@@ -975,10 +985,24 @@ Deno.serve(async (req) => {
 
   // Fire-and-await the Discord webhook after the pick is durable. Failures are
   // logged but do not affect the response — a busted webhook shouldn't block
-  // the app.
-  if (action === "draw" && winner) {
+  // the app. Phase 11 (docs/configurability-plan.md §4.2): notify.draw gates
+  // the whole post; notify.mentionWinner gates only the @-ping within it --
+  // dropping discordId here is what makes postToDiscord fall back to its
+  // existing "no id known" plain-announcement branch, so the toggle needs no
+  // change to that function.
+  if (action === "draw" && winner && clubConfig.notify.draw) {
     const webhookUrl = await webhookFor(client, clubId);
     if (webhookUrl) {
+      // Phase 11 §4.4: the winner's own "don't @-mention me" preference can
+      // additionally suppress the ping even when the club has it on -- but
+      // never override the club's toggle the other way.
+      let mention = clubConfig.notify.mentionWinner;
+      if (mention && winner.winner_id) {
+        const { data: pref } = await client
+          .from("notification_prefs").select("mention_winner")
+          .eq("club_id", clubId).eq("user_id", winner.winner_id).maybeSingle();
+        if (pref?.mention_winner === false) mention = false;
+      }
       const meta = await fetchBookMeta(winner.book);
       await postToDiscord(webhookUrl, {
         book: winner.book,
@@ -988,7 +1012,7 @@ Deno.serve(async (req) => {
         description: meta.description,
         username: winner.winner_username,
         avatarUrl: winnerAvatarUrl,
-        discordId: winnerDiscordId,
+        discordId: mention ? winnerDiscordId : null,
         round: winner.round,
         roundAdvanced,
       });
@@ -997,7 +1021,7 @@ Deno.serve(async (req) => {
 
   // Same treatment for a schedule change: announced only after it's durable,
   // and a busted webhook must never fail the librarian's save.
-  if (meetingChange) {
+  if (meetingChange && clubConfig.notify.meeting) {
     const webhookUrl = await webhookFor(client, clubId);
     if (webhookUrl) {
       const meta = await fetchBookMeta(meetingChange.book);
@@ -1011,9 +1035,9 @@ Deno.serve(async (req) => {
     }
   }
 
-  // And for a newly committed Guild score: announced after the write, webhook
+  // And for a newly committed score: announced after the write, webhook
   // failures logged but never fatal to the librarian's action.
-  if (ratingChange) {
+  if (ratingChange && clubConfig.notify.rating) {
     const webhookUrl = await webhookFor(client, clubId);
     if (webhookUrl) {
       const meta = await fetchBookMeta(ratingChange.book);

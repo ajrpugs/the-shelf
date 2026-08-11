@@ -4,4 +4,5 @@ select json_build_object(
   'shelf_librarians',(select count(*) from shelf_librarians),'club_members',(select count(*) from club_members),
   'shelf_state',(select count(*) from shelf_state),'reads',(select count(*) from reads),
   'shelf_reviews',(select count(*) from shelf_reviews),'shelf_comments',(select count(*) from shelf_comments),
-  'shelf_comment_reactions',(select count(*) from shelf_comment_reactions)) as c;
+  'shelf_comment_reactions',(select count(*) from shelf_comment_reactions),
+  'notification_prefs',(select count(*) from notification_prefs)) as c;

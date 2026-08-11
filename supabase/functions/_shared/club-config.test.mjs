@@ -5,10 +5,14 @@ import {
   normalizeRatingProfile,
   validateSelectionPatch,
   validateRatingPatch,
+  validateNotifyPatch,
   normalizeRatingTotal,
   SELECTION_MODES,
   RATING_SLOTS,
+  NOTIFY_EVENTS,
 } from "./club-config.mjs";
+
+const DEFAULT_NOTIFY = { draw: true, bookSet: true, meeting: true, rating: true, mentionWinner: true };
 
 const DEFAULT_RATING = {
   scale: 20,
@@ -27,10 +31,11 @@ const DEFAULT_RATING = {
 // predates this feature (config = {}) must normalize to exactly today's
 // behaviour. Every other case is secondary to this one holding.
 
-test("normalizeConfig({}) is today's behaviour: wheel, sit-out on, five categories at scale 20", () => {
+test("normalizeConfig({}) is today's behaviour: wheel, sit-out on, five categories at scale 20, every notification on", () => {
   assert.deepEqual(normalizeConfig({}), {
     selection: { mode: "wheel", sitOut: true },
     rating: DEFAULT_RATING,
+    notify: DEFAULT_NOTIFY,
   });
 });
 
@@ -187,4 +192,40 @@ test("normalizeRatingTotal returns null for no categories or no scale", () => {
 
 test("RATING_SLOTS lists exactly the five physical shelf_reviews columns", () => {
   assert.deepEqual(RATING_SLOTS, ["plot", "characters", "pacing", "language", "themes"]);
+});
+
+// ---- notify (Phase 11, §4.2) -------------------------------------------------
+
+test("normalizeConfig({}).notify is every event on", () => {
+  assert.deepEqual(normalizeConfig({}).notify, DEFAULT_NOTIFY);
+});
+
+test("normalizeConfig: only an explicit false turns an event off, per key", () => {
+  const cfg = normalizeConfig({ notify: { draw: false, mentionWinner: false } });
+  assert.deepEqual(cfg.notify, { draw: false, bookSet: true, meeting: true, rating: true, mentionWinner: false });
+});
+
+test("normalizeConfig notify ignores a non-boolean or unknown key instead of throwing", () => {
+  assert.deepEqual(normalizeConfig({ notify: { draw: "no", vibes: false } }).notify, DEFAULT_NOTIFY);
+});
+
+test("validateNotifyPatch accepts booleans for known events", () => {
+  assert.deepEqual(validateNotifyPatch({ draw: false }), { notify: { draw: false } });
+  assert.deepEqual(validateNotifyPatch({ draw: false, rating: true }), { notify: { draw: false, rating: true } });
+});
+
+test("validateNotifyPatch rejects a non-boolean value", () => {
+  assert.ok("error" in validateNotifyPatch({ draw: "false" }));
+});
+
+test("validateNotifyPatch ignores unknown keys rather than erroring", () => {
+  assert.deepEqual(validateNotifyPatch({ vibes: false }), { notify: {} });
+});
+
+test("validateNotifyPatch with nothing set returns an empty patch, not an error", () => {
+  assert.deepEqual(validateNotifyPatch({}), { notify: {} });
+});
+
+test("NOTIFY_EVENTS lists the five toggles", () => {
+  assert.deepEqual(NOTIFY_EVENTS, ["draw", "bookSet", "meeting", "rating", "mentionWinner"]);
 });

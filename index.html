@@ -1392,6 +1392,40 @@ let lastRenderedHash = null; // location.hash as of the previous render() — le
 let calendarMonth = null;    // { y, m } shown in the calendar grid; null = auto
 let session = null;          // Supabase auth session
 let myUserRow = null;        // Current user's row out of `users` (identity + this club's book)
+let myNotificationPrefs = null; // Phase 11 §4.4: { mention_winner } for this reader, this club
+// Phase 11 §4.3: "since you last looked". Frozen at the value club_members.
+// last_seen_at held the FIRST time this club loaded in this browser session --
+// not re-read on every realtime-triggered reload, or an unread count would
+// reset itself before the reader ever saw it. seenBumpedFor guards the
+// once-per-club-per-session bump.
+let lastSeenAt = null;
+let seenBumpedFor = null;
+function markClubSeen() {
+  if (!session || !club || seenBumpedFor === clubId()) return;
+  seenBumpedFor = clubId();
+  lastSeenAt = myUserRow?.last_seen_at || null;
+  // Column-scoped RLS write (see the migration): this reader's own row,
+  // last_seen_at only. Fire-and-forget -- nothing in the UI depends on this
+  // succeeding, and a failure here shouldn't be a flash the reader has to
+  // dismiss.
+  supabase
+    .from("club_members")
+    .update({ last_seen_at: new Date().toISOString() })
+    .eq("club_id", clubId())
+    .eq("user_id", session.user.id)
+    .then(({ error }) => { if (error) console.warn("last_seen_at update failed:", error.message); });
+}
+// Counts of activity newer than lastSeenAt -- null (no prior visit on record)
+// counts nothing as unread, since "everything" isn't a useful first-visit
+// badge. Reviews exclude the reader's own (posting your own review isn't
+// "new" to you).
+function unreadCounts() {
+  if (!lastSeenAt) return { picks: 0, reviews: 0 };
+  const picks = state.history.filter(h => h.ts && h.ts > lastSeenAt).length;
+  const myId = session?.user?.id;
+  const reviewCount = reviews.filter(r => r.updated_at && r.updated_at > lastSeenAt && r.user_id !== myId).length;
+  return { picks, reviews: reviewCount };
+}
 let spinning = false;
 let flashMsg = null;
 let pendingRender = false;
@@ -2317,7 +2351,7 @@ async function resolveClubFromRoute() {
   clubDataLoaded = false;
   try {
     const { data, error } = await supabase
-      .from("clubs").select("id, slug, name, tagline, visibility, timezone, suspended_at, config").eq("slug", wanted).maybeSingle();
+      .from("clubs").select("id, slug, name, tagline, visibility, timezone, suspended_at, config, discord_guild_id").eq("slug", wanted).maybeSingle();
     if (error) throw error;
     if (!data) { club = null; clubStatus = "not_found"; return; }
     club = data;
@@ -2677,12 +2711,12 @@ async function loadAll() {
   if (clubStatus !== "ok") { render(); return; }
   setRefreshing(true);
   try {
-    const [{ data: sData, error: sErr }, { data: mData, error: mErr }, { data: rData, error: rErr }, { data: cData, error: cErr }, { data: readsData, error: readsErr }, { data: xData, error: xErr }] = await Promise.all([
+    const [{ data: sData, error: sErr }, { data: mData, error: mErr }, { data: rData, error: rErr }, { data: cData, error: cErr }, { data: readsData, error: readsErr }, { data: xData, error: xErr }, { data: npData, error: npErr }] = await Promise.all([
       // Keyed by club_id, not the old fixed `id = 1` singleton.
       supabase.from("shelf_state").select("data").eq("club_id", clubId()).single(),
       // Membership + book + role for this club. Replaces the unscoped
       // `shelf_users.select("*")`, which pulled every reader of every club.
-      supabase.from("club_members").select("user_id, role, book, joined_at").eq("club_id", clubId()),
+      supabase.from("club_members").select("user_id, role, book, joined_at, last_seen_at").eq("club_id", clubId()),
       supabase.from("shelf_reviews").select("*").eq("club_id", clubId()),
       supabase.from("shelf_comments").select("*").eq("club_id", clubId()),
       supabase.from("reads")
@@ -2690,7 +2724,12 @@ async function loadAll() {
         .eq("club_id", clubId())
         .order("ts", { ascending: false }),
       supabase.from("shelf_comment_reactions").select("comment_id, user_id, emoji").eq("club_id", clubId()),
+      // Phase 11 §4.4: this reader's own row only, RLS-restricted. No row yet
+      // means the defaults (mention on) apply.
+      supabase.from("notification_prefs").select("mention_winner").eq("club_id", clubId()).eq("user_id", session.user.id).maybeSingle(),
     ]);
+    if (npErr) console.warn("notification_prefs unavailable:", npErr.message);
+    myNotificationPrefs = npErr ? null : (npData || { mention_winner: true });
     if (sErr && sErr.code !== "PGRST116") throw sErr;
     if (mErr) throw mErr;
     // History lives in `reads` (Phase 0 cutover), not shelf_state.data.history
@@ -2723,7 +2762,7 @@ async function loadAll() {
     const identityById = new Map(identities.map(u => [u.id, u]));
     users = members
       .filter(m => identityById.has(m.user_id))
-      .map(m => ({ ...identityById.get(m.user_id), book: m.book, role: m.role, joined_at: m.joined_at }));
+      .map(m => ({ ...identityById.get(m.user_id), book: m.book, role: m.role, joined_at: m.joined_at, last_seen_at: m.last_seen_at }));
     // Roles come from the same fetch, so the Admin gate can't drift from the
     // membership list the rest of the UI is rendering.
     librarianIds = new Set(members.filter(m => m.role === "librarian").map(m => m.user_id));
@@ -2740,6 +2779,7 @@ async function loadAll() {
     // Phase 4 chrome, it doesn't stop the shelf from rendering.
     await Promise.all([loadMyClubs(), loadInvites(), loadClubSettings()]);
     if (session) myUserRow = users.find(u => u.id === session.user.id) || myUserRow;
+    markClubSeen();
   } catch (err) {
     // A load can land mid-token-rotation and fail on the access token rather than
     // on anything being wrong -- most visibly right after linking a second
@@ -3512,6 +3552,13 @@ function nowInClubTz() {
 
 // Flatten every scheduled meeting across all reads into a sorted timeline.
 // Each item: { ts, round, book, phase: 'half'|'full', at: Date, upTo, past }.
+// Phase 12 §5.2 (docs/configurability-plan.md): a read's meetings are no
+// longer only 50%/100% -- m.extra holds any number of additional named
+// phases, each with a `key` assigned once at creation (client-side, see
+// addExtraMeetingRow) so its calendar UID never changes across edits. `label`
+// is what every caller below actually displays; `phase` survives only for the
+// half/full CSS accent colors (.cal-ev.half/.full) -- an extra phase gets
+// none, which is a fine default, not a missing one.
 function allMeetings() {
   const out = [];
   for (const h of state.history) {
@@ -3522,7 +3569,14 @@ function allMeetings() {
       if (!slot || !slot.at) continue;
       const at = new Date(slot.at);
       if (isNaN(at.getTime())) continue;
-      out.push({ ts: h.ts, round: h.round, book: h.book || "a read", phase, at, upTo: slot.upTo || "", past: at.getTime() < Date.now() });
+      const label = phase === "half" ? "50%" : "100%";
+      out.push({ ts: h.ts, round: h.round, book: h.book || "a read", phase, label, at, upTo: slot.upTo || "", past: at.getTime() < Date.now() });
+    }
+    for (const extra of (m.extra || [])) {
+      if (!extra || !extra.at) continue;
+      const at = new Date(extra.at);
+      if (isNaN(at.getTime())) continue;
+      out.push({ ts: h.ts, round: h.round, book: h.book || "a read", phase: "extra", label: extra.label || "Meeting", at, upTo: "", past: at.getTime() < Date.now() });
     }
   }
   out.sort((a, b) => a.at - b.at);
@@ -3654,6 +3708,16 @@ function bookMeetingsHtml(h) {
       ${phase === "half" && slot.upTo ? `<span class="bm-upto">read to ${esc(slot.upTo)}</span>` : ''}
     </div>`);
   }
+  for (const extra of (mt.extra || [])) {
+    if (!extra || !extra.at) continue;
+    const at = new Date(extra.at);
+    if (isNaN(at.getTime())) continue;
+    const past = at.getTime() < Date.now();
+    rows.push(`<div class="bm-row${past ? ' past' : ''}">
+      <span class="bm-phase">${esc(extra.label || "Meeting")}</span>
+      <span class="bm-when">${esc(fmtMeetingWhen(at))}</span>
+    </div>`);
+  }
   if (!rows.length) return "";
   // The label doubles as a jump to the Calendar tab. It can't be a plain href —
   // the tab lives in memory, not the hash — so a delegated handler drives it.
@@ -3707,10 +3771,9 @@ function calendarGridHtml() {
     if (isThisMonth && today.day === d) cls.push("today");
     if (evs.length) cls.push("has-meeting");
     const chips = evs.map(e => {
-      const pct = e.phase === "half" ? "50%" : "100%";
-      const tip = `${pct} · ${e.book}${e.upTo ? ` · read to ${e.upTo}` : ""} · ${fmtMeetingWhen(e.at)}`;
+      const tip = `${e.label} · ${e.book}${e.upTo ? ` · read to ${e.upTo}` : ""} · ${fmtMeetingWhen(e.at)}`;
       return `<a class="cal-ev ${e.phase}${e.past ? ' past' : ''}" href="#book=${e.round}" title="${attr(tip)}">
-        <span class="cal-ev-pct">${pct}</span><span class="cal-ev-book">${esc(e.book)}</span>
+        <span class="cal-ev-pct">${esc(e.label)}</span><span class="cal-ev-book">${esc(e.book)}</span>
       </a>`;
     }).join("");
     cells += `<div class="${cls.join(" ")}"><div class="cal-daynum">${d}</div>${chips}</div>`;
@@ -3732,10 +3795,26 @@ function calendarGridHtml() {
   </div>`;
 }
 
+// Phase 12 §5.2: one editable row for a discussion phase beyond 50%/100%.
+// `key` is generated once, client-side, when the row is first added
+// (see the data-me-add-extra handler) and never regenerated -- it's what
+// calendar-feed uses as the event's stable UID, so reusing or reshuffling
+// it would duplicate or orphan events for anyone already subscribed.
+function extraMeetingRowHtml(x) {
+  const val = x.at ? toClubInputValue(new Date(x.at)) : "";
+  return `<div class="me-row" data-me-extra-row data-me-extra-key="${attr(x.key || '')}">
+    <label>Meeting name<input type="text" data-me-extra-label value="${attr(x.label || '')}" placeholder="e.g. Week 3 check-in" maxlength="80"></label>
+    <label>When (Toronto)<input type="datetime-local" data-me-extra-at value="${attr(val)}"></label>
+    <button type="button" class="btn-mini ghost" data-me-extra-remove>Remove</button>
+  </div>`;
+}
+function wireExtraMeetingRemove(row) {
+  row?.querySelector("[data-me-extra-remove]")?.addEventListener("click", () => row.remove());
+}
+
 function meetingRowHtml(m) {
-  const pct = m.phase === "half" ? "50%" : "100%";
   return `<div class="meeting-card">
-    <div class="meeting-phase">${pct}</div>
+    <div class="meeting-phase">${esc(m.label)}</div>
     <div class="meeting-body">
       <div class="meeting-book"><a class="book-link" href="#book=${m.round}">${esc(m.book)}</a></div>
       ${m.phase === "half" && m.upTo ? `<div class="meeting-upto">Read up to ${esc(m.upTo)}</div>` : ''}
@@ -3808,6 +3887,7 @@ function calendarTabHtml(admin, currentlyReading, nextUp) {
         let fullVal;
         if (full.at) { fullVal = toClubInputValue(new Date(full.at)); anchor = new Date(full.at); }
         else { anchor = suggestSlot(anchor); fullVal = toClubInputValue(anchor); }
+        const extra = Array.isArray(mt.extra) ? mt.extra : [];
         html += `<div class="meeting-editor" data-me-ts="${attr(h.ts || '')}">
           <div class="me-book-title">${esc(h.book || 'Untitled')}</div>
           <div class="me-row">
@@ -3816,12 +3896,16 @@ function calendarTabHtml(admin, currentlyReading, nextUp) {
           </div>
           <div class="me-row">
             <label>100% meeting (Toronto)<input type="datetime-local" data-me-field="full_at" value="${attr(fullVal)}"></label>
+          </div>
+          <div class="me-extra-list">${extra.map(x => extraMeetingRowHtml(x)).join("")}</div>
+          <div class="me-row">
+            <button type="button" class="btn-mini ghost" data-me-add-extra="${attr(h.ts || '')}">Add another meeting</button>
             <button class="btn-mini" data-me-save="${attr(h.ts || '')}">Save meetings</button>
-            ${(half.at || full.at) ? `<button class="btn-mini ghost" data-me-announce="${attr(h.ts || '')}">Announce in Discord</button>` : ''}
+            ${(half.at || full.at || extra.length) ? `<button class="btn-mini ghost" data-me-announce="${attr(h.ts || '')}">Announce in Discord</button>` : ''}
           </div>
         </div>`;
       });
-      html += `<div class="me-hint">Prefilled with Wednesdays 8pm <b>Toronto time</b>, biweekly — adjust and Save. Times are always entered and shown in Toronto time, wherever you are. Clear a date to remove that meeting.</div>`;
+      html += `<div class="me-hint">Prefilled with Wednesdays 8pm <b>Toronto time</b>, biweekly — adjust and Save. Times are always entered and shown in Toronto time, wherever you are. Clear a date (or Remove an extra meeting) to drop it.</div>`;
     }
     html += `</div>`;
   }
@@ -4368,19 +4452,24 @@ function render() {
   }
 
   // ---- Tab bar ----
+  // Phase 11 §4.3: small unread badges, since you last looked at this club.
+  const unread = unreadCounts();
+  const tabBadge = (n) => n > 0
+    ? `<span style="display:inline-block; min-width:16px; padding:0 4px; margin-left:6px; border-radius:999px; background:var(--stamp); color:var(--card); font-size:10px; font-weight:700; line-height:16px; text-align:center; vertical-align:middle;">${n > 99 ? '99+' : n}</span>`
+    : '';
   const TABS = [
-    { id: "reading", label: "Reading" },
+    { id: "reading", label: "Reading", badge: tabBadge(unread.picks) },
     { id: "shelf", label: "The Shelf" },
     { id: "wheel", label: "The Wheel" },
     { id: "leaderboard", label: "Leaderboard" },
     { id: "stats", label: "Stats" },
-    { id: "reviews", label: "Reviews" },
+    { id: "reviews", label: "Reviews", badge: tabBadge(unread.reviews) },
     { id: "calendar", label: "Calendar" },
     ...(admin ? [{ id: "admin", label: "Admin", adminTab: true }] : []),
   ];
   if (!TABS.some(t => t.id === currentTab)) currentTab = "reading";
   html += `<nav class="tabs" role="tablist" aria-label="Sections">${TABS.map(t =>
-    `<button class="tab-btn ${t.adminTab ? 'tab-admin' : ''} ${currentTab === t.id ? 'on' : ''}" id="tab-btn-${t.id}" role="tab" aria-selected="${currentTab === t.id ? 'true' : 'false'}" aria-controls="tab-panel" data-tab="${t.id}">${t.label}</button>`
+    `<button class="tab-btn ${t.adminTab ? 'tab-admin' : ''} ${currentTab === t.id ? 'on' : ''}" id="tab-btn-${t.id}" role="tab" aria-selected="${currentTab === t.id ? 'true' : 'false'}" aria-controls="tab-panel" data-tab="${t.id}">${t.label}${t.badge || ''}</button>`
   ).join("")}</nav>`;
 
   // ---- Global search (books + readers) ----
@@ -4857,6 +4946,26 @@ function render() {
     </div>`;
     }
 
+    // ---- Notifications (Phase 11, docs/configurability-plan.md §4.2) ----
+    { const notifyCfg = clubConfig().notify;
+    const NOTIFY_ROWS = [
+      { key: "draw", label: "The wheel picks a reader" },
+      { key: "bookSet", label: "Someone adds or changes their book" },
+      { key: "meeting", label: "Discussion dates are set or changed" },
+      { key: "rating", label: "A score is locked in" },
+      { key: "mentionWinner", label: "@-mention the picked reader (needs \"the wheel picks a reader\" on)" },
+    ];
+    html += `<div class="card no-rule" style="margin-top:10px;">
+      <div class="tools-label">Discord notifications</div>
+      ${NOTIFY_ROWS.map(r => `
+        <label class="field-inline" style="margin-top:6px;">
+          <input type="checkbox" data-notify-key="${attr(r.key)}" ${notifyCfg[r.key] ? "checked" : ""}>
+          <span>${esc(r.label)}</span>
+        </label>`).join("")}
+      <p class="invite-meta" style="margin-top:6px;">Each saves as soon as you toggle it. These only matter once a webhook is set below.</p>
+    </div>`;
+    }
+
     // ---- Discord + calendar (6a) ----
     // Both live in club_secrets, which has no RLS policies at all, so they arrive
     // via club-admin's get_club_settings rather than a direct read. The webhook is
@@ -4874,6 +4983,12 @@ function render() {
         <input id="cs-webhook" type="text" placeholder="https://discord.com/api/webhooks/… (blank to remove)" spellcheck="false">
       </label>
       <p><button class="btn-primary" id="cs-webhook-save">Save webhook</button></p>
+      <label class="field" style="margin-top:10px;">
+        <span class="field-label">Discord server ID (for /mybook)</span>
+        <input id="cs-guild-id" type="text" inputmode="numeric" maxlength="25" placeholder="blank = /mybook won't target this club" value="${attr(club?.discord_guild_id || "")}" style="max-width:220px;">
+        <span class="field-hint">Right-click your server icon in Discord → Copy Server ID (enable Developer Mode in Discord settings first if that option is missing).</span>
+      </label>
+      <p><button class="btn-primary" id="cs-guild-save">Save server ID</button></p>
       <div class="tool-row" style="margin-top:6px;">
         <span class="tool-row-desc">
           Calendar feed — subscribe to this in Google/Apple/Outlook:
@@ -4915,6 +5030,14 @@ function render() {
       html += `</div>`;
     }
     html += `</div>`;
+
+    html += `<div class="card no-rule" style="margin-top:10px;">
+      <div class="tools-label">Export</div>
+      <div class="tool-row">
+        <button class="btn-primary" id="export-club-btn">Download club data</button>
+        <span class="tool-row-desc">Every read, member, review and comment in ${esc(clubName())}, as a JSON file.</span>
+      </div>
+    </div>`;
 
     html += `<div class="card no-rule" style="margin-top:10px;">
       <div class="tools-label">Danger zone</div>
@@ -5121,6 +5244,14 @@ function renderAccount() {
         <p style="margin-top:10px;"><a href="#/new" class="footer-link">Start another club</a></p>
       </div>
       <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">Notifications in ${esc(clubName())}</div>
+        <label class="field-inline">
+          <input id="acct-mention" type="checkbox" ${myNotificationPrefs?.mention_winner === false ? '' : 'checked'}>
+          <span>@-mention me in Discord when the wheel picks me. Off still posts the pick, just without pinging you.</span>
+        </label>
+        <p class="invite-meta">Per club — switch clubs to set this for another one.</p>
+      </div>
+      <div class="card no-rule" style="margin-top:10px;">
         <div class="tools-label">Danger zone</div>
         <div class="tool-row">
           <button class="btn-danger" id="acct-delete">Delete my account</button>
@@ -5146,6 +5277,23 @@ function wireAccount() {
   document.getElementById("acct-name-reset")?.addEventListener("click", (e) => {
     e.currentTarget.blur();
     resetDisplayName();
+  });
+
+  // Phase 11 §4.4: own row, direct RLS write -- same pattern as
+  // shelf_comment_reactions, no edge function needed.
+  document.getElementById("acct-mention")?.addEventListener("change", async (e) => {
+    const checked = e.currentTarget.checked;
+    e.currentTarget.blur();
+    const { error } = await supabase
+      .from("notification_prefs")
+      .upsert(
+        { club_id: clubId(), user_id: session.user.id, mention_winner: checked, updated_at: new Date().toISOString() },
+        { onConflict: "club_id,user_id" },
+      );
+    if (error) { setFlash("err", friendlyError(error, "save that")); render(); return; }
+    myNotificationPrefs = { mention_winner: checked };
+    setFlash("info", "Saved.");
+    render();
   });
 
   document.getElementById("acct-delete")?.addEventListener("click", async (e) => {
@@ -6110,7 +6258,8 @@ function wireUp() {
     }
   });
 
-  // Librarian saves a read's 50% / 100% meeting dates.
+  // Librarian saves a read's meeting dates: 50% / 100%, plus Phase 12 §5.2's
+  // any-number of extra named phases.
   document.querySelectorAll("[data-me-save]").forEach(btn => {
     btn.addEventListener("click", () => {
       const ts = btn.dataset.meSave;
@@ -6122,16 +6271,38 @@ function wireUp() {
         const d = clubInputToInstant(v);
         return d ? d.toISOString() : "";
       };
+      const extra = [...box.querySelectorAll("[data-me-extra-row]")].map(row => ({
+        key: row.dataset.meExtraKey,
+        label: (row.querySelector("[data-me-extra-label]")?.value || "").trim(),
+        at: toIso(row.querySelector("[data-me-extra-at]")?.value),
+      })).filter(x => x.key && x.label && x.at); // an emptied-out row just drops out
       const payload = {
         ts,
         half_at: toIso(field("half_at")?.value),
         half_upto: (field("half_upto")?.value || "").trim(),
         full_at: toIso(field("full_at")?.value),
+        extra,
       };
       document.activeElement?.blur?.(); // let the post-save render through
       callAdmin("admin_set_meeting", payload);
     });
   });
+
+  // Add a blank extra-meeting row without a full render (the reader is
+  // mid-edit on other fields in this same form). The key is generated once,
+  // right here -- see extraMeetingRowHtml's comment on why it must never
+  // change afterward.
+  document.querySelectorAll("[data-me-add-extra]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const box = btn.closest("[data-me-ts]");
+      const list = box?.querySelector(".me-extra-list");
+      if (!list) return;
+      const key = `extra-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      list.insertAdjacentHTML("beforeend", extraMeetingRowHtml({ key, label: "", at: "" }));
+      wireExtraMeetingRemove(list.lastElementChild);
+    });
+  });
+  document.querySelectorAll("[data-me-extra-row]").forEach(wireExtraMeetingRemove);
 
   // Re-post a read's already-saved dates to Discord (doesn't change them).
   document.querySelectorAll("[data-me-announce]").forEach(btn => {
@@ -6299,6 +6470,19 @@ function wireUp() {
     render();
   });
 
+  // ---- Notifications (Phase 11) ----
+  document.querySelectorAll("[data-notify-key]").forEach(el => {
+    el.addEventListener("change", async (e) => {
+      const key = e.currentTarget.dataset.notifyKey;
+      const checked = e.currentTarget.checked;
+      const body = await callClubAdmin("update_club", { club_id: clubId(), notify: { [key]: checked } });
+      if (!body?.club) { render(); return; }
+      club = { ...club, ...body.club };
+      setFlash("info", "Notification settings saved.");
+      render();
+    });
+  });
+
   document.getElementById("cs-webhook-save")?.addEventListener("click", async (e) => {
     e.currentTarget.blur();
     const input = document.getElementById("cs-webhook");
@@ -6307,6 +6491,17 @@ function wireUp() {
     if (input) input.value = "";
     clubSettings = { ...(clubSettings || {}), has_webhook: body.has_webhook };
     setFlash("info", body.has_webhook ? "Discord webhook saved." : "Discord webhook removed.");
+    render();
+  });
+
+  // ---- Discord guild mapping (Phase 12 §5.4) ----
+  document.getElementById("cs-guild-save")?.addEventListener("click", async (e) => {
+    e.currentTarget.blur();
+    const input = document.getElementById("cs-guild-id");
+    const body = await callClubAdmin("update_club", { club_id: clubId(), discord_guild_id: input?.value ?? "" });
+    if (!body?.club) { render(); return; }
+    club = { ...club, ...body.club };
+    setFlash("info", "Discord server ID saved.");
     render();
   });
 
@@ -6445,6 +6640,24 @@ function wireUp() {
       if (n === current) return; // unchanged
       callAdmin("admin_set_rating", { ts, total: n });
     });
+  });
+
+  document.getElementById("export-club-btn")?.addEventListener("click", async (e) => {
+    e.currentTarget.blur();
+    const body = await callClubAdmin("export_club", { club_id: clubId() });
+    if (!body?.ok) { render(); return; }
+    const { ok, ...payload } = body;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${clubSlug()}-export-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setFlash("info", "Export downloaded.");
+    render();
   });
 
   const reset = document.getElementById("reset-btn");

@@ -15,7 +15,7 @@
 // same as every other function here.)
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { validateSelectionPatch, validateRatingPatch } from "../_shared/club-config.mjs";
+import { validateSelectionPatch, validateRatingPatch, validateNotifyPatch } from "../_shared/club-config.mjs";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -365,6 +365,20 @@ Deno.serve(async (req) => {
           patch.visibility = v;
         }
 
+        // Phase 12 §5.4: which Discord server's /mybook targets this club.
+        // Blank clears it (back to "no guild mapped", the fallback-to-seeded-
+        // club behaviour). The unique partial index on discord_guild_id
+        // turns "another club already claimed this server" into a 23505 --
+        // caught here so the librarian gets a real message instead of a raw
+        // Postgres error.
+        if (body.discord_guild_id !== undefined) {
+          const raw = String(body.discord_guild_id ?? "").trim();
+          if (raw && !/^[0-9]{1,25}$/.test(raw)) {
+            return json({ error: "That doesn't look like a Discord server ID (numbers only)." }, 400);
+          }
+          patch.discord_guild_id = raw || null;
+        }
+
         // The slug is deliberately NOT editable here. Changing it breaks every
         // link and invite anyone has already shared, and it would need the same
         // reserved-word and uniqueness handling as create_club. A separate,
@@ -383,7 +397,7 @@ Deno.serve(async (req) => {
         // config key can't clobber it back to unset. Both `selection` and
         // `rating` share one fetch-then-merge so a request naming both
         // doesn't have the second overwrite the first's change.
-        if (body.selection !== undefined || body.rating !== undefined) {
+        if (body.selection !== undefined || body.rating !== undefined || body.notify !== undefined) {
           const { data: existing, error: cfgErr } = await client
             .from("clubs").select("config").eq("id", clubId).maybeSingle();
           if (cfgErr) throw cfgErr;
@@ -416,6 +430,18 @@ Deno.serve(async (req) => {
             nextConfig.rating = { ...currentRating, ...v.rating };
           }
 
+          if (body.notify !== undefined) {
+            const raw = (body.notify && typeof body.notify === "object")
+              ? body.notify as Record<string, unknown>
+              : {};
+            const v = validateNotifyPatch(raw);
+            if ("error" in v) return json({ error: v.error }, 400);
+            const currentNotify = (currentConfig.notify && typeof currentConfig.notify === "object")
+              ? currentConfig.notify as Record<string, unknown>
+              : {};
+            nextConfig.notify = { ...currentNotify, ...v.notify };
+          }
+
           patch.config = nextConfig;
         }
 
@@ -423,9 +449,51 @@ Deno.serve(async (req) => {
 
         const { data: updated, error } = await client
           .from("clubs").update(patch).eq("id", clubId)
-          .select("id, slug, name, tagline, visibility, timezone, config").single();
-        if (error) throw error;
+          .select("id, slug, name, tagline, visibility, timezone, config, discord_guild_id").single();
+        if (error) {
+          // 23505 = unique violation, only reachable here via discord_guild_id.
+          if (error.code === "23505") return json({ error: "Another club is already mapped to that Discord server." }, 409);
+          throw error;
+        }
         return json({ ok: true, club: updated });
+      }
+
+      // --- Phase 12 §5.1: per-club export -----------------------------------
+      // Gate: librarian. A club's only way to get its own data out today is
+      // the operator's scripts/backup.sh, which dumps every club at once and
+      // isn't reachable by a librarian at all. Reuses the same reads/members/
+      // reviews/comments shape scripts/backup-sql/snapshot.sql covers, minus
+      // auth-adjacent columns (no emails, no ids beyond what the club already
+      // sees in its own UI).
+      case "export_club": {
+        if (!await isLibrarian(client, clubId, callerId)) return json({ error: "not a librarian" }, 403);
+        const [reads, members, reviews, comments] = await Promise.all([
+          client.from("reads")
+            .select("round, winner_id, winner_username, book, ts, rating, ratings_open, meetings")
+            .eq("club_id", clubId).order("ts", { ascending: false }),
+          client.from("club_members")
+            .select("user_id, role, book, joined_at")
+            .eq("club_id", clubId),
+          client.from("shelf_reviews")
+            .select("book_ts, user_id, plot, characters, pacing, language, themes, dnf, note, updated_at")
+            .eq("club_id", clubId),
+          client.from("shelf_comments")
+            .select("id, book_ts, user_id, parent_id, body, created_at")
+            .eq("club_id", clubId),
+        ]);
+        for (const r of [reads, members, reviews, comments]) if (r.error) throw r.error;
+        const { data: clubRow, error: clubErr } = await client
+          .from("clubs").select("id, slug, name, tagline, visibility, timezone, created_at").eq("id", clubId).single();
+        if (clubErr) throw clubErr;
+        return json({
+          ok: true,
+          exported_at: new Date().toISOString(),
+          club: clubRow,
+          reads: reads.data,
+          members: members.data,
+          reviews: reviews.data,
+          comments: comments.data,
+        });
       }
 
       // Gate: librarian. club_secrets has no RLS policies at all, so this is the

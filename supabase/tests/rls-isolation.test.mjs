@@ -71,7 +71,8 @@ function countsSql(clubId) {
       (select count(*) from shelf_reviews where club_id = '${clubId}') as reviews_n,
       (select count(*) from shelf_comments where club_id = '${clubId}') as comments_n,
       (select count(*) from shelf_comment_reactions where club_id = '${clubId}') as reactions_n,
-      (select count(*) from club_members where club_id = '${clubId}') as members_n;
+      (select count(*) from club_members where club_id = '${clubId}') as members_n,
+      (select count(*) from notification_prefs where club_id = '${clubId}') as prefs_n;
   `;
 }
 
@@ -83,10 +84,11 @@ function toCounts(row) {
     comments: Number(row.comments_n),
     reactions: Number(row.reactions_n),
     members: Number(row.members_n),
+    prefs: Number(row.prefs_n),
   };
 }
 
-const ZERO_COUNTS = { reads: 0, state: 0, reviews: 0, comments: 0, reactions: 0, members: 0 };
+const ZERO_COUNTS = { reads: 0, state: 0, reviews: 0, comments: 0, reactions: 0, members: 0, prefs: 0 };
 
 test("RLS isolates a private club's data from everyone but its own members", async (t) => {
   const [{ user_a: userA, user_b: userB }] = runSql(`
@@ -124,6 +126,8 @@ test("RLS isolates a private club's data from everyone but its own members", asy
       values ('${testCommentId}', '${testTs}', '${userA}', '${testClubId}', 'rls isolation test comment');
     insert into shelf_comment_reactions (comment_id, user_id, emoji, club_id)
       values ('${testCommentId}', '${userA}', '\u{1F512}', '${testClubId}');
+    insert into notification_prefs (club_id, user_id, mention_winner)
+      values ('${testClubId}', '${userA}', false);
   `);
 
   try {
@@ -161,7 +165,28 @@ test("RLS isolates a private club's data from everyone but its own members", asy
         ${countsSql(testClubId)}
         reset role;
       `);
-      assert.deepEqual(toCounts(row), { reads: 1, state: 1, reviews: 1, comments: 1, reactions: 1, members: 1 });
+      assert.deepEqual(toCounts(row), { reads: 1, state: 1, reviews: 1, comments: 1, reactions: 1, members: 1, prefs: 1 });
+    });
+
+    // Phase 11 §4.4: a preference is nobody else's business -- unlike every
+    // other table here, notification_prefs isn't even publicly readable to
+    // other members of the SAME club, only the owning row. Seeds userB as a
+    // second member of the throwaway club first (via the default/service
+    // connection -- club_members has no INSERT policy at all, so this insert
+    // would be denied outright, not just filtered, if attempted as
+    // `authenticated`), then checks under userB's own JWT.
+    await t.test("even a fellow member of the same club can't see another reader's notification_prefs row", () => {
+      runSql(`
+        insert into club_members (club_id, user_id, role) values ('${testClubId}', '${userB}', 'member')
+          on conflict (club_id, user_id) do nothing;
+      `);
+      const [row] = runSql(`
+        set role authenticated;
+        set request.jwt.claims to '{"sub":"${userB}"}';
+        select count(*) as n from notification_prefs where club_id = '${testClubId}' and user_id = '${userA}';
+        reset role;
+      `);
+      assert.equal(Number(row.n), 0);
     });
 
     // Phase 8 (§0.1). webhookFor() used to resolve the club's own webhook and
@@ -190,6 +215,7 @@ test("RLS isolates a private club's data from everyone but its own members", asy
     });
   } finally {
     runSql(`
+      delete from notification_prefs where club_id = '${testClubId}';
       delete from shelf_comment_reactions where club_id = '${testClubId}';
       delete from shelf_comments where club_id = '${testClubId}';
       delete from shelf_reviews where club_id = '${testClubId}';

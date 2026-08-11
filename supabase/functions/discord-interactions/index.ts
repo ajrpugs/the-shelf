@@ -18,13 +18,10 @@ const PUBLIC_KEY = Deno.env.get("DISCORD_PUBLIC_KEY") ?? "";
 // Base URL of the live app, so Discord embeds can link back to the book's page.
 const SITE_URL = "https://sh3lf.net/";
 
-// The club /mybook targets. Unlike the other five functions, this one is NOT
-// parameterized by slice 4b, and deliberately so: a Discord slash command has no
-// URL and no session to carry a club_id, only a guild and a Discord user. Mapping
-// a guild to a club needs `clubs` to know its Discord guild id, which is Phase 6
-// (per-club settings, own webhook). Until then /mybook only ever works for the
-// seeded club -- a reader who belongs to a second club must set that book in the
-// web app. Matches the seeded row in supabase/schema.sql.
+// Fallback when the interaction's guild has no club mapped to it (or when
+// there's no guild at all, e.g. a DM). Matches the seeded row in
+// supabase/schema.sql -- this is what /mybook resolved to unconditionally
+// before Phase 12 §5.4 added the guild lookup below.
 const DEFAULT_CLUB_ID = "8fdb4e0f-ea2f-4a45-9d9a-059a3292b3f8";
 
 // Derived from an actual createClient(...) call, not `ReturnType<typeof
@@ -39,10 +36,10 @@ type MyBookClient = ReturnType<typeof createServiceClient>;
 // The book lives on the membership row as of Phase 3.5, so this write is the one
 // that must succeed. Upsert rather than update: a reader who signed in but never
 // joined has no row yet.
-async function setMemberBook(client: MyBookClient, userId: string, book: string | null): Promise<boolean> {
+async function setMemberBook(client: MyBookClient, clubId: string, userId: string, book: string | null): Promise<boolean> {
   const { error } = await client
     .from("club_members")
-    .upsert({ club_id: DEFAULT_CLUB_ID, user_id: userId, book }, { onConflict: "club_id,user_id" });
+    .upsert({ club_id: clubId, user_id: userId, book }, { onConflict: "club_id,user_id" });
   if (error) {
     console.error("club_members book write failed:", error.message);
     return false;
@@ -61,14 +58,24 @@ async function setMemberBook(client: MyBookClient, userId: string, book: string 
   return true;
 }
 
+// Phase 12 §5.4: which club a slash command targets, from the guild it was
+// typed in. Unmapped guild (or no guild at all -- a DM) falls back to the
+// seeded club, unchanged from every /mybook interaction before this existed.
+async function resolveClubId(client: MyBookClient, guildId: string | undefined): Promise<string> {
+  if (guildId) {
+    const { data } = await client
+      .from("clubs").select("id").eq("discord_guild_id", guildId).maybeSingle();
+    if (data?.id) return data.id as string;
+  }
+  return DEFAULT_CLUB_ID;
+}
+
 // The club's own Discord webhook, and nothing else. A club with none posts
 // nothing, which is exactly what the Admin tab promises.
 //
-// Phase 8 removed a fallback to the project-wide DISCORD_WEBHOOK_URL env secret.
-// This function is pinned to the seeded club (see DEFAULT_CLUB_ID below), so the
-// leak was never reachable *here* -- but the copies drift if they aren't changed
-// together, and the next reader of this file should not learn the old rule. See
-// the fuller note on the copy in admin-update; the third is in set-book.
+// Phase 8 removed a fallback to the project-wide DISCORD_WEBHOOK_URL env
+// secret. See the fuller note on the copy in admin-update; the third is in
+// set-book -- all three must change together or they drift.
 async function webhookFor(client: MyBookClient, clubId: string): Promise<string | undefined> {
   try {
     const { data } = await client
@@ -244,26 +251,36 @@ async function handleMyBook(interaction: any) {
     );
   }
 
+  // Phase 12 §5.4: which club this guild maps to (falls back to the seeded
+  // club if none is set, same as always).
+  const clubId = await resolveClubId(client, interaction?.guild_id);
+
+  // A suspended club is a moderation hold, not a delete -- every other write
+  // path already refuses while it's set; /mybook shouldn't be the one gap.
+  const { data: clubRow } = await client
+    .from("clubs").select("suspended_at").eq("id", clubId).maybeSingle();
+  if (clubRow?.suspended_at) return reply("This club has been suspended.");
+
   const { data: membership } = await client
     .from("club_members")
     .select("book")
-    .eq("club_id", DEFAULT_CLUB_ID)
+    .eq("club_id", clubId)
     .eq("user_id", user.id)
     .maybeSingle();
   const prevBook = (membership?.book ?? "").trim();
 
   if (!bookTitle) {
-    const cleared = await setMemberBook(client, user.id, null);
+    const cleared = await setMemberBook(client, clubId, user.id, null);
     if (!cleared) return reply("Couldn't clear your book. Try again.");
     return reply("📖 Cleared your book. You're off the shelf.");
   }
 
-  const saved = await setMemberBook(client, user.id, bookTitle);
+  const saved = await setMemberBook(client, clubId, user.id, bookTitle);
   if (!saved) return reply("Couldn't save your book. Try again.");
 
   // Post to the channel only when a book was actually set or changed.
   if (bookTitle !== prevBook) {
-    const webhookUrl = await webhookFor(client, DEFAULT_CLUB_ID);
+    const webhookUrl = await webhookFor(client, clubId);
     if (webhookUrl) {
       const cover = await fetchCover(bookTitle);
       await postBookSet(webhookUrl, {

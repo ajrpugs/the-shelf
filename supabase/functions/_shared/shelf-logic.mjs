@@ -101,3 +101,35 @@ export function buildMeeting(at, upTo) {
   if (u) m.upTo = u.slice(0, 200);
   return m;
 }
+
+// admin_set_meeting (Phase 12 §5.2, docs/configurability-plan.md): a club's
+// discussion phases beyond the fixed 50%/100% pair. `key` is assigned once,
+// client-side, when a phase is first added (index.html's
+// data-me-add-extra handler) and never regenerated -- calendar-feed builds
+// each VEVENT's UID from it, so a changed key would duplicate the event for
+// every existing subscriber the same way changing half/full's UID would.
+//
+// Unlike buildMeeting, a bad row is DROPPED rather than thrown: `rawList` is
+// the librarian's whole extra-phases list in one save, and one malformed or
+// emptied-out row (e.g. a UI bug, or a row the reader cleared instead of
+// removing) shouldn't fail every other phase in the same save. Capped at 10
+// -- a sane ceiling, not a real limit anyone should hit.
+export function buildExtraMeetings(rawList) {
+  if (!Array.isArray(rawList)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const raw of rawList) {
+    const key = typeof raw?.key === "string" ? raw.key.trim() : "";
+    if (!/^[a-z0-9-]{1,40}$/i.test(key) || seen.has(key)) continue;
+    const label = typeof raw?.label === "string" ? raw.label.trim().slice(0, 80) : "";
+    if (!label) continue;
+    const atRaw = typeof raw?.at === "string" ? raw.at.trim() : "";
+    if (!atRaw) continue;
+    const d = new Date(atRaw);
+    if (isNaN(d.getTime())) continue;
+    seen.add(key);
+    out.push({ key, label, at: d.toISOString() });
+    if (out.length >= 10) break;
+  }
+  return out;
+}

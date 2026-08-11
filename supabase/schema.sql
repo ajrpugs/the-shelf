@@ -799,3 +799,77 @@ alter table public.shelf_reviews
     or
     (not dnf and (plot is not null or characters is not null or pacing is not null or language is not null or themes is not null))
   );
+
+-- 31. Phase 11: notification control --------------------------------------
+-- club_members.last_seen_at backs §4.3's in-app activity marker, written by
+-- the reader themself -- column-level grant + row policy, since a same-row
+-- UPDATE policy on the whole table would also let a member rewrite `book` or
+-- `role` directly under RLS. notification_prefs backs §4.4: genuinely
+-- own-row-only, read and write. See 20260811110000_notification_control.sql.
+
+alter table public.club_members
+  add column if not exists last_seen_at timestamptz;
+
+drop policy if exists "club_members update own last_seen" on public.club_members;
+create policy "club_members update own last_seen"
+  on public.club_members for update
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+revoke update on public.club_members from authenticated;
+grant update (last_seen_at) on public.club_members to authenticated;
+
+create table if not exists public.notification_prefs (
+  club_id        uuid not null references public.clubs(id) on delete cascade,
+  user_id        uuid not null references auth.users(id) on delete cascade,
+  mention_winner boolean not null default true,
+  updated_at     timestamptz not null default now(),
+  primary key (club_id, user_id)
+);
+
+alter table public.notification_prefs enable row level security;
+
+drop policy if exists "notification_prefs select own" on public.notification_prefs;
+create policy "notification_prefs select own"
+  on public.notification_prefs for select
+  to authenticated
+  using (auth.uid() = user_id);
+
+drop policy if exists "notification_prefs insert own" on public.notification_prefs;
+create policy "notification_prefs insert own"
+  on public.notification_prefs for insert
+  to authenticated
+  with check (auth.uid() = user_id);
+
+drop policy if exists "notification_prefs update own" on public.notification_prefs;
+create policy "notification_prefs update own"
+  on public.notification_prefs for update
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "notification_prefs delete own" on public.notification_prefs;
+create policy "notification_prefs delete own"
+  on public.notification_prefs for delete
+  to authenticated
+  using (auth.uid() = user_id);
+
+-- 32. Phase 12 §5.4: /mybook and the Discord guild it was typed in -----------
+-- discord-interactions was pinned to the seeded club because a slash command
+-- carries a guild id and a Discord user, never a club. clubs.discord_guild_id
+-- is the lookup; a club with none set keeps resolving to the seeded club
+-- (unchanged fallback). See 20260811120000_discord_guild_mapping.sql.
+
+alter table public.clubs
+  add column if not exists discord_guild_id text;
+
+drop index if exists clubs_discord_guild_id_key;
+create unique index clubs_discord_guild_id_key
+  on public.clubs(discord_guild_id)
+  where discord_guild_id is not null;
+
+alter table public.clubs drop constraint if exists clubs_discord_guild_id_len_chk;
+alter table public.clubs
+  add constraint clubs_discord_guild_id_len_chk
+  check (discord_guild_id is null or discord_guild_id ~ '^[0-9]{1,25}$');

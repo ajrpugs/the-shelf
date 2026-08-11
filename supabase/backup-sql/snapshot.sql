@@ -29,5 +29,7 @@ select concat_ws(E'\n',
      (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.shelf_comments r))),
   (select format('insert into public.shelf_comment_reactions select * from jsonb_populate_recordset(null::public.shelf_comment_reactions, %L);',
      (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.shelf_comment_reactions r))),
+  (select format('insert into public.notification_prefs select * from jsonb_populate_recordset(null::public.notification_prefs, %L);',
+     (select coalesce(jsonb_agg(to_jsonb(r)),'[]')::text from public.notification_prefs r))),
   'commit;'
 ) as backup;

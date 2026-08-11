@@ -65,6 +65,28 @@ export function normalizeRatingProfile(raw) {
   return { scale, categories, scoreLabel };
 }
 
+// §4.2: per-club Discord event toggles. All default true -- today's
+// behaviour, posting on every one of these -- so a club whose config
+// predates this key keeps announcing exactly what it already does.
+export const NOTIFY_EVENTS = ["draw", "bookSet", "meeting", "rating", "mentionWinner"];
+
+function normalizeNotify(raw) {
+  const r = (raw && typeof raw === "object") ? raw : {};
+  // Built as a literal, not a loop over NOTIFY_EVENTS, so `deno check` can
+  // infer concrete keys on the result -- a dynamically-built object types as
+  // `{}` and every caller reading e.g. .draw off it fails to typecheck. See
+  // CLAUDE.md: deno check is the only thing that typechecks the edge
+  // functions, and this is exactly the class of thing it catches.
+  const on = (k) => r[k] === false ? false : true;
+  return {
+    draw: on("draw"),
+    bookSet: on("bookSet"),
+    meeting: on("meeting"),
+    rating: on("rating"),
+    mentionWinner: on("mentionWinner"),
+  };
+}
+
 export function normalizeConfig(raw) {
   const r = (raw && typeof raw === "object") ? raw : {};
   const s = (r.selection && typeof r.selection === "object") ? r.selection : {};
@@ -77,6 +99,7 @@ export function normalizeConfig(raw) {
       sitOut: s.sitOut === false ? false : true,
     },
     rating: normalizeRatingProfile(r.rating),
+    notify: normalizeNotify(r.notify),
   };
 }
 
@@ -137,6 +160,18 @@ export function validateRatingPatch(body) {
     patch.categories = categories;
   }
   return { rating: patch };
+}
+
+// update_club's validation for a notify patch. Same shape as the other two:
+// returns { notify } (a partial to merge) or { error }.
+export function validateNotifyPatch(body) {
+  const patch = {};
+  for (const key of NOTIFY_EVENTS) {
+    if (body[key] === undefined) continue;
+    if (typeof body[key] !== "boolean") return { error: `${key} must be a boolean` };
+    patch[key] = body[key];
+  }
+  return { notify: patch };
 }
 
 // The normalization Phase 10 asks for: a category count / scale independent
