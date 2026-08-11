@@ -1341,6 +1341,19 @@ function normalizeRatingProfile(raw) {
     : "Club score";
   return { scale, categories, scoreLabel };
 }
+// Phase 11 §4.2: per-club Discord event toggles, mirroring club-config.mjs's
+// normalizeNotify. This copy was missing for a while after the server side
+// grew a `notify` key -- exactly the "two copies must stay in sync" trap the
+// rest of this file warns about elsewhere, caught live when the Admin tab's
+// notification toggles read `clubConfig().notify.draw` off an object that
+// had no `notify` key at all.
+const NOTIFY_EVENTS = ["draw", "bookSet", "meeting", "rating", "mentionWinner"];
+function normalizeNotify(raw) {
+  const r = (raw && typeof raw === "object") ? raw : {};
+  const out = {};
+  for (const key of NOTIFY_EVENTS) out[key] = r[key] === false ? false : true;
+  return out;
+}
 function normalizeConfig(raw) {
   const r = (raw && typeof raw === "object") ? raw : {};
   const s = (r.selection && typeof r.selection === "object") ? r.selection : {};
@@ -1350,6 +1363,7 @@ function normalizeConfig(raw) {
       sitOut: s.sitOut === false ? false : true,
     },
     rating: normalizeRatingProfile(r.rating),
+    notify: normalizeNotify(r.notify),
   };
 }
 const clubConfig = () => normalizeConfig(club?.config);
