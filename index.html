@@ -4869,7 +4869,7 @@ function renderRecap(app, year) {
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
   const years = availableRecapYears();
   if (!years.length) {
-    app.innerHTML = `<header><div class="eyebrow">Year in books</div><h1>The Shelf</h1><div class="rule"></div></header>${back}<div class="setup"><h2>Nothing to recap yet</h2><p>Once the club has read a few books, the year in books shows up here.</p></div>`;
+    app.innerHTML = `<header><div class="eyebrow">The Shelf</div><h1>Year in books</h1><div class="rule"></div></header>${back}<div class="setup"><h2>Nothing to recap yet</h2><p>Once the club has read a few books, the year in books shows up here.</p></div>`;
     return;
   }
   const y = years.includes(year) ? year : years[0];
@@ -4890,7 +4890,7 @@ function renderRecap(app, year) {
   const yearNav = years.map(yy => `<a class="recap-year ${yy === y ? 'on' : ''}" href="#recap=${yy}">${yy}</a>`).join("");
 
   app.innerHTML = `
-    <header><div class="eyebrow">Year in books</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">The Shelf</div><h1>Year in books</h1><div class="rule"></div></header>
     ${back}
     <div class="recap">
       ${years.length > 1 ? `<div class="recap-years">${yearNav}</div>` : ''}
@@ -4980,7 +4980,7 @@ function renderAccount() {
     ? myClubs.map(c => `<li>${esc(c.name)} <span class="invite-meta">${c.role === "librarian" ? "librarian" : "member"}</span></li>`).join("")
     : `<li class="invite-meta">none</li>`;
   return `
-    <header><div class="eyebrow">Account</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">The Shelf</div><h1>Account</h1><div class="rule"></div></header>
     <a href="#/c/${esc(clubSlug())}/reading" class="detail-back">← Back to the shelf</a>
     <div class="setup">
       <h2>Your account</h2>
@@ -5146,7 +5146,7 @@ function wireLegal() { /* static page -- nothing to wire up */ }
 // club, which is somebody else's book club.
 function renderNoClubs() {
   return `
-    <header><div class="eyebrow">Welcome</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">The Shelf</div><h1>Welcome</h1><div class="rule"></div></header>
     <div class="setup">
       <h2>You're not in a book club yet</h2>
       <p>Start one and invite your readers, or paste an invite code someone sent you.</p>
@@ -5186,7 +5186,7 @@ function wireNoClubs() {
 // including the reserved-word list this deliberately doesn't duplicate.
 function renderNewClub() {
   return `
-    <header><div class="eyebrow">Start a club</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">The Shelf</div><h1>Start a club</h1><div class="rule"></div></header>
     <a href="#/c/${esc(clubSlug())}/reading" class="detail-back">← Back</a>
     <div class="setup">
       <h2>Start a book club</h2>
@@ -5237,7 +5237,7 @@ function wireNewClub() {
 // ---------- Join with an invite (4d) ----------
 function renderJoin(code) {
   return `
-    <header><div class="eyebrow">Invitation</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">The Shelf</div><h1>Invitation</h1><div class="rule"></div></header>
     <div class="setup">
       <h2>You've been invited</h2>
       <p>Accept to join this book club. You can leave again whenever you like.</p>
@@ -5279,7 +5279,7 @@ function renderClubProblem() {
       ? `<b>${esc(clubName())}</b> has been suspended pending review. Its history and members are untouched, but nothing new can happen here for now.`
       : `<b>${esc(clubName())}</b> exists, but you're not a member — so there's nothing here to show you. Ask a librarian of that club for an invite link.`;
   return `
-    <header><div class="eyebrow">Book club</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">The Shelf</div><h1>Book club</h1><div class="rule"></div></header>
     <div class="setup">
       <h2>${heading}</h2>
       <p>${body}</p>
@@ -5342,7 +5342,7 @@ const clubNeedsOnboarding = () =>
 
 function renderDetailMissing(app, back, loading, msg) {
   app.innerHTML = `
-    <header><div class="eyebrow">${esc(clubName())}</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">The Shelf</div><h1>${esc(clubName())}</h1><div class="rule"></div></header>
     ${back}
     <div class="setup">
       <h2>${loading ? 'Loading…' : 'Book not found'}</h2>
@@ -5578,7 +5578,7 @@ function renderBookDetail(app, ctx) {
   }
 
   app.innerHTML = `
-    <header><div class="eyebrow">${esc(eyebrow)}</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">The Shelf</div><h1>${esc(eyebrow)}</h1><div class="rule"></div></header>
     ${back}
     <div class="book-detail">
       <div class="bd-top">
@@ -5655,7 +5655,7 @@ async function decorateBookDetail(book) {
 function renderTagPage(app, tag) {
   const back = `<a href="#" class="detail-back">← Back to the shelf</a>`;
   app.innerHTML = `
-    <header><div class="eyebrow">Tagged</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">The Shelf</div><h1>Tagged</h1><div class="rule"></div></header>
     ${back}
     <section>
       <div class="section-title">${esc(titleCase(tag))}</div>
@@ -5737,7 +5737,7 @@ function renderReaderPage(app, key) {
   });
 
   let html = `
-    <header><div class="eyebrow">Reader</div><h1>The Shelf</h1><div class="rule"></div></header>
+    <header><div class="eyebrow">The Shelf</div><h1>Reader</h1><div class="rule"></div></header>
     ${back}
     <div class="reader-head">
       ${avatar ? `<img class="reader-avatar" src="${attr(avatar)}" alt="">` : `<span class="reader-avatar reader-avatar-ph"></span>`}
@@ -5887,8 +5887,8 @@ function renderLoginGate() {
            check membership, so the club variable is still null here) -- and
            naming one club on it told every visitor they were arriving somewhere
            they mostly weren't. -->
-      <div class="eyebrow">Book club</div>
-      <h1>The Shelf</h1>
+      <div class="eyebrow">The Shelf</div>
+      <h1>Book club</h1>
       <div class="sub">A book-club picker where the wheel of names decides.</div>
       <div class="rule"></div>
     </header>
@@ -5913,8 +5913,8 @@ function renderLoginGate() {
 function renderSetupNotice() {
   return `
     <header>
-      <div class="eyebrow">Setup required</div>
-      <h1>The Shelf</h1>
+      <div class="eyebrow">The Shelf</div>
+      <h1>Setup required</h1>
       <div class="rule"></div>
     </header>
     <div class="setup">
