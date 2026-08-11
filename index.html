@@ -4267,8 +4267,8 @@ function render() {
 
   let html = `
     <header>
-      <div class="eyebrow">${esc(clubName())} · Round ${state.roundNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
-      <h1>The Shelf</h1>
+      <div class="eyebrow">The Shelf · Round ${state.roundNumber}${admin ? '<span class="librarian-tag">Librarian</span>' : ''}</div>
+      <h1>${esc(clubName())}</h1>
       <div class="sub">${esc(clubTagline())}</div>
       <div class="rule"></div>
       <div class="signed-in-strip">
