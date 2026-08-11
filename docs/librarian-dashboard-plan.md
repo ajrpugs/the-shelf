@@ -1,6 +1,6 @@
 # The Shelf — Librarian dashboard plan
 
-**Status: written and tested, not deployed.** Steps A–E are implemented in one change and pass the suite, but the work is **uncommitted in the working tree** — `main` is still at `776efed` and `https://sh3lf.net/` serves the old Admin tab. Nothing here is live until it is committed and pushed (GitHub Pages serves `index.html` from `main`). §1's measurements are the "before" and are kept as the record of what was wrong, since none of it is visible in the code that replaced it. §9 is what happened, including the two places the plan was wrong.
+**Status: deployed.** Steps A–E shipped as `65d0bdd`, plus a follow-up fix (`9ae093b`, see §9) for a regression the rename caused. Verified live on `https://sh3lf.net/` against real club data — all four sections render, no console errors. §1's measurements are the "before" and are kept as the record of what was wrong, since none of it is visible in the code that replaced it. §9 is what happened, including the two places the plan was wrong.
 
 Original framing follows. This covers the Admin tab (`index.html:4834–5058`), renamed the **Librarian dashboard** and rebuilt around what a librarian actually does rather than around the order the features happened to ship in — **plus the meeting scheduler, which moves in from the Calendar tab** (§3.5). Five other librarian-only controls were considered for the same move and deliberately left where they are; §3.6 records which and why, so the question doesn't have to be re-derived later.
 
@@ -261,3 +261,39 @@ All five steps, in one change: `index.html`, plus `tests/client-librarian-dashbo
 **Verification run.** 110 offline tests pass (`node --test`), `deno check` clean on all seven edge functions, the app boots with no console errors, and every section was rendered and looked at — at 1288px and at 390px, where the four pills correctly hand over to the `<select>` with no horizontal overflow (`scrollWidth === clientWidth === 390`).
 
 **Not yet done — needs a live librarian session.** The rendering was verified against a harness built from the real CSS and the real builders, driven with fixture data, because a local `python3 -m http.server` origin has no Supabase session. Still to exercise against production data, per §8: saving a meeting, adding and removing an extra phase (checking the `key` survives — `calendar-feed` builds each `UID` from it), announcing in Discord, and the zone labels on a club that isn't in Toronto.
+
+### 9.1 One regression, found only by looking at production
+
+Renaming `Admin` → `Librarian` added ~40px to the tab strip and pushed it from
+fitting to overflowing: **scrollWidth 743 against clientWidth 720**. The strip
+scrolls, but `wireUp()` only centred the active tab `if (tabJustSwitched)` — so
+arriving *directly* at the URL (a bookmark, a shared link, a reload) rendered at
+`scrollLeft: 0` with the active tab half-clipped and nothing to suggest it could
+be scrolled to.
+
+Latent all along, and invisible until a label got longer. It was also already
+happening on phones, where the strip has always overflowed. Now the tab is
+scrolled into view whenever it's outside the visible range, not only on a switch,
+with an instant jump rather than a smooth glide when the reader didn't ask for
+the movement.
+
+**None of the offline tests could have caught this** — it needs layout, at a real
+width, on a page that was navigated to rather than switched to. The harness in
+§9 rendered the dashboard's markup faithfully and had nothing to say about the
+strip above it. Worth remembering the next time a label changes length.
+
+### 9.2 Live measurements
+
+Whole-page heights on production, including header, tab strip, search and footer
+— not the section-only figures in §9, which is why they're larger:
+
+| Section | Full page |
+|---|---|
+| Overview | 1,329px |
+| Readers | 1,327px |
+| Settings | 1,210px |
+| Data | 736px |
+
+Against the 3,504px the single Admin scroll measured before, on the same club at
+the same width. The worst case is now **38% of what it was**, and the Data
+section — which holds "Delete this club", previously at 3,400px — is 736px.
