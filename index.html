@@ -6580,11 +6580,26 @@ function wireUp() {
   const tabStrip = document.querySelector(".tabs");
   if (tabStrip) {
     tabStrip.classList.toggle("has-overflow", tabStrip.scrollWidth > tabStrip.clientWidth + 1);
-    if (tabJustSwitched) {
-      const activeTabBtn = document.getElementById(`tab-btn-${currentTab}`);
-      if (activeTabBtn) {
-        const left = activeTabBtn.offsetLeft - (tabStrip.clientWidth - activeTabBtn.clientWidth) / 2;
-        tabStrip.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+    // Centre the active tab on a switch, as before -- but ALSO whenever it's
+    // sitting outside the visible part of the strip, which a switch isn't the
+    // only way to reach. Landing directly on a URL (a bookmark, a shared link,
+    // a reload) renders with scrollLeft at 0 and no switch to react to, so a
+    // tab near the end stayed half-clipped with nothing to suggest it could be
+    // scrolled to. That went unnoticed while the labels happened to fit at
+    // desktop width; renaming Admin -> Librarian pushed the strip 23px over and
+    // made it visible on every load of this tab.
+    const activeTabBtn = document.getElementById(`tab-btn-${currentTab}`);
+    if (activeTabBtn) {
+      const btnLeft = activeTabBtn.offsetLeft;
+      const btnRight = btnLeft + activeTabBtn.offsetWidth;
+      const viewLeft = tabStrip.scrollLeft;
+      const viewRight = viewLeft + tabStrip.clientWidth;
+      const outOfView = btnLeft < viewLeft || btnRight > viewRight;
+      if (tabJustSwitched || outOfView) {
+        const left = btnLeft - (tabStrip.clientWidth - activeTabBtn.clientWidth) / 2;
+        // Jump rather than glide when the reader didn't ask for the movement --
+        // an unprompted smooth scroll on first paint reads as the page twitching.
+        tabStrip.scrollTo({ left: Math.max(0, left), behavior: tabJustSwitched ? "smooth" : "auto" });
       }
     }
   }
