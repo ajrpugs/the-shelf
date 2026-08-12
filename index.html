@@ -427,11 +427,11 @@
     border: 1px solid var(--panel-border);
     border-top: 2px solid var(--brass);
     border-radius: 3px;
-    padding: 22px;
+    padding: 16px 18px;
     text-align:left;
     box-shadow: 0 8px 0 var(--card-shadow), 0 20px 38px rgba(0,0,0,0.5);
-    margin-top: 16px;
-    margin-bottom: 20px;
+    margin-top: 12px;
+    margin-bottom: 14px;
   }
   .winner-banner .stampbig{
     display:inline-block;
@@ -441,13 +441,13 @@
     font-weight:700;
     letter-spacing:0.12em;
     text-transform:uppercase;
-    padding: 4px 12px;
+    padding: 3px 10px;
     transform: rotate(-3deg);
     border-radius: 4px;
-    margin-bottom: 10px;
-    font-size: 13px;
+    margin-bottom: 8px;
+    font-size: 12px;
   }
-  .winner-banner .wn-top{ display: flex; gap: 18px; align-items: flex-start; margin-top: 4px; }
+  .winner-banner .wn-top{ display: flex; gap: 14px; align-items: flex-start; margin-top: 2px; }
   .winner-banner .wn-top .cover-slot.large{ margin: 0; }
   .winner-banner .wn-head{ flex: 1; min-width: 0; }
   @media (max-width: 480px){
@@ -457,21 +457,21 @@
     .winner-banner .wtags{ justify-content: center; }
   }
   .winner-banner .wbook{
-    font-family:'Fraunces', serif; font-weight:700; font-size: 24px;
+    font-family:'Fraunces', serif; font-weight:700; font-size: 20px;
     line-height: 1.15;
   }
-  .winner-banner .wname{ font-size: 13px; color: var(--ink-soft); margin-top: 10px; font-style: italic; letter-spacing: 0.04em; }
+  .winner-banner .wname{ font-size: 12.5px; color: var(--ink-soft); margin-top: 8px; font-style: italic; letter-spacing: 0.04em; }
   .winner-banner .wname b{ color: var(--ink); font-weight: 700; font-style: normal; }
   .winner-banner .wname .score-pill{ margin-left: 10px; font-style: normal; vertical-align: middle; }
-  .winner-banner .wauthor{ font-size: 14px; color: var(--ink-soft); font-style: italic; margin-top: 4px; }
+  .winner-banner .wauthor{ font-size: 13px; color: var(--ink-soft); font-style: italic; margin-top: 3px; }
   .winner-banner .wdesc{
-    margin: 16px 0 0;
-    font-size: 13px; line-height: 1.55; color: var(--ink-soft);
-    padding-top: 14px; border-top: 1px dotted rgba(236,227,207,0.14);
+    margin: 12px 0 0;
+    font-size: 12.5px; line-height: 1.5; color: var(--ink-soft);
+    padding-top: 10px; border-top: 1px dotted rgba(236,227,207,0.14);
   }
-  .winner-banner .wtags{ justify-content: flex-start; margin-top: 12px; }
+  .winner-banner .wtags{ justify-content: flex-start; margin-top: 10px; }
   .winner-banner .wmore{
-    display: inline-block; margin-top: 14px; font-size: 12px;
+    display: inline-block; margin-top: 10px; font-size: 11.5px;
     color: var(--brass); text-decoration: none; letter-spacing: 0.04em;
     border-bottom: 1px solid transparent;
   }
@@ -532,7 +532,7 @@
   .book-meta{ color: var(--muted); font-weight: 400; font-style: normal; }
   .book-meta:not(:empty)::before{ content: "·"; margin: 0 5px; opacity: 0.7; }
   .name .book-meta:not(:empty), .history-item .book-meta:not(:empty){ font-size: 0.85em; }
-  .winner-banner .wmeta{ margin-top: 4px; font-size: 12px; letter-spacing: 0.04em; }
+  .winner-banner .wmeta{ margin-top: 3px; font-size: 11.5px; letter-spacing: 0.04em; }
   .winner-banner .wmeta:not(:empty)::before{ content: none; }
 
   /* Genre tags */
@@ -622,13 +622,13 @@
   }
 
   /* Live scorecard on the Currently reading banner */
-  .bn-review{ margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--panel-border); }
+  .bn-review{ margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--panel-border); }
   .bn-review-score{ display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  .bn-review-score .bd-score{ font-family:'Fraunces',serif; font-weight:700; font-size:26px; line-height:1; color:var(--ink); }
-  .bn-review-score .bd-score-max{ font-size:13px; color:var(--ink-soft); font-weight:400; margin-left:2px; }
+  .bn-review-score .bd-score{ font-family:'Fraunces',serif; font-weight:700; font-size:22px; line-height:1; color:var(--ink); }
+  .bn-review-score .bd-score-max{ font-size:12px; color:var(--ink-soft); font-weight:400; margin-left:2px; }
   .bn-review-score .score-pill{ align-self:center; }
   .bn-review-count{ font-size:12px; color:var(--ink-soft); font-style:italic; }
-  .bn-review-actions{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  .bn-review-actions{ display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
   .btn-mini.lock{ background: var(--brass); color: var(--card); }
   @media (max-width: 480px){ .winner-banner .bn-review-score, .winner-banner .bn-review-actions{ justify-content:center; } }
 
@@ -772,9 +772,9 @@
   .cover-slot.small{ width: 46px; height: 69px; }
   .cover-slot.large{
     display: block;
-    width: 110px; height: 165px;
+    width: 84px; height: 126px;
     margin: 14px auto 12px;
-    box-shadow: 0 6px 16px rgba(0,0,0,0.28);
+    box-shadow: 0 5px 12px rgba(0,0,0,0.28);
   }
   .cover-slot.xl{
     width: 150px; height: 225px; display: block;
