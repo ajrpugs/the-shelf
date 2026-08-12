@@ -24,6 +24,7 @@ const DEFAULT_RATING = {
     { slot: "themes", label: "Themes / Ideas" },
   ],
   scoreLabel: "Club score",
+  enabled: true,
 };
 
 // ---- normalizeConfig --------------------------------------------------------
@@ -128,6 +129,22 @@ test("normalizeRatingProfile: only a non-blank string overrides the score label"
   assert.equal(normalizeRatingProfile({}).scoreLabel, "Club score");
 });
 
+test("normalizeRatingProfile: only an explicit false turns ratings off", () => {
+  assert.equal(normalizeRatingProfile({}).enabled, true);
+  assert.equal(normalizeRatingProfile({ enabled: false }).enabled, false);
+  assert.equal(normalizeRatingProfile({ enabled: "off" }).enabled, true); // not a real false -- stays on
+  assert.equal(normalizeRatingProfile({ enabled: true }).enabled, true);
+});
+
+// A locked read's profile snapshot (admin_set_rating) is built from scale +
+// categories only, never scoring while ratings were off is the only way a
+// read gets scored at all, so re-normalizing that snapshot must always land
+// back on enabled: true regardless of the club's *current* live setting.
+test("normalizeRatingProfile: a locked read's snapshot (no enabled key) always re-normalizes to enabled true", () => {
+  const snapshot = { scale: 10, categories: [{ slot: "plot", label: "Overall" }] };
+  assert.equal(normalizeRatingProfile(snapshot).enabled, true);
+});
+
 // ---- validateRatingPatch ------------------------------------------------------
 
 test("validateRatingPatch accepts a valid categories patch, in order", () => {
@@ -168,6 +185,19 @@ test("validateRatingPatch validates scoreLabel length and blankness", () => {
 
 test("validateRatingPatch with nothing set returns an empty patch, not an error", () => {
   assert.deepEqual(validateRatingPatch({}), { rating: {} });
+});
+
+test("validateRatingPatch accepts a boolean enabled and rejects anything else", () => {
+  assert.deepEqual(validateRatingPatch({ enabled: false }), { rating: { enabled: false } });
+  assert.deepEqual(validateRatingPatch({ enabled: true }), { rating: { enabled: true } });
+  assert.ok("error" in validateRatingPatch({ enabled: "false" }));
+});
+
+// { enabled: false } alone must be a valid, complete patch on its own -- the
+// Settings UI sends exactly this for "Off" so it doesn't overwrite
+// categories/scale/scoreLabel just because ratings are off right now.
+test("an enabled-only patch doesn't require or touch categories", () => {
+  assert.deepEqual(validateRatingPatch({ enabled: false }), { rating: { enabled: false } });
 });
 
 // ---- normalizeRatingTotal (the /100 normalization, §3 point 2) --------------

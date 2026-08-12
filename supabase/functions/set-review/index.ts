@@ -129,10 +129,19 @@ Deno.serve(async (req) => {
   const ratingCfg = normalizeConfig(clubRow?.config).rating;
   const activeSlots = new Set(ratingCfg.categories.map((c: { slot: string }) => c.slot));
 
+  // A club can turn ratings off entirely -- nothing to review there.
+  if (ratingCfg.enabled === false) {
+    return json({ error: "this club doesn't rate books" }, 403);
+  }
+
   // Reviews are only accepted on the *current* read — the oldest pick that
-  // hasn't been given a committed score yet — and only while the librarian has
-  // opened ratings. This blocks retroactive scoring of past reads.
-  const isRated = (h: Read) => !!(h?.rating && Number.isFinite(Number(h.rating.total)));
+  // hasn't been resolved yet, whether scored or (a ratings-off club) marked
+  // finished with no score — and only while the librarian has opened
+  // ratings. This blocks retroactive scoring of past reads. Checking `!!h.rating`
+  // rather than requiring a numeric total specifically is what keeps a
+  // finished-with-no-score read (admin_mark_finished) from being mistaken for
+  // still-open here, same as the client's readIsOpen().
+  const isRated = (h: Read) => !!h?.rating;
   const unrated = history.filter(h => !isRated(h));
   const current = unrated.length ? unrated[unrated.length - 1] : null;
   if (!current || current.ts !== bookTs) {

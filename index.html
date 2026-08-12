@@ -1501,7 +1501,10 @@ function normalizeRatingProfile(raw) {
   const scoreLabel = (typeof r.scoreLabel === "string" && r.scoreLabel.trim())
     ? r.scoreLabel.trim().slice(0, 40)
     : "Club score";
-  return { scale, categories, scoreLabel };
+  // Whether this club rates books at all. Mirrors club-config.mjs -- same
+  // two-copy rule as the rest of normalizeConfig, see CLAUDE.md's drift note.
+  const enabled = r.enabled === false ? false : true;
+  return { scale, categories, scoreLabel, enabled };
 }
 // Phase 11 §4.2: per-club Discord event toggles, mirroring club-config.mjs's
 // normalizeNotify. This copy was missing for a while after the server side
@@ -3174,6 +3177,26 @@ function setRatingsOpen(bookTs, open) {
   callAdmin("admin_set_ratings_open", { ts: bookTs, open: !!open });
 }
 
+// Librarian's equivalent of lockInScore for a club with ratings off: closes
+// out the current read with no score instead of a locked-in total, dropping
+// it into history (and promoting the next-up read). Toggles, same as
+// admin-update's admin_mark_finished -- calling it again on an already-
+// finished read reopens it, since that's the only undo once a read has left
+// the Reading tab's current-read banner.
+async function markFinished(bookTs) {
+  const h = state.history.find(x => x.ts === bookTs);
+  const title = h?.book || "this read";
+  const alreadyFinished = !!(h?.rating && h.rating.finished === true);
+  const ok = await confirmModal(
+    alreadyFinished
+      ? `Reopen "${title}"? It'll go back to being the current read.`
+      : `Mark "${title}" as finished, with no score? It moves to the reading history.`,
+    { title: alreadyFinished ? "Reopen this read?" : "Mark as finished?", confirmLabel: alreadyFinished ? "Reopen" : "Mark finished", danger: false },
+  );
+  if (!ok) return;
+  callAdmin("admin_mark_finished", { ts: bookTs });
+}
+
 // Librarian snapshots the current member average into the committed score,
 // which drops the read onto the leaderboard (and promotes the next-up read).
 async function lockInScore(bookTs) {
@@ -4339,6 +4362,11 @@ function dashSettingsHtml() {
   const ratingCfg = cfg.rating || {};
   const ratingCats = ratingCfg.categories || [];
   const ratingScale = ratingCfg.scale ?? 20;
+  const ratingEnabled = ratingCfg.enabled !== false;
+  // Derived, never stored: a rubric with exactly one active category *is* a
+  // simple scale (docs/configurability-plan.md §3) -- there's no separate
+  // flag for it to drift from the categories array that actually defines it.
+  const ratingStyle = !ratingEnabled ? "off" : ratingCats.length === 1 ? "simple" : "rubric";
   const notifyCfg = cfg.notify || {};
 
   // The timezone is the one that actually mattered: it used to be a constant,
@@ -4390,39 +4418,63 @@ function dashSettingsHtml() {
   // clubs set once. Native <details>, same mechanism as .row-menu.
   html += `<div class="card no-rule" style="margin-top:10px;">`;
 
-  // Rating rubric (Phase 10, docs/configurability-plan.md §3). The five physical
-  // shelf_reviews columns stay fixed; this only decides which are switched on
-  // and what each is called. Unchecking a category doesn't touch existing scores
-  // in it -- they just stop being asked for (set-review enforces the same active
-  // list server-side). A read already locked keeps rendering under whatever
-  // rubric it was scored with (admin_set_rating's profile snapshot), so this
-  // never rewrites history.
+  // Rating rubric (Phase 10, docs/configurability-plan.md §3), plus the style
+  // picker on top of it. The five physical shelf_reviews columns stay fixed;
+  // "Rubric" vs "Simple scale" is purely how many of them are active -- a
+  // single active category already *is* a simple scale, so picking "Simple
+  // scale" just constrains the same categories editor to one slot rather
+  // than opening a second scoring mechanism. "Off" sets config.rating.enabled
+  // false; nothing else in this card applies while it's picked. Unchecking a
+  // category doesn't touch existing scores in it -- they just stop being
+  // asked for (set-review enforces the same active list server-side). A read
+  // already locked keeps rendering under whatever rubric it was scored with
+  // (admin_set_rating's profile snapshot), so none of this ever rewrites
+  // history -- including switching to/from Off, which only changes how new
+  // reads get resolved (a score vs. a plain "Mark as finished").
+  const ratingSummary = ratingStyle === "off"
+    ? "Off"
+    : ratingStyle === "simple"
+      ? `${esc(ratingCfg.scoreLabel || "Club score")} · simple scale out of ${ratingScale}`
+      : `${esc(ratingCfg.scoreLabel || "Club score")} · ${ratingCats.length} categor${ratingCats.length === 1 ? 'y' : 'ies'} out of ${ratingScale} each`;
   html += `<details class="cfg">
     <summary>
-      <span class="cfg-name">Rating rubric</span>
-      <span class="cfg-summary">${esc(ratingCfg.scoreLabel || "Club score")} · ${ratingCats.length} categor${ratingCats.length === 1 ? 'y' : 'ies'} out of ${ratingScale} each</span>
+      <span class="cfg-name">Rating style</span>
+      <span class="cfg-summary">${ratingSummary}</span>
       <span class="cfg-toggle">Edit</span>
     </summary>
     <div class="cfg-body">
-      <div class="field-grid">
-        <label class="field">
-          <span class="field-label">Score label</span>
-          <input id="cs-score-label" type="text" maxlength="40" value="${attr(ratingCfg.scoreLabel || "Club score")}">
-        </label>
-        <label class="field">
-          <span class="field-label">Per-category max (points)</span>
-          <input id="cs-rating-scale" type="number" min="2" max="20" value="${ratingScale}" style="max-width:90px;">
+      <div class="tool-row" id="rating-style-row" data-rating-style="${ratingStyle}">
+        <button type="button" class="${ratingStyle === 'rubric' ? 'btn-primary' : 'btn-ghost'}" data-rating-style-btn="rubric">Rubric</button>
+        <button type="button" class="${ratingStyle === 'simple' ? 'btn-primary' : 'btn-ghost'}" data-rating-style-btn="simple">Simple scale</button>
+        <button type="button" class="${ratingStyle === 'off' ? 'btn-primary' : 'btn-ghost'}" data-rating-style-btn="off">Off</button>
+      </div>
+      <div id="rating-fields" style="margin-top:12px; ${ratingStyle === 'off' ? 'display:none;' : ''}">
+        <div class="field-grid">
+          <label class="field">
+            <span class="field-label">Score label</span>
+            <input id="cs-score-label" type="text" maxlength="40" value="${attr(ratingCfg.scoreLabel || "Club score")}">
+          </label>
+          <label class="field">
+            <span class="field-label" id="rating-scale-label">${ratingStyle === 'simple' ? 'Scale (1 to N)' : 'Per-category max (points)'}</span>
+            <input id="cs-rating-scale" type="number" min="2" max="20" value="${ratingScale}" style="max-width:90px;">
+          </label>
+        </div>
+        <div id="rating-categories" style="${ratingStyle === 'simple' ? 'display:none;' : ''}">
+          <div class="field-label" style="margin-top:12px;">Categories — at least one</div>
+          ${RATING_SLOTS.map(slot => {
+            const active = ratingCats.find(c => c.slot === slot);
+            return `<label class="field-inline" style="margin-top:6px; align-items:center;">
+              <input type="checkbox" data-rating-slot="${attr(slot)}" ${active ? "checked" : ""}>
+              <input type="text" data-rating-label="${attr(slot)}" maxlength="40" value="${attr(active ? active.label : RATING_SLOT_LABELS[slot])}" style="flex:1; max-width:280px;">
+            </label>`;
+          }).join("")}
+        </div>
+        <label class="field" id="rating-simple-label-field" style="margin-top:12px; ${ratingStyle === 'rubric' ? 'display:none;' : ''}">
+          <span class="field-label">What to call it</span>
+          <input id="cs-rating-simple-label" type="text" maxlength="40" value="${attr((ratingCats[0] && ratingCats[0].label) || "Score")}">
         </label>
       </div>
-      <div class="field-label" style="margin-top:12px;">Categories — at least one</div>
-      ${RATING_SLOTS.map(slot => {
-        const active = ratingCats.find(c => c.slot === slot);
-        return `<label class="field-inline" style="margin-top:6px; align-items:center;">
-          <input type="checkbox" data-rating-slot="${attr(slot)}" ${active ? "checked" : ""}>
-          <input type="text" data-rating-label="${attr(slot)}" maxlength="40" value="${attr(active ? active.label : RATING_SLOT_LABELS[slot])}" style="flex:1; max-width:280px;">
-        </label>`;
-      }).join("")}
-      <p><button class="btn-primary" id="cs-rating-save">Save rating rubric</button></p>
+      <p><button class="btn-primary" id="cs-rating-save">Save rating style</button></p>
     </div>
   </details>`;
 
@@ -4658,10 +4710,22 @@ function ratingBandTiers(scale) {
 function ratingsOpen(h) {
   return !!(h && h.ratingsOpen);
 }
-// The current read = the oldest pick without a committed score. Reviews are
-// only ever accepted here (never retroactively on past reads).
+// A read is still "open" -- not yet resolved one way or the other -- until
+// reads.rating holds *something*: either a committed score (h.rating.total)
+// or, for a club with ratings off, a { finished: true } marker from
+// admin_mark_finished. Deliberately not ratingTotal(h) == null here: that
+// only ever tells you there's no *number* to show, which stays correctly
+// true for a finished-no-score read too (it should never show a score) --
+// but progression needs the broader question, "has this been resolved at
+// all", or a ratings-off club's current read would never advance. Mirrors
+// set-review's isRated() server-side.
+function readIsOpen(h) {
+  return !h || !h.rating;
+}
+// The current read = the oldest pick that hasn't been resolved yet. Reviews
+// are only ever accepted here (never retroactively on past reads).
 function currentReadTs() {
-  const unrated = state.history.filter(h => ratingTotal(h) == null);
+  const unrated = state.history.filter(readIsOpen);
   return unrated.length ? unrated[unrated.length - 1].ts : null;
 }
 function isCurrentRead(h) {
@@ -4751,8 +4815,20 @@ function readerHref(id, name) {
 // "Rate this read" / librarian "Lock in" controls are shown.
 function bannerHtml(pick, { stamp, admin, showRate }) {
   const avatar = pick?.winner_id ? userAvatar(pick.winner_id) : null;
+  const ratingEnabled = clubConfig().rating.enabled;
   let reviewBlock = "";
-  if (showRate && pick.book) {
+  if (showRate && pick.book && !ratingEnabled) {
+    // No score to lock in here -- admin_mark_finished is this club's
+    // equivalent of "Lock in", and per the existing decision that the three
+    // rating controls stay off the book detail page (CLAUDE.md §3.6), this
+    // is the only place it's offered.
+    reviewBlock = admin
+      ? `<div class="bn-review">
+          <div class="bn-review-count">This club doesn't rate its reads.</div>
+          <div class="bn-review-actions"><button class="btn-mini lock" data-mark-finished-ts="${attr(pick.ts || '')}">Mark as finished</button></div>
+        </div>`
+      : '';
+  } else if (showRate && pick.book) {
     const open = ratingsOpen(pick);
     const agg = aggregateRubric(pick.ts);
     const mine = myReviewFor(pick.ts);
@@ -5023,13 +5099,14 @@ function render() {
   const iAmEliminated = state.eliminated.includes(session.user.id);
   const eligibleSubs = eligibleEntries();
   const eligibleCount = eligibleSubs.length;
-  // Books split by role from rating status alone. Unrated picks are in flight:
-  // the *oldest* unrated is what the club is reading now ("Currently reading"),
-  // and any newer unrated picks are queued ("Next up"). Rated picks are done and
-  // belong on the leaderboard. So scoring the current read drops it to the
-  // leaderboard and the next-up automatically becomes the new oldest-unrated —
-  // i.e. it promotes to Currently reading on the very next render.
-  const unrated = state.history.filter(h => ratingTotal(h) == null); // newest-first
+  // Books split by resolved status. Unresolved picks are in flight: the
+  // *oldest* is what the club is reading now ("Currently reading"), and any
+  // newer unresolved picks are queued ("Next up"). Resolved picks (scored, or
+  // for a ratings-off club, marked finished) are done and belong on the
+  // leaderboard. So resolving the current read drops it to the leaderboard
+  // and the next-up automatically becomes the new oldest-unresolved — i.e.
+  // it promotes to Currently reading on the very next render.
+  const unrated = state.history.filter(readIsOpen); // newest-first
   const currentlyReading = unrated.length ? unrated[unrated.length - 1] : null;
   const nextUp = unrated.slice(0, -1).reverse(); // newer picks, soonest-to-read first
 
@@ -5252,9 +5329,38 @@ function render() {
 
   // ---- Leaderboard (finished reads, ranked by Guild rating) ----
   if (currentTab === "leaderboard") {
+  html += `<section><div class="section-title">Leaderboard</div>`;
+  if (!clubConfig().rating.enabled) {
+    // No scores to rank -- just the reading history, newest first, with a
+    // librarian-only "Reopen" (admin_mark_finished again, toggled) since
+    // that's the only way back once a read has left the Reading tab's
+    // current-read banner.
+    const finished = state.history.filter(h => !readIsOpen(h)).sort((a, b) => b.round - a.round);
+    if (finished.length === 0) {
+      html += `<div class="empty-block">This club doesn't rate its reads.<br>Finished books show up here.</div>`;
+    } else {
+      html += `<div class="card no-rule">`;
+      finished.forEach(h => {
+        const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
+        html += `
+          <div class="history-item">
+            <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
+            <span class="h-content">
+              ${h.winner_username
+                ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — <a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`
+                : `<a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
+            </span>
+            <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
+            ${admin ? `<button class="btn-mini ghost" data-mark-finished-ts="${attr(h.ts || '')}">Reopen</button>` : ''}
+          </div>
+        `;
+      });
+      html += `</div>`;
+    }
+    html += `</section>`;
+  } else {
   // Rated books only — in-progress reads live in the hero banners above, so
   // nothing unrated clutters the ranking.
-  html += `<section><div class="section-title">Leaderboard</div>`;
   const rated = state.history.filter(h => ratingTotal(h) != null);
   if (rated.length === 0) {
     html += `<div class="empty-block">No books rated yet.</div>`;
@@ -5293,6 +5399,7 @@ function render() {
     html += `</div>`;
   }
   html += `</section>`;
+  } // end enabled-ratings branch
   } // end leaderboard tab
 
   // ---- Stats ----
@@ -5410,7 +5517,7 @@ function render() {
     const reviewed = state.history.filter(h => ratingTotal(h) != null);
     html += `<div class="card no-rule" style="margin-top: 12px;"><div class="mini-head">Reviewed reads</div>`;
     if (reviewed.length === 0) {
-      html += `<div class="empty-block">No reads have been reviewed yet.</div>`;
+      html += `<div class="empty-block">${clubConfig().rating.enabled ? "No reads have been reviewed yet." : "This club doesn't rate its reads."}</div>`;
     } else {
       reviewed.forEach(h => {
         const total = ratingTotal(h);
@@ -6156,8 +6263,10 @@ function guildReviewHtml(h) {
   }
 
   // Rating is only possible on the current read while ratings are open — never
-  // retroactively on a past read.
-  if (session && isCurrentRead(h) && ratingsOpen(h)) {
+  // retroactively on a past read -- and only for a club that rates at all.
+  // The librarian's "Mark as finished" for a ratings-off club stays on the
+  // Reading banner only (bannerHtml), same as every other rating control.
+  if (session && isCurrentRead(h) && ratingsOpen(h) && clubConfig().rating.enabled) {
     const mine = myReviewFor(h.ts);
     html += `<div class="bn-review-actions" style="margin-top:14px;">
       <button class="btn-mini" data-rate-ts="${attr(h.ts || "")}">${mine && !mine.dnf ? "Edit my review" : "Rate this read"}</button>
@@ -6244,12 +6353,12 @@ function renderBookDetail(app, ctx) {
     const h = state.history.find(e => e.round === ctx.round);
     if (!h) return renderDetailMissing(app, back, state.history.length === 0, `There's no past read for round ${ctx.round}.`);
     book = h.book;
-    // Unrated picks are in flight: the oldest is "Currently reading", newer ones
-    // are "Next up". Rated picks are finished ("Past read"). Mirrors render().
-    const unrated = state.history.filter(x => ratingTotal(x) == null);
+    // Unresolved picks are in flight: the oldest is "Currently reading", newer
+    // ones are "Next up". Resolved picks are finished ("Past read"). Mirrors render().
+    const unrated = state.history.filter(readIsOpen);
     const current = unrated.length ? unrated[unrated.length - 1] : null;
     const status = current && h.ts === current.ts ? "Currently reading"
-      : ratingTotal(h) == null ? "Next up" : null;
+      : readIsOpen(h) ? "Next up" : null;
     eyebrow = `${status || "Past read"} · Round ${h.round}`;
     if (status) stampHtml = `<div class="detail-stamp">${esc(status)}</div>`;
     const avatar = h.winner_id ? userAvatar(h.winner_id) : null;
@@ -6897,22 +7006,59 @@ function wireUp() {
     saveSelection({ sitOut: checked });
   });
 
-  // ---- Rating rubric (Phase 10) ----
+  // ---- Rating style (Phase 10, + the Rubric/Simple/Off picker) ----
+  // Pure DOM toggle, not a render() -- switching styles shouldn't discard
+  // whatever the librarian has already typed into the fields below it.
+  document.querySelectorAll("[data-rating-style-btn]").forEach(el => {
+    el.addEventListener("click", (e) => {
+      e.currentTarget.blur();
+      const style = el.dataset.ratingStyleBtn;
+      const row = document.getElementById("rating-style-row");
+      if (row) row.dataset.ratingStyle = style;
+      row?.querySelectorAll("[data-rating-style-btn]").forEach(b => {
+        b.className = b.dataset.ratingStyleBtn === style ? "btn-primary" : "btn-ghost";
+      });
+      const fields = document.getElementById("rating-fields");
+      if (fields) fields.style.display = style === "off" ? "none" : "";
+      const cats = document.getElementById("rating-categories");
+      if (cats) cats.style.display = style === "simple" ? "none" : "";
+      const simpleField = document.getElementById("rating-simple-label-field");
+      if (simpleField) simpleField.style.display = style === "rubric" ? "none" : "";
+      const scaleLabel = document.getElementById("rating-scale-label");
+      if (scaleLabel) scaleLabel.textContent = style === "simple" ? "Scale (1 to N)" : "Per-category max (points)";
+    });
+  });
   document.getElementById("cs-rating-save")?.addEventListener("click", async (e) => {
     e.currentTarget.blur();
-    const categories = RATING_SLOTS
-      .filter(slot => document.querySelector(`[data-rating-slot="${slot}"]`)?.checked)
-      .map(slot => ({ slot, label: document.querySelector(`[data-rating-label="${slot}"]`)?.value ?? "" }));
-    if (!categories.length) { setFlash("err", "Pick at least one rating category."); render(); return; }
-    const scale = Number(document.getElementById("cs-rating-scale")?.value ?? 20);
-    const scoreLabelInput = document.getElementById("cs-score-label")?.value ?? "";
-    const body = await callClubAdmin("update_club", {
-      club_id: clubId(),
-      rating: { categories, scale, scoreLabel: scoreLabelInput },
-    });
+    const style = document.getElementById("rating-style-row")?.dataset.ratingStyle || "rubric";
+    let patch;
+    if (style === "off") {
+      // Categories/scale/label stay whatever they already were server-side --
+      // no reason to overwrite them just because ratings are off right now.
+      patch = { enabled: false };
+    } else {
+      const scale = Number(document.getElementById("cs-rating-scale")?.value ?? 20);
+      const scoreLabelInput = document.getElementById("cs-score-label")?.value ?? "";
+      let categories;
+      if (style === "simple") {
+        // Always the same fixed slot -- which physical column backs a simple
+        // scale is arbitrary, since only one is ever active. The checkboxes
+        // above stay hidden-but-present in the DOM, so their stale checked
+        // state (from before switching to Simple) is deliberately ignored.
+        const label = document.getElementById("cs-rating-simple-label")?.value || "Score";
+        categories = [{ slot: RATING_SLOTS[0], label }];
+      } else {
+        categories = RATING_SLOTS
+          .filter(slot => document.querySelector(`[data-rating-slot="${slot}"]`)?.checked)
+          .map(slot => ({ slot, label: document.querySelector(`[data-rating-label="${slot}"]`)?.value ?? "" }));
+        if (!categories.length) { setFlash("err", "Pick at least one rating category."); render(); return; }
+      }
+      patch = { enabled: true, categories, scale, scoreLabel: scoreLabelInput };
+    }
+    const body = await callClubAdmin("update_club", { club_id: clubId(), rating: patch });
     if (!body?.club) { render(); return; }
     club = { ...club, ...body.club };
-    setFlash("info", "Rating rubric saved.");
+    setFlash("info", "Rating style saved.");
     render();
   });
 
@@ -7151,6 +7297,8 @@ document.addEventListener("click", async (e) => {
   }
   const lock = e.target.closest("[data-lock-ts]");
   if (lock) { lockInScore(lock.dataset.lockTs); return; }
+  const markFin = e.target.closest("[data-mark-finished-ts]");
+  if (markFin) { markFinished(markFin.dataset.markFinishedTs); return; }
   const openBtn = e.target.closest("[data-openratings-ts]");
   if (openBtn) { setRatingsOpen(openBtn.dataset.openratingsTs, openBtn.dataset.open === "1"); return; }
   const cPost = e.target.closest("[data-comment-post]");

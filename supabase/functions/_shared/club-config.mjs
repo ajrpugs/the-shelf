@@ -62,7 +62,13 @@ export function normalizeRatingProfile(raw) {
   const scoreLabel = (typeof r.scoreLabel === "string" && r.scoreLabel.trim())
     ? r.scoreLabel.trim().slice(0, 40)
     : "Club score";
-  return { scale, categories, scoreLabel };
+  // Whether this club rates books at all. Defaults true -- today's behaviour
+  // for every club whose config predates this key. A locked read's own
+  // profile snapshot (admin_set_rating) never sets this false -- a read can
+  // only be scored while ratings were on -- so re-normalizing a snapshot
+  // here always lands back on the correct `true`.
+  const enabled = r.enabled === false ? false : true;
+  return { scale, categories, scoreLabel, enabled };
 }
 
 // §4.2: per-club Discord event toggles. All default true -- today's
@@ -158,6 +164,13 @@ export function validateRatingPatch(body) {
       categories.push({ slot, label });
     }
     patch.categories = categories;
+  }
+  // Independent of `categories` on purpose: an { enabled: false } patch on
+  // its own neither touches nor requires a category list -- categories stay
+  // whatever they were, just moot while ratings are off.
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== "boolean") return { error: "enabled must be a boolean" };
+    patch.enabled = body.enabled;
   }
   return { rating: patch };
 }

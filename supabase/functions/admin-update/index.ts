@@ -777,6 +777,7 @@ Deno.serve(async (req) => {
       case "admin_set_rating": {
         // Librarian sets/clears the Guild rating (score /100) on a past read,
         // identified by its history timestamp. total === null clears it.
+        if (!clubConfig.rating.enabled) throw new Error("ratings are off for this club");
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
         const { data: entry, error: findErr } = await client
@@ -817,6 +818,30 @@ Deno.serve(async (req) => {
         }
         const { error: updErr } = await client
           .from("reads").update({ rating: newRating })
+          .eq("club_id", clubId).eq("ts", ts);
+        if (updErr) throw updErr;
+        break;
+      }
+      case "admin_mark_finished": {
+        // A ratings-off club has no score to lock in, so this is its
+        // equivalent of admin_set_rating: how a read stops being "current"
+        // and moves into history. Toggles -- calling it again on an already-
+        // finished read reopens it (rating back to null) -- same shape as
+        // admin_set_ratings_open's toggle, and the only way to undo a
+        // mis-click once the read has left the Reading tab's current-read
+        // banner (see the Leaderboard tab's reading-history list).
+        if (clubConfig.rating.enabled) throw new Error("ratings are on for this club -- lock in a score instead");
+        const ts = String(payload.ts ?? "");
+        if (!ts) throw new Error("ts required");
+        const { data: entry, error: findErr } = await client
+          .from("reads").select("rating")
+          .eq("club_id", clubId).eq("ts", ts).maybeSingle();
+        if (findErr) throw findErr;
+        if (!entry) throw new Error("history item not found");
+        const isFinished = !!(entry.rating && (entry.rating as { finished?: boolean }).finished === true);
+        const nextRating: { finished: true } | null = isFinished ? null : { finished: true };
+        const { error: updErr } = await client
+          .from("reads").update({ rating: nextRating })
           .eq("club_id", clubId).eq("ts", ts);
         if (updErr) throw updErr;
         break;

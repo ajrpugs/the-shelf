@@ -257,6 +257,7 @@ test("no control was lost in the regrouping", () => {
   const ids = [
     "undo-btn", "cs-name", "cs-tagline", "cs-tz", "cs-public", "cs-save",
     "cs-sitout", "cs-score-label", "cs-rating-scale", "cs-rating-save",
+    "rating-style-row", "cs-rating-simple-label",
     "cs-webhook", "cs-webhook-save", "cs-guild-id", "cs-guild-save",
     "cs-cal-copy", "cs-cal-rotate", "inv-new", "inv-max", "inv-days",
     "export-club-btn", "reset-btn", "delete-club-btn",
@@ -265,8 +266,48 @@ test("no control was lost in the regrouping", () => {
 
   const hooks = [
     "data-sel-mode=", "data-rating-slot=", "data-rating-label=", "data-notify-key=",
-    "data-admin-editbook=", "data-admin-clear=", "data-admin-grant-lib=", "data-admin-remove=",
-    "data-inv-copy=", "data-inv-revoke=",
+    "data-rating-style-btn=", "data-admin-editbook=", "data-admin-clear=",
+    "data-admin-grant-lib=", "data-admin-remove=", "data-inv-copy=", "data-inv-revoke=",
   ];
   for (const h of hooks) assert.ok(all.includes(h), `handler hook "${h}" is no longer rendered anywhere`);
+});
+
+// The rating style picker (Rubric / Simple scale / Off) is derived, not
+// stored: a rubric with exactly one active category *is* Simple scale, and
+// config.rating.enabled === false is Off. Each state must render without
+// throwing and mark the right button active -- this is the surface most
+// likely to drift the way notify did (CLAUDE.md's drift note), since it's a
+// third hand-maintained reading of the same normalizeRatingProfile shape.
+test("the rating style picker reflects rubric/simple/off correctly", () => {
+  const cases = [
+    {
+      name: "rubric",
+      rating: { scale: 20, scoreLabel: "Guild score", categories: [{ slot: "plot", label: "Plot" }, { slot: "themes", label: "Themes" }] },
+      activeBtn: "rubric",
+    },
+    {
+      name: "simple scale",
+      rating: { scale: 10, scoreLabel: "Club score", categories: [{ slot: "plot", label: "Overall" }] },
+      activeBtn: "simple",
+    },
+    {
+      name: "off",
+      rating: { scale: 20, scoreLabel: "Club score", categories: [{ slot: "plot", label: "Plot" }], enabled: false },
+      activeBtn: "off",
+    },
+  ];
+  for (const c of cases) {
+    const ctx = makeContext({
+      currentSubTab: "settings",
+      clubConfig: () => ({
+        selection: { mode: "wheel", sitOut: true },
+        rating: c.rating,
+        notify: { draw: true, bookSet: true, meeting: true, rating: true, mentionWinner: true },
+      }),
+    });
+    const out = ctx.librarianDashboardHtml(null, []);
+    assert.ok(out.includes(`data-rating-style="${c.activeBtn}"`), `${c.name}: rating-style-row did not report "${c.activeBtn}"`);
+    const activeBtnMatch = out.match(new RegExp(`<button[^>]*data-rating-style-btn="${c.activeBtn}"[^>]*>`));
+    assert.ok(activeBtnMatch && /btn-primary/.test(activeBtnMatch[0]), `${c.name}: the ${c.activeBtn} button isn't shown as selected`);
+  }
 });
