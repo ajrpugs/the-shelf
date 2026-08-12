@@ -79,6 +79,15 @@ function makeContext(over = {}) {
       plot: "Plot", characters: "Characters", pacing: "Organization / Pacing",
       language: "Use of Language", themes: "Themes / Ideas",
     },
+    // Stubs for ratingBandsFieldsHtml, which sits inside the sliced block but
+    // reaches for these two module-level consts defined well after END (see
+    // the slice-boundary comment above) -- same reason RATING_SLOTS/LABELS
+    // are stubbed rather than sliced in.
+    BAND_KEYS: ["exc", "great", "good", "bad"],
+    RUBRIC_ALL: ["plot", "characters", "pacing", "language", "themes"].map(key => ({
+      key,
+      bands: { exc: `${key} exc`, great: `${key} great`, good: `${key} good`, bad: `${key} bad` },
+    })),
     COMMON_TIMEZONES: ["America/Toronto", "Europe/London"],
     currentSubTab: "overview",
     club: { name: "The Guild", tagline: "long live the revolution", visibility: "private", discord_guild_id: null },
@@ -266,10 +275,43 @@ test("no control was lost in the regrouping", () => {
 
   const hooks = [
     "data-sel-mode=", "data-rating-slot=", "data-rating-label=", "data-notify-key=",
-    "data-rating-style-btn=", "data-admin-editbook=", "data-admin-clear=",
+    "data-rating-style-btn=", "data-rating-band=", "data-rating-band-key=",
+    "data-admin-editbook=", "data-admin-clear=",
     "data-admin-grant-lib=", "data-admin-remove=", "data-inv-copy=", "data-inv-revoke=",
   ];
   for (const h of hooks) assert.ok(all.includes(h), `handler hook "${h}" is no longer rendered anywhere`);
+});
+
+// ratingBandsFieldsHtml is what actually surfaces the fix: the Guild's own
+// band prose is the default (shown as a placeholder, not baked into value=),
+// and a per-category override shows up both as the field's value and in the
+// "Customized" summary line, so it's obvious at a glance which categories
+// have strayed from the Guild's wording.
+test("scoring-guidance fields default to the Guild's text and reflect a real override", () => {
+  const ctx = makeContext({
+    currentSubTab: "settings",
+    clubConfig: () => ({
+      selection: { mode: "wheel", sitOut: true },
+      rating: {
+        scale: 20, scoreLabel: "Club score",
+        categories: [
+          { slot: "plot", label: "Plot", bands: { exc: "A custom excellent description" } },
+          { slot: "themes", label: "Themes" },
+        ],
+      },
+      notify: { draw: true, bookSet: true, meeting: true, rating: true, mentionWinner: true },
+    }),
+  });
+  const out = ctx.librarianDashboardHtml(null, []);
+  // The customized category shows its override as the field value...
+  assert.ok(out.includes("A custom excellent description"), "the plot category's override did not render");
+  // ...and an untouched category falls back to the Guild's placeholder text,
+  // never baking it in as a value that would look like a real override.
+  assert.ok(out.includes('placeholder="themes exc"'), "an unset band did not placeholder the Guild's default");
+  assert.ok(!/<textarea[^>]*data-rating-band="themes"[^>]*>themes exc</.test(out), "an unset band was baked in as a value instead of staying a placeholder");
+  // Both states are visible in the collapsed summary without opening either.
+  assert.match(out, /Customized/, "a real override did not report as Customized");
+  assert.match(out, /Using the Guild's default text/, "an untouched category did not report using the default");
 });
 
 // The rating style picker (Rubric / Simple scale / Off) is derived, not

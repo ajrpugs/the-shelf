@@ -20,10 +20,11 @@ export const SELECTION_MODES = ["wheel", "rotation", "pick"];
 
 // §3: the rating rubric. shelf_reviews keeps its five typed columns
 // (plot/characters/pacing/language/themes) physically -- these are slots a
-// club turns on or off and labels, not a free-form category list. The long
-// scoring-guidance prose per slot stays client-only (index.html's
-// RUBRIC_ALL); the server only ever needs to know which slots are active,
-// what they're called, and the per-category max.
+// club turns on or off and labels, not a free-form category list. The Guild's
+// own scoring-guidance prose per slot stays client-only (index.html's
+// RUBRIC_ALL) as the *default* -- the server only ever needs to validate and
+// pass through whichever bands a club has actually overridden, never the
+// canonical text itself.
 export const RATING_SLOTS = ["plot", "characters", "pacing", "language", "themes"];
 
 const RATING_SLOT_LABELS = {
@@ -35,6 +36,25 @@ const RATING_SLOT_LABELS = {
 };
 
 const DEFAULT_RATING_CATEGORIES = RATING_SLOTS.map(slot => ({ slot, label: RATING_SLOT_LABELS[slot] }));
+
+// The four scoring-guidance bands shown per category in the client's review
+// wizard. A category here only ever stores an *override* for whichever bands
+// it's customized -- the client merges this over RUBRIC_ALL's default text
+// per slot (refreshRubric()), so the Guild's own wording is what every club,
+// old or new, sees for anything it hasn't touched.
+export const BAND_KEYS = ["exc", "great", "good", "bad"];
+
+function normalizeCategoryBands(raw) {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out = {};
+  for (const k of BAND_KEYS) {
+    const v = raw[k];
+    if (typeof v !== "string") continue;
+    const trimmed = v.trim();
+    if (trimmed) out[k] = trimmed.slice(0, 500);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 // A locked read snapshots the rubric it was scored under (admin-update's
 // admin_set_rating), so a later rename/reorder of the club's live categories
@@ -51,10 +71,11 @@ export function normalizeRatingProfile(raw) {
     categories = categories
       .filter(c => c && typeof c === "object" && RATING_SLOTS.includes(c.slot) && !seen.has(c.slot) && seen.add(c.slot))
       .slice(0, RATING_SLOTS.length)
-      .map(c => ({
-        slot: c.slot,
-        label: (typeof c.label === "string" && c.label.trim()) ? c.label.trim().slice(0, 40) : RATING_SLOT_LABELS[c.slot],
-      }));
+      .map(c => {
+        const label = (typeof c.label === "string" && c.label.trim()) ? c.label.trim().slice(0, 40) : RATING_SLOT_LABELS[c.slot];
+        const bands = normalizeCategoryBands(c.bands);
+        return bands ? { slot: c.slot, label, bands } : { slot: c.slot, label };
+      });
   }
   // Zero valid entries (missing key, empty array, garbage) falls back to all
   // five under their canonical labels -- today's behaviour.
@@ -161,7 +182,21 @@ export function validateRatingPatch(body) {
       const label = String((c && c.label) ?? "").trim();
       if (!label) return { error: "every category needs a label" };
       if (label.length > 40) return { error: "category labels are limited to 40 characters" };
-      categories.push({ slot, label });
+      // Optional per-band description overrides (openRubricModal). Absent or
+      // blank means "keep the Guild's default text" -- see BAND_KEYS above.
+      let bands;
+      if (c && c.bands !== undefined) {
+        if (typeof c.bands !== "object" || c.bands === null) return { error: `"${slot}"'s descriptions must be an object` };
+        bands = {};
+        for (const k of BAND_KEYS) {
+          if (c.bands[k] === undefined) continue;
+          const text = String(c.bands[k] ?? "").trim();
+          if (text.length > 500) return { error: `"${slot}"'s ${k} description is too long (500 characters max)` };
+          if (text) bands[k] = text;
+        }
+        if (!Object.keys(bands).length) bands = undefined;
+      }
+      categories.push(bands ? { slot, label, bands } : { slot, label });
     }
     patch.categories = categories;
   }

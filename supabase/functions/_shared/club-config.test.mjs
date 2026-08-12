@@ -10,6 +10,7 @@ import {
   SELECTION_MODES,
   RATING_SLOTS,
   NOTIFY_EVENTS,
+  BAND_KEYS,
 } from "./club-config.mjs";
 
 const DEFAULT_NOTIFY = { draw: true, bookSet: true, meeting: true, rating: true, mentionWinner: true };
@@ -116,6 +117,39 @@ test("normalizeRatingProfile: a category with no/blank label gets its canonical 
   assert.equal(p.categories[0].label, "Plot");
 });
 
+// ---- category bands (scoring-guidance overrides) ----------------------------
+// The Guild's own text stays the default everywhere (RUBRIC_ALL, client-only);
+// a category here only ever stores which specific bands it overrode.
+
+test("normalizeRatingProfile: no bands key means no override at all -- not even an empty object", () => {
+  const p = normalizeRatingProfile({ categories: [{ slot: "plot", label: "Plot" }] });
+  assert.equal(p.categories[0].bands, undefined);
+});
+
+test("normalizeRatingProfile keeps only the band keys actually set, trimmed", () => {
+  const p = normalizeRatingProfile({ categories: [{ slot: "plot", label: "Plot", bands: { exc: "  Loved it  ", vibes: "not a real key" } }] });
+  assert.deepEqual(p.categories[0].bands, { exc: "Loved it" });
+});
+
+test("normalizeRatingProfile drops a blank band override rather than storing an empty string", () => {
+  const p = normalizeRatingProfile({ categories: [{ slot: "plot", label: "Plot", bands: { exc: "   " } }] });
+  assert.equal(p.categories[0].bands, undefined);
+});
+
+test("normalizeRatingProfile caps a band description at 500 characters", () => {
+  const p = normalizeRatingProfile({ categories: [{ slot: "plot", label: "Plot", bands: { exc: "x".repeat(600) } }] });
+  assert.equal(p.categories[0].bands.exc.length, 500);
+});
+
+test("normalizeRatingProfile ignores a garbage bands shape instead of throwing", () => {
+  const p = normalizeRatingProfile({ categories: [{ slot: "plot", label: "Plot", bands: "not an object" }] });
+  assert.equal(p.categories[0].bands, undefined);
+});
+
+test("BAND_KEYS lists exactly the four scoring bands", () => {
+  assert.deepEqual(BAND_KEYS, ["exc", "great", "good", "bad"]);
+});
+
 test("normalizeRatingProfile clamps scale to 2..20, defaulting to 20", () => {
   assert.equal(normalizeRatingProfile({ scale: 1 }).scale, 20);
   assert.equal(normalizeRatingProfile({ scale: 25 }).scale, 20);
@@ -163,6 +197,27 @@ test("validateRatingPatch rejects an unknown slot", () => {
 
 test("validateRatingPatch rejects a duplicate slot", () => {
   const v = validateRatingPatch({ categories: [{ slot: "plot", label: "A" }, { slot: "plot", label: "B" }] });
+  assert.ok("error" in v);
+});
+
+test("validateRatingPatch accepts per-category band overrides", () => {
+  const v = validateRatingPatch({ categories: [{ slot: "plot", label: "Plot", bands: { exc: "Loved it", bad: "Not for me" } }] });
+  assert.deepEqual(v, { rating: { categories: [{ slot: "plot", label: "Plot", bands: { exc: "Loved it", bad: "Not for me" } }] } });
+});
+
+test("validateRatingPatch drops a category's bands key entirely when nothing is actually set", () => {
+  const v = validateRatingPatch({ categories: [{ slot: "plot", label: "Plot", bands: {} }] });
+  assert.deepEqual(v.rating.categories[0], { slot: "plot", label: "Plot" });
+  assert.ok(!("bands" in v.rating.categories[0]));
+});
+
+test("validateRatingPatch rejects a non-object bands value", () => {
+  const v = validateRatingPatch({ categories: [{ slot: "plot", label: "Plot", bands: "not an object" }] });
+  assert.ok("error" in v);
+});
+
+test("validateRatingPatch rejects a band description over 500 characters", () => {
+  const v = validateRatingPatch({ categories: [{ slot: "plot", label: "Plot", bands: { exc: "x".repeat(501) } }] });
   assert.ok("error" in v);
 });
 

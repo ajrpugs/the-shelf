@@ -1483,6 +1483,24 @@ const RATING_SLOT_LABELS = {
   language: "Use of Language", themes: "Themes / Ideas",
 };
 const DEFAULT_RATING_CATEGORIES = RATING_SLOTS.map(slot => ({ slot, label: RATING_SLOT_LABELS[slot] }));
+// The four scoring-guidance bands shown per category in the review wizard
+// (openRubricModal). RUBRIC_ALL carries the Guild's own text as the default
+// for every club, old or new -- a category only stores an override here for
+// whichever bands it's actually customized; refreshRubric() merges that over
+// RUBRIC_ALL's text per slot, so an unset key always falls through to the
+// Guild's wording rather than needing it duplicated as a literal default.
+const BAND_KEYS = ["exc", "great", "good", "bad"];
+function normalizeCategoryBands(raw) {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out = {};
+  for (const k of BAND_KEYS) {
+    const v = raw[k];
+    if (typeof v !== "string") continue;
+    const trimmed = v.trim();
+    if (trimmed) out[k] = trimmed.slice(0, 500);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 function normalizeRatingProfile(raw) {
   const r = (raw && typeof raw === "object") ? raw : {};
   const scale = Number.isInteger(r.scale) && r.scale >= 2 && r.scale <= 20 ? r.scale : 20;
@@ -1492,10 +1510,11 @@ function normalizeRatingProfile(raw) {
     categories = categories
       .filter(c => c && typeof c === "object" && RATING_SLOTS.includes(c.slot) && !seen.has(c.slot) && seen.add(c.slot))
       .slice(0, RATING_SLOTS.length)
-      .map(c => ({
-        slot: c.slot,
-        label: (typeof c.label === "string" && c.label.trim()) ? c.label.trim().slice(0, 40) : RATING_SLOT_LABELS[c.slot],
-      }));
+      .map(c => {
+        const label = (typeof c.label === "string" && c.label.trim()) ? c.label.trim().slice(0, 40) : RATING_SLOT_LABELS[c.slot];
+        const bands = normalizeCategoryBands(c.bands);
+        return bands ? { slot: c.slot, label, bands } : { slot: c.slot, label };
+      });
   }
   if (!categories || !categories.length) categories = DEFAULT_RATING_CATEGORIES;
   const scoreLabel = (typeof r.scoreLabel === "string" && r.scoreLabel.trim())
@@ -4344,6 +4363,33 @@ function dashReadersHtml() {
   return html;
 }
 
+// The four scoring-guidance descriptions (openRubricModal's band cards) for
+// one rubric slot, nested under its category row. `current` is whatever the
+// club has already overridden for that slot (may be absent/partial) --
+// blank fields fall through to the Guild's own text (RUBRIC_ALL) as the
+// placeholder, which is also the default at render time (refreshRubric()).
+function ratingBandsFieldsHtml(slot, current) {
+  const base = (RUBRIC_ALL.find(r => r.key === slot) || RUBRIC_ALL[0]).bands;
+  const cur = current || {};
+  const rows = [["exc", "Excellent"], ["great", "Great"], ["good", "Good"], ["bad", "Bad"]];
+  const customized = BAND_KEYS.some(k => cur[k]);
+  return `<details class="cfg" style="margin-top:6px;">
+    <summary>
+      <span class="cfg-name">Scoring guidance</span>
+      <span class="cfg-summary">${customized ? "Customized" : "Using the Guild's default text"}</span>
+      <span class="cfg-toggle">Edit</span>
+    </summary>
+    <div class="cfg-body">
+      <p class="invite-meta">Shown to readers while they score a book. Leave a field blank to keep the Guild's default wording.</p>
+      ${rows.map(([key, label]) => `
+        <label class="field" style="margin-top:8px;">
+          <span class="field-label">${esc(label)}</span>
+          <textarea class="rubric-note" data-rating-band="${attr(slot)}" data-rating-band-key="${key}" maxlength="500" placeholder="${attr(base[key] || "")}">${esc(cur[key] || "")}</textarea>
+        </label>`).join("")}
+    </div>
+  </details>`;
+}
+
 function dashSettingsHtml() {
   // Defaulted, not trusted. clubs.config's client and server normalizers are two
   // hand-maintained copies and they have already drifted apart once in
@@ -4463,16 +4509,22 @@ function dashSettingsHtml() {
           <div class="field-label" style="margin-top:12px;">Categories — at least one</div>
           ${RATING_SLOTS.map(slot => {
             const active = ratingCats.find(c => c.slot === slot);
-            return `<label class="field-inline" style="margin-top:6px; align-items:center;">
-              <input type="checkbox" data-rating-slot="${attr(slot)}" ${active ? "checked" : ""}>
-              <input type="text" data-rating-label="${attr(slot)}" maxlength="40" value="${attr(active ? active.label : RATING_SLOT_LABELS[slot])}" style="flex:1; max-width:280px;">
-            </label>`;
+            return `<div style="margin-top:6px;">
+              <label class="field-inline" style="align-items:center;">
+                <input type="checkbox" data-rating-slot="${attr(slot)}" ${active ? "checked" : ""}>
+                <input type="text" data-rating-label="${attr(slot)}" maxlength="40" value="${attr(active ? active.label : RATING_SLOT_LABELS[slot])}" style="flex:1; max-width:280px;">
+              </label>
+              ${ratingBandsFieldsHtml(slot, active && active.bands)}
+            </div>`;
           }).join("")}
         </div>
         <label class="field" id="rating-simple-label-field" style="margin-top:12px; ${ratingStyle === 'rubric' ? 'display:none;' : ''}">
           <span class="field-label">What to call it</span>
           <input id="cs-rating-simple-label" type="text" maxlength="40" value="${attr((ratingCats[0] && ratingCats[0].label) || "Score")}">
         </label>
+        <div id="rating-simple-bands" style="${ratingStyle === 'rubric' ? 'display:none;' : ''}">
+          ${ratingBandsFieldsHtml(RATING_SLOTS[0], ratingCats[0] && ratingCats[0].slot === RATING_SLOTS[0] ? ratingCats[0].bands : null)}
+        </div>
       </div>
       <p><button class="btn-primary" id="cs-rating-save">Save rating style</button></p>
     </div>
@@ -4685,7 +4737,10 @@ function refreshRubric() {
   SCORE_LABEL = rc.scoreLabel;
   RUBRIC = rc.categories.map(c => {
     const base = RUBRIC_ALL.find(r => r.key === c.slot) || RUBRIC_ALL[0];
-    return { ...base, label: c.label };
+    // The Guild's own text is the default for every club -- a category only
+    // overrides the specific bands it's customized, so an unset one falls
+    // through to base.bands here rather than needing its own stored copy.
+    return { ...base, label: c.label, bands: { ...base.bands, ...(c.bands || {}) } };
   });
 }
 function scoreLabel() { return SCORE_LABEL; }
@@ -7024,6 +7079,8 @@ function wireUp() {
       if (cats) cats.style.display = style === "simple" ? "none" : "";
       const simpleField = document.getElementById("rating-simple-label-field");
       if (simpleField) simpleField.style.display = style === "rubric" ? "none" : "";
+      const simpleBands = document.getElementById("rating-simple-bands");
+      if (simpleBands) simpleBands.style.display = style === "rubric" ? "none" : "";
       const scaleLabel = document.getElementById("rating-scale-label");
       if (scaleLabel) scaleLabel.textContent = style === "simple" ? "Scale (1 to N)" : "Per-category max (points)";
     });
@@ -7039,6 +7096,23 @@ function wireUp() {
     } else {
       const scale = Number(document.getElementById("cs-rating-scale")?.value ?? 20);
       const scoreLabelInput = document.getElementById("cs-score-label")?.value ?? "";
+      // Blank -> undefined -> dropped by JSON.stringify, so an untouched band
+      // is simply absent from the patch rather than sent as "" -- that's what
+      // keeps it falling through to the Guild's default at render time
+      // (refreshRubric()) instead of locking in an empty description.
+      // Scoped to a container, not just the slot: Simple scale's fixed slot
+      // (RATING_SLOTS[0], "plot") and the Rubric loop's "plot" row both carry
+      // data-rating-band="plot" at the same time (one hidden, not removed),
+      // so an unscoped lookup would silently collect from whichever set
+      // happens to come later in the DOM.
+      const collectBands = (slot, container) => {
+        const bands = {};
+        container?.querySelectorAll(`[data-rating-band="${slot}"]`).forEach(ta => {
+          const v = (ta.value || "").trim();
+          if (v) bands[ta.dataset.ratingBandKey] = v;
+        });
+        return Object.keys(bands).length ? bands : undefined;
+      };
       let categories;
       if (style === "simple") {
         // Always the same fixed slot -- which physical column backs a simple
@@ -7046,11 +7120,17 @@ function wireUp() {
         // above stay hidden-but-present in the DOM, so their stale checked
         // state (from before switching to Simple) is deliberately ignored.
         const label = document.getElementById("cs-rating-simple-label")?.value || "Score";
-        categories = [{ slot: RATING_SLOTS[0], label }];
+        const bands = collectBands(RATING_SLOTS[0], document.getElementById("rating-simple-bands"));
+        categories = [{ slot: RATING_SLOTS[0], label, bands }];
       } else {
+        const catsContainer = document.getElementById("rating-categories");
         categories = RATING_SLOTS
           .filter(slot => document.querySelector(`[data-rating-slot="${slot}"]`)?.checked)
-          .map(slot => ({ slot, label: document.querySelector(`[data-rating-label="${slot}"]`)?.value ?? "" }));
+          .map(slot => ({
+            slot,
+            label: document.querySelector(`[data-rating-label="${slot}"]`)?.value ?? "",
+            bands: collectBands(slot, catsContainer),
+          }));
         if (!categories.length) { setFlash("err", "Pick at least one rating category."); render(); return; }
       }
       patch = { enabled: true, categories, scale, scoreLabel: scoreLabelInput };
