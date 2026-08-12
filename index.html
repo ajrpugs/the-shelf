@@ -128,20 +128,32 @@
     transform: translate(-50%,-50%) rotate(45deg); border-radius: 1px;
   }
 
-  .signed-in-strip{
-    display: flex; align-items: center; justify-content: center; gap: 10px;
-    flex-wrap: wrap;
-    margin-top: 22px;
-    font-size: 12.5px; color: var(--muted);
-  }
-  .signed-in-strip b{ color: var(--card); font-weight: 700; }
-  .signed-in-strip .sep{ opacity: 0.4; }
-  .signed-in-strip button{
-    background: transparent; color: var(--muted);
+  /* Profile icon dropdown, top-right of the club header. Shares the
+     .row-menu-list/.row-menu-item look of the per-reader admin dropdown for
+     visual consistency, and the outside-click-close handler already covers
+     any details.row-menu -- see the document click listener near boot. */
+  .profile-menu{ position: absolute; top: 0; right: 0; text-align: left; }
+  .profile-menu-toggle{
+    list-style: none; cursor: pointer; user-select: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; border-radius: 50%;
     border: 1px solid rgba(255,255,255,0.18);
-    padding: 4px 10px; font-size: 11px;
+    background: var(--panel-2); overflow: hidden;
+    transition: border-color 0.12s ease;
   }
-  .signed-in-strip button:hover{ color: var(--card); border-color: var(--brass); }
+  .profile-menu-toggle::-webkit-details-marker{ display: none; }
+  .profile-menu-toggle:hover, .profile-menu[open] .profile-menu-toggle{ border-color: var(--brass); }
+  .profile-menu-toggle .avatar{ width: 100%; height: 100%; }
+  .profile-menu-fallback{
+    font-family: 'Fraunces', serif; font-weight: 700; font-size: 14px; color: var(--card);
+  }
+  .profile-menu-list{ min-width: 180px; }
+  .profile-menu-name{
+    padding: 6px 10px 8px; margin-bottom: 4px;
+    border-bottom: 1px solid var(--panel-border);
+    font-size: 12.5px; font-weight: 700; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   .avatar{ width: 22px; height: 22px; border-radius: 50%; vertical-align: middle; }
   .avatar-mini{
     width: 16px; height: 16px; border-radius: 50%;
@@ -973,9 +985,10 @@
     display: flex; flex-direction: column;
   }
   .row-menu-item{
-    background: transparent; color: var(--ink);
+    display: block; background: transparent; color: var(--ink);
     text-align: left; text-transform: none; letter-spacing: 0.01em; font-weight: 400;
     padding: 8px 10px; font-size: 12.5px; border-radius: 2px;
+    font-family: 'Courier Prime', monospace; text-decoration: none; cursor: pointer;
   }
   .row-menu-item:hover{ background: var(--panel-2); }
   .row-menu-item.danger{ color: var(--stamp-text); }
@@ -4999,12 +5012,17 @@ function render() {
       <h1>${esc(clubName())}</h1>
       <div class="sub">${esc(clubTagline())}</div>
       <div class="rule"></div>
-      <div class="signed-in-strip">
-        ${avatar ? `<img class="avatar" src="${attr(avatar)}" alt="">` : ''}
-        <span>Signed in as <a class="reader-link" href="${readerHref(session.user.id, displayName)}"><b>${esc(displayName)}</b></a></span>
-        <span class="sep">·</span>
-        <button id="sign-out-btn">Sign out</button>
-      </div>
+      <details class="row-menu profile-menu">
+        <summary class="profile-menu-toggle" title="${esc(displayName)}" aria-label="Account menu">
+          ${avatar ? `<img class="avatar" src="${attr(avatar)}" alt="">` : `<span class="profile-menu-fallback">${esc(displayName.slice(0, 1).toUpperCase())}</span>`}
+        </summary>
+        <div class="row-menu-list profile-menu-list">
+          <div class="profile-menu-name">${esc(displayName)}</div>
+          <a class="row-menu-item" href="${readerHref(session.user.id, displayName)}">My Profile</a>
+          <a class="row-menu-item" href="#/account">Settings</a>
+          <button class="row-menu-item" id="sign-out-btn">Sign out</button>
+        </div>
+      </details>
     </header>
   `;
 
@@ -5399,7 +5417,7 @@ function render() {
     });
     html += `</div>`;
   }
-  html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="#/new" class="footer-link">Start a club</a> · <a href="#/account" class="footer-link">Account</a>`;
+  html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="#/new" class="footer-link">Start a club</a>`;
   // Leaving is offered to everyone; club-admin refuses the last librarian, who
   // has to promote someone or delete the club instead.
   html += ` · <a href="#" class="footer-link" id="leave-club">Leave ${esc(clubName())}</a>`;
