@@ -158,7 +158,25 @@
   .profile-menu-fallback{
     font-family: 'Fraunces', serif; font-weight: 700; font-size: 14px; color: var(--card);
   }
+  /* A bare circular avatar didn't read as "click me for a menu" -- this badge
+     is the same affordance a native dropdown caret gives, sized to sit just
+     outside the toggle's circular clip (which is overflow:hidden, so a caret
+     placed *inside* .profile-menu-toggle would get cut off by its own mask).
+     It's a sibling of the <summary>, not a child, positioned against
+     .profile-menu's own box -- which is exactly the toggle's 34x34px footprint
+     while the menu is closed, since the open dropdown list is itself
+     absolutely positioned and doesn't add to that box. */
+  .profile-menu-caret{
+    position: absolute; right: -3px; bottom: -3px;
+    width: 15px; height: 15px; border-radius: 50%;
+    background: var(--panel-2); border: 1px solid var(--panel-border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 8px; line-height: 1; color: var(--ink-soft);
+    pointer-events: none;
+  }
+  .profile-menu[open] .profile-menu-caret{ color: var(--brass); border-color: var(--brass); }
   .profile-menu-list{ min-width: 180px; }
+  .row-menu-item.admin{ color: var(--brass); }
   .profile-menu-name{
     padding: 6px 10px 8px; margin-bottom: 4px;
     border-bottom: 1px solid var(--panel-border);
@@ -1089,10 +1107,13 @@
   .modal-actions button.btn-ghost:hover:not(:disabled){ border-color: var(--ink); color: var(--ink); background: rgba(236,227,207,0.06); }
 
   /* ---- Tab navigation ---- */
-  /* A row this wide (7 tabs + Admin) wraps into 2-3 ragged lines once the
-     viewport is narrower than the tab labels' combined width -- every phone.
-     Scroll horizontally instead, like a native app tab strip, rather than
-     stacking rows above the content on every single page. */
+  /* A row this wide wraps into 2-3 ragged lines once the viewport is narrower
+     than the tab labels' combined width -- every phone. Scroll horizontally
+     instead, like a native app tab strip, rather than stacking rows above the
+     content on every single page. (The librarian dashboard used to be an
+     eighth tab here; it kept landing past this strip's scroll threshold on
+     load regardless of where in the row it sat, so it moved to the profile
+     dropdown instead -- see .profile-menu.) */
   /* overflow-y must be pinned to hidden: setting only overflow-x makes the
      other axis compute to auto, and .tab-btn's margin-bottom:-1px pushes its
      border box 1px past the padding box -- enough vertical scrollable overflow
@@ -1125,8 +1146,6 @@
   }
   .tab-btn:hover{ color: var(--ink); background: rgba(236,227,207,0.05); }
   .tab-btn.on{ color: var(--stamp-text); border-bottom-color: var(--stamp); }
-  .tab-btn.tab-admin{ color: var(--brass); }
-  .tab-btn.tab-admin.on{ color: var(--brass); border-bottom-color: var(--brass); }
 
   /* ---- Calendar / meetings ---- */
   .meeting-card{
@@ -5027,9 +5046,11 @@ function render() {
         <summary class="profile-menu-toggle" title="${esc(displayName)}" aria-label="Account menu">
           ${avatar ? `<img class="avatar" src="${attr(avatar)}" alt="">` : `<span class="profile-menu-fallback">${esc(displayName.slice(0, 1).toUpperCase())}</span>`}
         </summary>
+        <span class="profile-menu-caret" aria-hidden="true">▾</span>
         <div class="row-menu-list profile-menu-list">
           <div class="profile-menu-name">${esc(displayName)}</div>
           <a class="row-menu-item" href="${readerHref(session.user.id, displayName)}">My Profile</a>
+          ${admin ? `<a class="row-menu-item admin" href="${tabHash("admin")}">Librarian dashboard</a>` : ''}
           <a class="row-menu-item" href="#/account">Settings</a>
           <button class="row-menu-item" id="sign-out-btn">Sign out</button>
         </div>
@@ -5049,15 +5070,6 @@ function render() {
     : '';
   const TABS = [
     { id: "reading", label: "Reading", badge: tabBadge(unread.picks) },
-    // Right after Reading, not at the end: the tab strip scrolls horizontally
-    // on any viewport too narrow to fit all of it (deliberate, see .tabs
-    // below), and the default landing tab is "reading" -- so a tab placed
-    // last sits past the scroll threshold on every load until a librarian
-    // discovers they can swipe for it. Second position keeps it inside the
-    // strip's initial viewport without needing to touch the scroll mechanics.
-    // The route segment stays "admin" -- it's bookmarked, and renaming it
-    // would break every existing link for the sake of a label.
-    ...(admin ? [{ id: "admin", label: "Librarian", adminTab: true }] : []),
     { id: "shelf", label: "The Shelf" },
     { id: "wheel", label: "The Wheel" },
     { id: "leaderboard", label: "Leaderboard" },
@@ -5065,9 +5077,15 @@ function render() {
     { id: "reviews", label: "Reviews", badge: tabBadge(unread.reviews) },
     { id: "calendar", label: "Calendar" },
   ];
-  if (!TABS.some(t => t.id === currentTab)) currentTab = "reading";
+  // The librarian dashboard isn't a nav pill any more (it kept landing past the
+  // tab strip's scroll threshold on load, no matter where in the row it sat) --
+  // it's reached from the profile dropdown instead, at the same "admin" route
+  // segment (still bookmarked, so still not renamed). That route stays valid
+  // even though it's no longer in TABS, so it can't get bounced back to
+  // "reading" by the unknown-tab fallback below.
+  if (!(TABS.some(t => t.id === currentTab) || (admin && currentTab === "admin"))) currentTab = "reading";
   html += `<nav class="tabs" role="tablist" aria-label="Sections">${TABS.map(t =>
-    `<button class="tab-btn ${t.adminTab ? 'tab-admin' : ''} ${currentTab === t.id ? 'on' : ''}" id="tab-btn-${t.id}" role="tab" aria-selected="${currentTab === t.id ? 'true' : 'false'}" aria-controls="tab-panel" data-tab="${t.id}">${t.label}${t.badge || ''}</button>`
+    `<button class="tab-btn ${currentTab === t.id ? 'on' : ''}" id="tab-btn-${t.id}" role="tab" aria-selected="${currentTab === t.id ? 'true' : 'false'}" aria-controls="tab-panel" data-tab="${t.id}">${t.label}${t.badge || ''}</button>`
   ).join("")}</nav>`;
 
   // ---- Global search (books + readers) ----
@@ -5425,13 +5443,12 @@ function render() {
   html += `</div>`; // end .tab-body
 
   // ---- Footer ----
+  // Year in books (reachable from the Reviews tab's own card), Start a club
+  // and Leave <club> (both now on the Account/Settings page, reached via the
+  // profile dropdown) and Join the Discord all moved or were dropped, leaving
+  // just the one link every page needs regardless of club or sign-in state.
   html += `<footer>`;
-  html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="#/new" class="footer-link">Start a club</a>`;
-  // Leaving is offered to everyone; club-admin refuses the last librarian, who
-  // has to promote someone or delete the club instead.
-  html += ` · <a href="#" class="footer-link" id="leave-club">Leave ${esc(clubName())}</a>`;
-  html += ` · <a href="https://discord.gg/4YeGJgs8u" target="_blank" rel="noopener" class="footer-link">Join the Discord</a>`;
-  html += ` · <a href="#/legal" class="footer-link">Terms &amp; Privacy</a>`;
+  html += `<a href="#/legal" class="footer-link">Terms &amp; Privacy</a>`;
   html += `</footer>`;
 
   app.innerHTML = html;
@@ -5605,7 +5622,10 @@ function renderAccount() {
       <div class="card no-rule" style="margin-top:10px;">
         <div class="mini-head">Your clubs</div>
         ${clubs}
-        <p style="margin-top:10px;"><a href="#/new" class="footer-link">Start another club</a></p>
+        <p style="margin-top:10px;">
+          <a href="#/new" class="footer-link">Start another club</a>
+          ${club ? ` · <a href="#" class="footer-link" id="leave-club">Leave ${esc(clubName())}</a>` : ''}
+        </p>
       </div>
       <div class="card no-rule" style="margin-top:10px;">
         <div class="mini-head">Notifications in ${esc(clubName())}</div>
@@ -5641,6 +5661,23 @@ function wireAccount() {
   document.getElementById("acct-name-reset")?.addEventListener("click", (e) => {
     e.currentTarget.blur();
     resetDisplayName();
+  });
+
+  // ---- Leave this club (4e) ----
+  document.getElementById("leave-club")?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const ok = await confirmModal(
+      `Leave ${clubName()}? Your past picks stay in its ledger, but you'll come off the shelf. You can rejoin with a new invite.`,
+      { title: "Leave this club?", confirmLabel: "Leave" },
+    );
+    if (!ok) return;
+    document.activeElement?.blur?.();
+    const body = await callClubAdmin("leave_club", { club_id: clubId() });
+    if (!body?.ok) { render(); return; }   // e.g. 409, last librarian
+    setFlash("info", `You left ${clubName()}.`);
+    club = null; clubStatus = "loading";
+    await loadMyClubs();
+    goAfterLeaving();
   });
 
   // Phase 11 §4.4: own row, direct RLS write -- same pattern as
@@ -6611,9 +6648,7 @@ function wireUp() {
     // only way to reach. Landing directly on a URL (a bookmark, a shared link,
     // a reload) renders with scrollLeft at 0 and no switch to react to, so a
     // tab near the end stayed half-clipped with nothing to suggest it could be
-    // scrolled to. That went unnoticed while the labels happened to fit at
-    // desktop width; renaming Admin -> Librarian pushed the strip 23px over and
-    // made it visible on every load of this tab.
+    // scrolled to.
     const activeTabBtn = document.getElementById(`tab-btn-${currentTab}`);
     if (activeTabBtn) {
       const btnLeft = activeTabBtn.offsetLeft;
@@ -6921,23 +6956,6 @@ function wireUp() {
     clubSettings = { ...(clubSettings || {}), calendar_token: body.calendar_token };
     setFlash("info", "Feed URL reset. Share the new one.");
     render();
-  });
-
-  // ---- Leave this club (4e) ----
-  document.getElementById("leave-club")?.addEventListener("click", async (e) => {
-    e.preventDefault();
-    const ok = await confirmModal(
-      `Leave ${clubName()}? Your past picks stay in its ledger, but you'll come off the shelf. You can rejoin with a new invite.`,
-      { title: "Leave this club?", confirmLabel: "Leave" },
-    );
-    if (!ok) return;
-    document.activeElement?.blur?.();
-    const body = await callClubAdmin("leave_club", { club_id: clubId() });
-    if (!body?.ok) { render(); return; }   // e.g. 409, last librarian
-    setFlash("info", `You left ${clubName()}.`);
-    club = null; clubStatus = "loading";
-    await loadMyClubs();
-    goAfterLeaving();
   });
 
   // ---- Invites (4d) ----
