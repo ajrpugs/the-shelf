@@ -158,23 +158,6 @@
   .profile-menu-fallback{
     font-family: 'Fraunces', serif; font-weight: 700; font-size: 14px; color: var(--card);
   }
-  /* A bare circular avatar didn't read as "click me for a menu" -- this badge
-     is the same affordance a native dropdown caret gives, sized to sit just
-     outside the toggle's circular clip (which is overflow:hidden, so a caret
-     placed *inside* .profile-menu-toggle would get cut off by its own mask).
-     It's a sibling of the <summary>, not a child, positioned against
-     .profile-menu's own box -- which is exactly the toggle's 34x34px footprint
-     while the menu is closed, since the open dropdown list is itself
-     absolutely positioned and doesn't add to that box. */
-  .profile-menu-caret{
-    position: absolute; right: -3px; bottom: -3px;
-    width: 15px; height: 15px; border-radius: 50%;
-    background: var(--panel-2); border: 1px solid var(--panel-border);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 8px; line-height: 1; color: var(--ink-soft);
-    pointer-events: none;
-  }
-  .profile-menu[open] .profile-menu-caret{ color: var(--brass); border-color: var(--brass); }
   .profile-menu-list{ min-width: 180px; }
   .row-menu-item.admin{ color: var(--brass); }
   .profile-menu-name{
@@ -1136,6 +1119,20 @@
     mask-image: linear-gradient(to right, transparent, black 14px, black calc(100% - 14px), transparent);
   }
   .tabs::-webkit-scrollbar{ display: none; }
+  /* Touch drag has no equivalent for a mouse -- a narrowed desktop window with
+     no touchscreen and no trackpad had no way to reach a clipped tab at all,
+     since the scrollbar above is hidden everywhere. Bring it back, thin, only
+     where the primary input is a precise pointer with hover (i.e. a mouse);
+     touch devices keep the hidden scrollbar since drag already works there. */
+  @media (hover: hover) and (pointer: fine){
+    /* Room for the 6px scrollbar below the tab labels, so it lands between
+       them and the strip's own border-bottom instead of overlapping either. */
+    .tabs{ padding-bottom: 8px; scrollbar-width: thin; scrollbar-color: var(--panel-border) transparent; }
+    .tabs::-webkit-scrollbar{ display: block; height: 6px; }
+    .tabs::-webkit-scrollbar-track{ background: transparent; }
+    .tabs::-webkit-scrollbar-thumb{ background: var(--panel-border); border-radius: 3px; }
+    .tabs::-webkit-scrollbar-thumb:hover{ background: var(--brass); }
+  }
   .tab-btn{
     background: transparent; border: none; border-bottom: 2px solid transparent;
     color: var(--ink-soft); cursor: pointer; padding: 8px 12px 9px;
@@ -5046,7 +5043,6 @@ function render() {
         <summary class="profile-menu-toggle" title="${esc(displayName)}" aria-label="Account menu">
           ${avatar ? `<img class="avatar" src="${attr(avatar)}" alt="">` : `<span class="profile-menu-fallback">${esc(displayName.slice(0, 1).toUpperCase())}</span>`}
         </summary>
-        <span class="profile-menu-caret" aria-hidden="true">▾</span>
         <div class="row-menu-list profile-menu-list">
           <div class="profile-menu-name">${esc(displayName)}</div>
           <a class="row-menu-item" href="${readerHref(session.user.id, displayName)}">My Profile</a>
