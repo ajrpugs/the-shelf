@@ -4056,7 +4056,7 @@ function calendarTabHtml(admin) {
   // docs/librarian-dashboard-plan.md §3.5. Everything a member comes here for is
   // unchanged.
   if (admin) {
-    html += `<div class="me-hint" style="margin-top:16px;">Scheduling moved — set discussion dates in the <a class="footer-link" href="${attr(tabHash("admin", "overview"))}">Librarian</a> tab.</div>`;
+    html += `<div class="me-hint" style="margin-top:16px;">Scheduling moved — set discussion dates on the <a class="footer-link" href="${attr(tabHash("admin", "overview"))}">Librarian dashboard</a>, in your profile menu.</div>`;
   }
 
   html += `</section>`;
@@ -4158,7 +4158,7 @@ function dashSetupChecklistHtml() {
   const items = [
     { done: users.length > 1, text: `Invite your readers`, go: tabHash("admin", "readers"), cta: "Invites" },
     { done: eligibleEntries().length > 0, text: `Get a book on the shelf`, go: tabHash("reading"), cta: "Reading" },
-    { done: state.history.length > 0, text: `Choose the club's first read`, go: tabHash("wheel"), cta: "The Wheel" },
+    { done: state.history.length > 0, text: `Choose the club's first read`, go: tabHash("wheel"), cta: "Choose Books" },
     { done: !!clubSettings?.has_webhook, text: `Connect Discord so picks get announced (optional)`, go: tabHash("admin", "settings"), cta: "Settings" },
     { done: false, text: `Check the club's timezone — meeting times are read as <b>${esc(clubTz())}</b>`, go: tabHash("admin", "settings"), cta: "Settings" },
   ];
@@ -5071,7 +5071,10 @@ function render() {
   const TABS = [
     { id: "reading", label: "Reading", badge: tabBadge(unread.picks) },
     { id: "shelf", label: "The Shelf" },
-    { id: "wheel", label: "The Wheel" },
+    // Labeled for what it does, not for the wheel specifically -- rotation and
+    // librarian-pick clubs never see a wheel here at all (see the mode switch
+    // below). Route segment stays "wheel", still bookmarked.
+    { id: "wheel", label: "Choose Books" },
     { id: "leaderboard", label: "Leaderboard" },
     { id: "stats", label: "Stats" },
     { id: "reviews", label: "Reviews", badge: tabBadge(unread.reviews) },
@@ -5163,11 +5166,11 @@ function render() {
   html += `</section>`;
   } // end shelf tab
 
-  // ---- The Wheel: Choose our next read ----
-  // Phase 9 (docs/configurability-plan.md §2): the tab stays "The Wheel" in
-  // every mode -- renaming it per-club would just be another thing to keep in
-  // sync -- but what's inside it depends on config.selection.mode. Only
-  // `wheel` gets the canvas and the spin animation; `rotation` and `pick`
+  // ---- Choose Books: Choose our next read ----
+  // Phase 9 (docs/configurability-plan.md §2): the tab is labeled "Choose
+  // Books" in every mode -- renaming it per-club would just be another thing
+  // to keep in sync -- but what's inside it depends on config.selection.mode.
+  // Only `wheel` gets the canvas and the spin animation; `rotation` and `pick`
   // show a plain reader list, since there's nothing random to draw.
   if (currentTab === "wheel") {
   const selMode = clubConfig().selection.mode;
@@ -5970,19 +5973,19 @@ function renderClubOnboarding() {
       title: "Invite your readers",
       body: others > 0
         ? `${others} other ${others === 1 ? "reader has" : "readers have"} joined.`
-        : `Create an invite link in the <b>Librarian</b> tab and send it to them. Anyone with the link can join.`,
+        : `Open your profile menu → <b>Librarian dashboard</b> and create an invite link. Anyone with the link can join.`,
     },
     {
       done: withBooks > 0,
       title: "Everyone picks a book",
       body: withBooks > 0
         ? `${withBooks} book${withBooks === 1 ? "" : "s"} on the shelf.`
-        : `Each reader sets one book on <b>The Shelf</b> tab. That's the pool the wheel picks from.`,
+        : `Each reader sets one book on <b>The Shelf</b> tab. That's the pool the next read gets chosen from.`,
     },
     {
       done: false,
-      title: "Spin the wheel",
-      body: `Once there are books, <b>The Wheel</b> picks whose book the club reads next.`,
+      title: "Choose the next read",
+      body: `Once there are books, head to <b>Choose Books</b> to pick whose book the club reads next.`,
     },
   ];
   return `
