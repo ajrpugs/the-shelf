@@ -5420,14 +5420,6 @@ function render() {
 
   // ---- Footer ----
   html += `<footer>`;
-  // Club switcher (4c/4d): only worth showing once a reader is in more than one.
-  if (myClubs.length > 1) {
-    html += `<div class="club-switch" style="margin-bottom:8px;">`;
-    myClubs.forEach(c => {
-      html += `<a href="#/c/${esc(c.slug)}/reading" class="${c.id === clubId() ? 'on' : ''}">${esc(c.name)}</a>`;
-    });
-    html += `</div>`;
-  }
   html += `<a href="#recap" class="footer-link">Year in books ↗</a> · <a href="#/new" class="footer-link">Start a club</a>`;
   // Leaving is offered to everyone; club-admin refuses the last librarian, who
   // has to promote someone or delete the club instead.
@@ -5582,13 +5574,12 @@ function renderAccount() {
   const email = session.user.email || null;
   const providers = (session.user.identities || []).map(i => i.provider);
   const clubs = myClubs.length
-    ? myClubs.map(c => `<li>${esc(c.name)} <span class="invite-meta">${c.role === "librarian" ? "librarian" : "member"}</span></li>`).join("")
-    : `<li class="invite-meta">none</li>`;
+    ? `<div class="club-switch">${myClubs.map(c => `<a href="#/c/${esc(c.slug)}/reading" class="${c.id === clubId() ? 'on' : ''}">${esc(c.name)}${c.role === "librarian" ? " · librarian" : ""}</a>`).join("")}</div>`
+    : `<p class="invite-meta">none</p>`;
   return `
     <header><div class="eyebrow">The Shelf</div><h1>Account</h1><div class="rule"></div></header>
     <a href="#/c/${esc(clubSlug())}/reading" class="detail-back">← Back to the shelf</a>
-    <div class="setup">
-      <h2>Your account</h2>
+    <section>
       <div class="card no-rule">
         <div class="mini-head">You</div>
         <label class="field">
@@ -5607,7 +5598,7 @@ function renderAccount() {
       </div>
       <div class="card no-rule" style="margin-top:10px;">
         <div class="mini-head">Your clubs</div>
-        <ul style="margin:6px 0 0 18px;">${clubs}</ul>
+        ${clubs}
         <p style="margin-top:10px;"><a href="#/new" class="footer-link">Start another club</a></p>
       </div>
       <div class="card no-rule" style="margin-top:10px;">
@@ -5629,7 +5620,7 @@ function renderAccount() {
           </span>
         </div>
       </div>
-    </div>`;
+    </section>`;
 }
 
 function wireAccount() {
