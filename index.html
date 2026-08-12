@@ -5806,21 +5806,29 @@ function wireLegal() { /* static page -- nothing to wire up */ }
 // ---------- No clubs at all (Phase 5 prep) ----------
 // The two ways forward are the two things a reader with no club can actually do:
 // make one, or redeem an invite. Deliberately not a dead end offering the seeded
-// club, which is somebody else's book club.
+// club, which is somebody else's book club. One screen either way -- a genuinely
+// new account and a returning reader who left every club they were in land here
+// the same way and get the same choice.
 function renderNoClubs() {
   return `
     <header><div class="eyebrow">The Shelf</div><h1>Welcome</h1><div class="rule"></div></header>
-    <div class="setup">
-      <h2>You're not in a book club yet</h2>
-      <p>Start one and invite your readers, or paste an invite code someone sent you.</p>
-      <p><button class="btn-primary" id="nc-start">Start a club</button></p>
-      <label class="field">
-        <span class="field-label">Have an invite code?</span>
-        <input id="nc-code" type="text" maxlength="24" placeholder="ABCD1234EFGH" autocomplete="off" spellcheck="false" style="text-transform:uppercase">
-      </label>
-      <p><button class="btn-primary" id="nc-redeem">Join the club</button></p>
-      <p><a href="#/account" class="footer-link">Account settings</a></p>
-    </div>`;
+    <section>
+      <div class="card no-rule">
+        <div class="mini-head">Create a club</div>
+        <p class="invite-meta">Start one and invite your readers. You'll be its librarian.</p>
+        <p><button class="btn-primary" id="nc-start">Start a club</button></p>
+      </div>
+      <div class="card no-rule" style="margin-top:10px;">
+        <div class="mini-head">Join a club</div>
+        <p class="invite-meta">Have an invite code from a friend?</p>
+        <label class="field">
+          <span class="field-label">Invite code</span>
+          <input id="nc-code" type="text" maxlength="24" placeholder="ABCD1234EFGH" autocomplete="off" spellcheck="false" style="text-transform:uppercase">
+        </label>
+        <p><button class="btn-primary" id="nc-redeem">Join the club</button></p>
+      </div>
+    </section>
+    <p style="margin-top:10px;"><a href="#/account" class="footer-link">Account settings</a></p>`;
 }
 
 function wireNoClubs() {
@@ -5893,7 +5901,13 @@ function wireNewClub() {
     if (!body?.club) { render(); return; }
     setFlash("info", `“${body.club.name}” is yours. Invite some readers.`);
     await loadMyClubs();
-    goToClub(body.club.slug);
+    // Straight to the dashboard, not goToClub()'s usual Reading landing --
+    // create_club already made this reader its librarian, and the Overview
+    // section's setup checklist (dashSetupChecklistHtml) is built for exactly
+    // this moment: no reads, no members but them. goToClub() itself stays
+    // Reading-only, since a joining member via wireJoin()/wireNoClubs() isn't
+    // a librarian and has no checklist to see.
+    location.hash = `#/c/${body.club.slug}/admin`;
   });
 }
 
