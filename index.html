@@ -5049,15 +5049,21 @@ function render() {
     : '';
   const TABS = [
     { id: "reading", label: "Reading", badge: tabBadge(unread.picks) },
+    // Right after Reading, not at the end: the tab strip scrolls horizontally
+    // on any viewport too narrow to fit all of it (deliberate, see .tabs
+    // below), and the default landing tab is "reading" -- so a tab placed
+    // last sits past the scroll threshold on every load until a librarian
+    // discovers they can swipe for it. Second position keeps it inside the
+    // strip's initial viewport without needing to touch the scroll mechanics.
+    // The route segment stays "admin" -- it's bookmarked, and renaming it
+    // would break every existing link for the sake of a label.
+    ...(admin ? [{ id: "admin", label: "Librarian", adminTab: true }] : []),
     { id: "shelf", label: "The Shelf" },
     { id: "wheel", label: "The Wheel" },
     { id: "leaderboard", label: "Leaderboard" },
     { id: "stats", label: "Stats" },
     { id: "reviews", label: "Reviews", badge: tabBadge(unread.reviews) },
     { id: "calendar", label: "Calendar" },
-    // The route segment stays "admin" -- it's bookmarked, and renaming it would
-    // break every existing link for the sake of a label.
-    ...(admin ? [{ id: "admin", label: "Librarian", adminTab: true }] : []),
   ];
   if (!TABS.some(t => t.id === currentTab)) currentTab = "reading";
   html += `<nav class="tabs" role="tablist" aria-label="Sections">${TABS.map(t =>
