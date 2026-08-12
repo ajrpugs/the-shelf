@@ -97,7 +97,12 @@
   .wrap, header, section, footer, nav.tabs, .winner-banner, .setup, .book-detail{ position: relative; z-index: 1; }
   .wrap{ max-width: 720px; margin: 0 auto; }
 
-  header{ text-align:center; margin-bottom: 20px; }
+  /* z-index above nav.tabs's (both are 1 via the shared selector above,
+     making them separate same-level stacking contexts where the later-in-DOM
+     one -- nav.tabs -- always paints over anything overflowing out of the
+     other) so the open profile dropdown, which hangs below the header's own
+     box, renders above the tab bar instead of underneath it. */
+  header{ text-align:center; margin-bottom: 20px; z-index: 2; }
   .eyebrow{
     font-size: 11px;
     letter-spacing: 0.28em;
@@ -131,8 +136,14 @@
   /* Profile icon dropdown, top-right of the club header. Shares the
      .row-menu-list/.row-menu-item look of the per-reader admin dropdown for
      visual consistency, and the outside-click-close handler already covers
-     any details.row-menu -- see the document click listener near boot. */
-  .profile-menu{ position: absolute; top: 0; right: 0; text-align: left; }
+     any details.row-menu -- see the document click listener near boot.
+     Selector is "header .profile-menu", not just ".profile-menu": the plain
+     .row-menu{ position: relative } rule further down the sheet has equal
+     specificity and would otherwise win on source order, dropping this out
+     of absolute positioning entirely (it did, in production -- the icon
+     rendered as a full-width block, left-aligned, with the menu list still
+     right:0 against that full width, i.e. icon left / menu right). */
+  header .profile-menu{ position: absolute; top: 0; right: 0; text-align: left; }
   .profile-menu-toggle{
     list-style: none; cursor: pointer; user-select: none;
     display: inline-flex; align-items: center; justify-content: center;
