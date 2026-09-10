@@ -25,7 +25,7 @@ import {
   buildMeeting,
   buildExtraMeetings,
 } from "../_shared/shelf-logic.mjs";
-import { normalizeConfig } from "../_shared/club-config.mjs";
+import { normalizeConfig, normalizeRatingProfile, ratingProfileForKind, READ_KINDS } from "../_shared/club-config.mjs";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -149,6 +149,9 @@ type Rating = {
   // to normalizeRatingProfile(undefined) for those rows.
   profile?: { scale: number; categories: { slot: string; label: string }[] };
 };
+// Which rubric a read is scored under, and which leaderboard it lands on
+// (reads.kind; NULL = fiction). See _shared/club-config.mjs's READ_KINDS.
+type ReadKind = "fiction" | "nonfiction";
 // A book-club meeting for a read: the 50% checkpoint (with how far to read) and
 // the 100% finish meeting. Each `at` is an ISO instant; either may be absent
 // until the librarian schedules it.
@@ -399,10 +402,11 @@ function ratingBand(total: number): { label: string; color: number } {
 // and how many member reviews it averaged.
 async function postRatingToDiscord(
   webhookUrl: string,
-  args: { book: string; round: number; cover: string | null; rating: Rating },
+  args: { book: string; round: number; cover: string | null; rating: Rating; kind: ReadKind },
 ): Promise<void> {
   const { total } = args.rating;
   const band = ratingBand(total);
+  const nonfiction = args.kind === "nonfiction";
 
   const embed: Record<string, unknown> = {
     title: args.book || "—",
@@ -414,25 +418,27 @@ async function postRatingToDiscord(
   };
   if (args.cover) embed.thumbnail = { url: args.cover };
 
-  const catLabels: Record<string, string> = {
-    plot: "Plot",
-    characters: "Characters",
-    pacing: "Organization / Pacing",
-    language: "Use of Language",
-    themes: "Themes / Ideas",
-  };
+  // Labels and max come from the rubric snapshotted onto this rating at lock
+  // time -- the one it was actually scored under. These were hardcoded to the
+  // default fiction labels and /20 until non-fiction reads existed, which also
+  // mislabeled every club that had renamed or rescaled its categories.
+  const profile = normalizeRatingProfile(args.rating.profile);
   const fields: Array<Record<string, unknown>> = [];
-  for (const key of ["plot", "characters", "pacing", "language", "themes"] as const) {
-    const v = args.rating[key];
-    if (Number.isFinite(v)) fields.push({ name: catLabels[key], value: `${v}/20`, inline: true });
+  for (const { slot, label } of profile.categories) {
+    const v = args.rating[slot as keyof Rating];
+    if (typeof v === "number" && Number.isFinite(v)) fields.push({ name: label, value: `${v}/${profile.scale}`, inline: true });
   }
   if (fields.length) embed.fields = fields;
+  const kindNote = nonfiction ? " · Non-fiction" : "";
+  embed.footer = { text: `Round ${args.round}${kindNote}` };
   if (Number.isFinite(args.rating.reviews)) {
     const n = args.rating.reviews!;
-    embed.footer = { text: `Round ${args.round} · averaged from ${n} review${n === 1 ? "" : "s"}` };
+    embed.footer = { text: `Round ${args.round}${kindNote} · averaged from ${n} review${n === 1 ? "" : "s"}` };
   }
 
-  const content = "🏅 A read has been scored — it's on the leaderboard.";
+  const content = nonfiction
+    ? "🏅 A read has been scored — it's on the non-fiction leaderboard."
+    : "🏅 A read has been scored — it's on the leaderboard.";
   try {
     const res = await fetch(webhookUrl, {
       method: "POST",
@@ -581,7 +587,7 @@ Deno.serve(async (req) => {
   // Set when admin_set_meeting actually changes the schedule, so we only ping
   // Discord on a real edit (not on a no-op Save).
   let meetingChange: { book: string; round: number; prev: Meetings | null; next: Meetings | null } | null = null;
-  let ratingChange: { book: string; round: number; rating: Rating } | null = null;
+  let ratingChange: { book: string; round: number; rating: Rating; kind: ReadKind } | null = null;
 
   try {
     switch (action) {
@@ -781,10 +787,15 @@ Deno.serve(async (req) => {
         const ts = String(payload.ts ?? "");
         if (!ts) throw new Error("ts required");
         const { data: entry, error: findErr } = await client
-          .from("reads").select("book, round, rating")
+          .from("reads").select("book, round, rating, kind")
           .eq("club_id", clubId).eq("ts", ts).maybeSingle();
         if (findErr) throw findErr;
         if (!entry) throw new Error("history item not found");
+        // The rubric this read is scored under: the club's own for fiction,
+        // the non-fiction categories (at the club's scale) for reads.kind =
+        // 'nonfiction'. Server-derived, like everything else here.
+        const kind: ReadKind = entry.kind === "nonfiction" ? "nonfiction" : "fiction";
+        const readProfile = ratingProfileForKind(clubConfig.rating, kind);
         const raw = payload.total;
         const prevRating = entry.rating ?? null;
         let newRating: Rating | null;
@@ -796,10 +807,10 @@ Deno.serve(async (req) => {
           // of member reviews. Restricted to this club's currently-active
           // slots (never trust the request's own category list) and clamped
           // to 1..scale; bad or inactive values are dropped.
-          const activeSlots = new Set(clubConfig.rating.categories.map((c: { slot: string }) => c.slot));
+          const activeSlots = new Set(readProfile.categories.map((c: { slot: string }) => c.slot));
           for (const cat of ["plot", "characters", "pacing", "language", "themes"] as const) {
             if (!activeSlots.has(cat)) continue;
-            const c = clampCategoryScore((payload as Record<string, unknown>)[cat], clubConfig.rating.scale);
+            const c = clampCategoryScore((payload as Record<string, unknown>)[cat], readProfile.scale);
             if (c !== undefined) rating[cat] = c;
           }
           const rc = Math.round(Number((payload as Record<string, unknown>).reviews));
@@ -808,12 +819,12 @@ Deno.serve(async (req) => {
           // -- never trust a `profile` the client might send -- so this read
           // renders under the rubric it was actually scored with even after
           // the club later renames or reorders its categories.
-          rating.profile = { scale: clubConfig.rating.scale, categories: clubConfig.rating.categories };
+          rating.profile = { scale: readProfile.scale, categories: readProfile.categories };
           newRating = rating;
           // Announce the score only when it actually changed (a re-lock of the
           // same total stays silent, matching the meeting no-op behavior).
           if (JSON.stringify(prevRating) !== JSON.stringify(rating)) {
-            ratingChange = { book: entry.book, round: entry.round, rating };
+            ratingChange = { book: entry.book, round: entry.round, rating, kind };
           }
         }
         const { error: updErr } = await client
@@ -842,6 +853,38 @@ Deno.serve(async (req) => {
         const nextRating: { finished: true } | null = isFinished ? null : { finished: true };
         const { error: updErr } = await client
           .from("reads").update({ rating: nextRating })
+          .eq("club_id", clubId).eq("ts", ts);
+        if (updErr) throw updErr;
+        break;
+      }
+      case "admin_set_read_kind": {
+        // Librarian marks a read fiction or non-fiction, which decides the
+        // rubric members score it under and the leaderboard its score lands
+        // on. Only while nothing has been scored under the current rubric:
+        // flipping it afterwards would silently relabel every review's numbers
+        // (a "Plot" 14 becoming an "Engagement" 14). Ratings must be closed
+        // too, so a review can't land between the count below and the update.
+        // Stored as NULL for fiction -- one representation for "the default".
+        const ts = String(payload.ts ?? "");
+        if (!ts) throw new Error("ts required");
+        const kind = String(payload.kind ?? "");
+        if (!READ_KINDS.includes(kind)) throw new Error(`kind must be one of ${READ_KINDS.join(", ")}`);
+        const { data: entry, error: findErr } = await client
+          .from("reads").select("rating, ratings_open")
+          .eq("club_id", clubId).eq("ts", ts).maybeSingle();
+        if (findErr) throw findErr;
+        if (!entry) throw new Error("history item not found");
+        if (entry.rating) throw new Error("This read's score is already locked in, so its rubric can't change.");
+        if (entry.ratings_open) throw new Error("Close ratings before switching this read's rubric.");
+        const { count, error: countErr } = await client
+          .from("shelf_reviews").select("user_id", { count: "exact", head: true })
+          .eq("club_id", clubId).eq("book_ts", ts);
+        if (countErr) throw countErr;
+        if ((count ?? 0) > 0) {
+          throw new Error("Members have already reviewed this read under its current rubric — they'd need to delete those reviews before it can switch.");
+        }
+        const { error: updErr } = await client
+          .from("reads").update({ kind: kind === "nonfiction" ? "nonfiction" : null })
           .eq("club_id", clubId).eq("ts", ts);
         if (updErr) throw updErr;
         break;
@@ -997,7 +1040,7 @@ Deno.serve(async (req) => {
   // shape lands exactly as the client's normalizeState already expects.
   const { data: readsRows, error: readsErr } = await client
     .from("reads")
-    .select("round, winner_id, winner_username, book, ts, rating, ratingsOpen:ratings_open, meetings")
+    .select("round, winner_id, winner_username, book, ts, rating, ratingsOpen:ratings_open, meetings, kind")
     .eq("club_id", clubId)
     .order("ts", { ascending: false });
   if (readsErr) return json({ error: readsErr.message }, 500);
@@ -1071,6 +1114,7 @@ Deno.serve(async (req) => {
         round: ratingChange.round,
         cover: meta.cover,
         rating: ratingChange.rating,
+        kind: ratingChange.kind,
       });
     }
   }

@@ -549,6 +549,14 @@
   .genre-tag-link{ cursor: pointer; transition: border-color 0.12s, color 0.12s, background 0.12s; }
   .genre-tag-link:hover{ border-color: var(--brass); color: var(--ink); background: rgba(236,227,207,0.10); }
   .genre-loading{ font-size: 12px; color: var(--muted); font-style: italic; }
+  /* "Non-fiction" marker on a read (reads.kind). Brass on transparent, so it
+     reads on both the felt and the darker panels without a new token. */
+  .kind-tag{
+    display: inline-block; vertical-align: middle;
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--brass); border: 1px solid var(--brass); border-radius: 999px;
+    padding: 1px 7px; line-height: 1.5; white-space: nowrap;
+  }
 
   /* Stats sub-cards: shared heading, superlatives, decade labels */
   .mini-head{
@@ -1550,6 +1558,31 @@ function normalizeConfig(raw) {
     notify: normalizeNotify(r.notify),
   };
 }
+// Non-fiction reads (docs/nonfiction-rubric-plan.md) -- mirrors
+// club-config.mjs's NONFICTION_RATING_CATEGORIES / normalizeReadKind /
+// ratingProfileForKind. Same change-one-change-both rule as everything above;
+// tests/client-config-parity.test.mjs checks this whole block against the
+// server copy.
+const NONFICTION_RATING_CATEGORIES = [
+  { slot: "plot", label: "Engagement" },
+  { slot: "characters", label: "Clarity" },
+  { slot: "pacing", label: "Structure & Pacing" },
+  { slot: "language", label: "Voice & Prose" },
+  { slot: "themes", label: "Insight & Credibility" },
+];
+function normalizeReadKind(raw) {
+  return raw === "nonfiction" ? "nonfiction" : "fiction";
+}
+function ratingProfileForKind(clubRating, kind) {
+  const base = normalizeRatingProfile(clubRating);
+  if (normalizeReadKind(kind) !== "nonfiction") return base;
+  return {
+    scale: base.scale,
+    categories: NONFICTION_RATING_CATEGORIES.map(c => ({ slot: c.slot, label: c.label })),
+    scoreLabel: base.scoreLabel,
+    enabled: base.enabled,
+  };
+}
 const clubConfig = () => normalizeConfig(club?.config);
 // A locked read's own rubric snapshot (Phase 10), falling back to the club's
 // live config for a read locked before this existed, or one still in
@@ -1582,6 +1615,13 @@ const ADMIN_SECTIONS = [
   { id: "readers", label: "Readers" },
   { id: "settings", label: "Settings" },
   { id: "data", label: "Data" },
+];
+// The leaderboard's sub-sections: fiction and non-fiction reads rank separately
+// (reads.kind). Same optional-third-segment routing as the dashboard, so a
+// bare #/c/<slug>/leaderboard still lands on fiction.
+const LEADERBOARD_SECTIONS = [
+  { id: "fiction", label: "Fiction" },
+  { id: "nonfiction", label: "Non-fiction" },
 ];
 let currentSubTab = "overview";
 let lastRenderedTab = null;  // currentTab as of the previous render() — lets us
@@ -1698,6 +1738,8 @@ function normalizeState(raw) {
       rating: h.rating ?? null,
       ratingsOpen: !!h.ratingsOpen,
       meetings: h.meetings ?? null,
+      // Which rubric/leaderboard; reads.kind is NULL for fiction.
+      kind: normalizeReadKind(h.kind),
     })) : [],
     roundNumber: r.roundNumber ?? r.cycleNumber ?? 1,
     // Phase 9: who config.selection.mode === "rotation" picked last, so the
@@ -2927,7 +2969,7 @@ async function loadAll() {
       supabase.from("shelf_reviews").select("*").eq("club_id", clubId()),
       supabase.from("shelf_comments").select("*").eq("club_id", clubId()),
       supabase.from("reads")
-        .select("round, winner_id, winner_username, book, ts, rating, ratingsOpen:ratings_open, meetings")
+        .select("round, winner_id, winner_username, book, ts, rating, ratingsOpen:ratings_open, meetings, kind")
         .eq("club_id", clubId())
         .order("ts", { ascending: false }),
       supabase.from("shelf_comment_reactions").select("comment_id, user_id, emoji").eq("club_id", clubId()),
@@ -3216,6 +3258,13 @@ async function markFinished(bookTs) {
   callAdmin("admin_mark_finished", { ts: bookTs });
 }
 
+// Librarian switches a read between the fiction and non-fiction rubric (and
+// so which leaderboard it lands on). admin-update refuses once anyone has
+// reviewed it, or while ratings are open.
+function setReadKind(bookTs, kind) {
+  callAdmin("admin_set_read_kind", { ts: bookTs, kind });
+}
+
 // Librarian snapshots the current member average into the committed score,
 // which drops the read onto the leaderboard (and promotes the next-up read).
 async function lockInScore(bookTs) {
@@ -3224,12 +3273,13 @@ async function lockInScore(bookTs) {
   const h = state.history.find(x => x.ts === bookTs);
   const title = h?.book || "this read";
   const ok = await confirmModal(
-    `Lock in the ${scoreLabel()} for "${title}" at ${agg.total}/100 (${agg.band.label}), averaged from ${agg.count} review${agg.count === 1 ? '' : 's'}? It moves to the leaderboard.`,
+    `Lock in the ${scoreLabel()} for "${title}" at ${agg.total}/100 (${agg.band.label}), averaged from ${agg.count} review${agg.count === 1 ? '' : 's'}? It moves to the ${readKind(h) === "nonfiction" ? "non-fiction " : ""}leaderboard.`,
     { title: "Lock in this score?", confirmLabel: "Lock in", danger: false },
   );
   if (!ok) return;
+  // agg.cats is already keyed by this read's own rubric (fiction or non-fiction).
   const cats = {};
-  for (const { key } of RUBRIC) cats[key] = Math.round(agg.cats[key]);
+  for (const key of Object.keys(agg.cats)) cats[key] = Math.round(agg.cats[key]);
   callAdmin("admin_set_rating", { ts: bookTs, total: agg.total, ...cats, reviews: agg.count });
 }
 
@@ -3243,6 +3293,9 @@ function bandKeyOf(v) {
 }
 
 function openRubricModal(bookTs, bookTitle) {
+  // This read's own rubric (fiction or non-fiction). Deliberately shadows the
+  // club-wide RUBRIC for the whole wizard below.
+  const { rubric: RUBRIC, kind } = rubricForTs(bookTs);
   const mine = myReviewFor(bookTs);
   const defaultVal = Math.round(RATING_SCALE * 0.6);
   const vals = {};
@@ -3265,7 +3318,7 @@ function openRubricModal(bookTs, bookTitle) {
           <span class="rubric-step-count">${step + 1} of ${RUBRIC.length}</span>
         </div>
         <div class="rubric-dots">${RUBRIC.map((_, i) => `<span class="${i === step ? 'on' : (i < step ? 'done' : '')}"></span>`).join("")}</div>
-        <p class="rubric-sub">Scoring <b>${title}</b> — tap the band you agree on, then fine-tune.</p>
+        <p class="rubric-sub">Scoring <b>${title}</b>${kind === "nonfiction" ? " on the non-fiction rubric" : ""} — tap the band you agree on, then fine-tune.</p>
         <div class="band-cards">
           ${ratingBandTiers(RATING_SCALE).map(b => `
             <button type="button" class="band-card ${b.cls} ${b.band === activeKey ? 'active' : ''}" data-band="${b.band}" data-mid="${b.mid}">
@@ -4745,6 +4798,63 @@ function refreshRubric() {
 }
 function scoreLabel() { return SCORE_LABEL; }
 
+// The non-fiction rubric (reads.kind = 'nonfiction'), same shape as
+// RUBRIC_ALL: the same five physical slots, its own labels and scoring
+// guidance. Labels here are the defaults; ratingProfileForKind() is what
+// actually names them, so the server's snapshot and this page can't disagree.
+const RUBRIC_NONFICTION = [
+  { key: "plot", label: "Engagement", short: "Engagement", bands: {
+    exc: "Hard to put down. The subject grabbed you and kept its hold, even through the technical or slower stretches.",
+    great: "Interesting throughout, with stretches that were genuinely gripping.",
+    good: "Interesting in places, but you had to push through sections that lost you.",
+    bad: "Rarely held your interest. Finishing it felt like a chore.",
+  } },
+  { key: "characters", label: "Clarity", short: "Clarity", bands: {
+    exc: "Complex ideas are made genuinely clear — you could explain them to someone else afterwards. Jargon only appears when needed, and is always explained.",
+    great: "Easy to follow. Difficult material is well explained, with the occasional passage that needed a second read.",
+    good: "Mostly followable, but some key ideas were muddy, over-technical, or glossed over.",
+    bad: "Often confusing — too much assumed knowledge, or simplified so far it says little.",
+  } },
+  { key: "pacing", label: "Structure & Pacing", short: "Structure", bands: {
+    exc: "Every chapter earns its place. The threads (history, people, science) build on each other into a satisfying whole.",
+    great: "Well organized and well paced. The threads connect, with minor detours.",
+    good: "Some sections drag, repeat, or rush, and it isn't always clear how the threads connect.",
+    bad: "Disorganized or badly paced. It reads like a collection of notes rather than a book.",
+  } },
+  { key: "language", label: "Voice & Prose", short: "Voice", bands: {
+    exc: "The writing is a pleasure in its own right — a memorable voice, wit, or beauty.",
+    great: "Engaging, confident writing with a clear voice.",
+    good: "Serviceable writing with occasional memorable moments.",
+    bad: "The writing gets in the way: flat, padded, needlessly complex, or grating.",
+  } },
+  { key: "themes", label: "Insight & Credibility", short: "Insight", bands: {
+    exc: "You learned a lot, and it changed how you see the subject. The research feels thorough and trustworthy, and the author is careful to separate what's known from what's speculation.",
+    great: "Substantial and well researched. You learned things worth remembering.",
+    good: "Some real insight, alongside shallow patches, familiar material, or claims that felt thinly supported.",
+    bad: "Little you couldn't get from a long article, or problems with the research, fairness or accuracy made you distrust it.",
+  } },
+];
+
+// The rubric one read is scored under, as { rubric, scale, kind }: the club's
+// live RUBRIC for fiction, or the non-fiction categories at the club's scale.
+// Everything that shows or computes a *specific* read's categories goes
+// through this rather than the club-wide RUBRIC.
+const readKind = (h) => normalizeReadKind(h && h.kind);
+function rubricForRead(h) {
+  const kind = readKind(h);
+  if (kind !== "nonfiction") return { rubric: RUBRIC, scale: RATING_SCALE, kind };
+  const profile = ratingProfileForKind(clubConfig().rating, kind);
+  return {
+    rubric: profile.categories.map(c => ({ ...(RUBRIC_NONFICTION.find(r => r.key === c.slot) || RUBRIC_NONFICTION[0]), label: c.label })),
+    scale: profile.scale,
+    kind,
+  };
+}
+const rubricForTs = (ts) => rubricForRead(state.history.find(x => x.ts === ts));
+function kindTagHtml(h) {
+  return readKind(h) === "nonfiction" ? `<span class="kind-tag">Non-fiction</span>` : "";
+}
+
 // Category-score band tiers for a given scale, fractions matching the /100
 // total bands (80/55/30) exactly -- at the default scale 20 this reproduces
 // today's fixed 16/11/6 thresholds bit-for-bit. `min` is each tier's lower
@@ -4798,7 +4908,8 @@ function reviewsFor(bookTs) {
   return bookTs ? reviews.filter(r => r.book_ts === bookTs) : [];
 }
 function reviewTotal(r) {
-  return normalizeTotal(RUBRIC.map(({ key }) => Number(r[key]) || 0), RATING_SCALE);
+  const { rubric, scale } = rubricForTs(r.book_ts);
+  return normalizeTotal(rubric.map(({ key }) => Number(r[key]) || 0), scale);
 }
 // Superlatives drawn from the member-review data: the read the club disagreed
 // on most (highest spread of totals), and the harshest / most generous
@@ -4845,12 +4956,13 @@ function aggregateRubric(bookTs) {
   if (!rs.length) return null;
   const cats = {};
   const avgs = [];
-  for (const { key } of RUBRIC) {
+  const { rubric, scale } = rubricForTs(bookTs);
+  for (const { key } of rubric) {
     const avg = rs.reduce((s, r) => s + (Number(r[key]) || 0), 0) / rs.length;
     cats[key] = avg;
     avgs.push(avg);
   }
-  const roundedTotal = normalizeTotal(avgs, RATING_SCALE);
+  const roundedTotal = normalizeTotal(avgs, scale);
   return { count: rs.length, cats, total: roundedTotal, band: ratingBand(roundedTotal) };
 }
 
@@ -4871,6 +4983,7 @@ function readerHref(id, name) {
 function bannerHtml(pick, { stamp, admin, showRate }) {
   const avatar = pick?.winner_id ? userAvatar(pick.winner_id) : null;
   const ratingEnabled = clubConfig().rating.enabled;
+  const nonfiction = readKind(pick) === "nonfiction";
   let reviewBlock = "";
   if (showRate && pick.book && !ratingEnabled) {
     // No score to lock in here -- admin_mark_finished is this club's
@@ -4895,8 +5008,13 @@ function bannerHtml(pick, { stamp, admin, showRate }) {
       scoreLine = admin
         ? `<span class="bn-review-count">Ratings are closed. Open them when the club is ready to score.</span>`
         : `<span class="bn-review-count">Ratings open on the call — hang tight.</span>`;
+      // The rubric is chosen here, before anyone scores: the Open button names
+      // it so it's hard to open under the wrong one, and the switch disappears
+      // once a review exists (admin-update refuses it then anyway).
+      const rubricName = nonfiction ? "non-fiction" : "fiction";
       actions = admin
-        ? `<button class="btn-mini" data-openratings-ts="${attr(pick.ts || '')}" data-open="1">Open ratings</button>`
+        ? `<button class="btn-mini" data-openratings-ts="${attr(pick.ts || '')}" data-open="1">Open ratings (${rubricName} rubric)</button>`
+          + (reviewsFor(pick.ts).length ? '' : `<button class="btn-mini ghost" data-readkind-ts="${attr(pick.ts || '')}" data-kind="${nonfiction ? 'fiction' : 'nonfiction'}">Switch to ${nonfiction ? 'fiction' : 'non-fiction'} rubric</button>`)
         : '';
     } else {
       scoreLine = agg
@@ -4923,6 +5041,7 @@ function bannerHtml(pick, { stamp, admin, showRate }) {
         <div class="cover-slot large" data-cover-title="${attr(pick.book || '')}"></div>
         <div class="wn-head">
           <div class="wbook">${pick.book ? `<a class="book-link" href="#book=${pick.round}">${esc(pick.book)}</a>` : '—'}</div>
+          ${pick.book && nonfiction ? `<div>${kindTagHtml(pick)}</div>` : ''}
           ${pick.book ? `<div class="wauthor bn-author"></div>` : ''}
           ${pick.book ? `<div class="wmeta book-meta" data-meta-title="${attr(pick.book)}"></div>` : ''}
           <div class="wname">
@@ -5116,9 +5235,11 @@ function render() {
 
   const route = parseRoute();
   if (route.tab) currentTab = route.tab;
-  // An unknown or absent sub-section falls back to the first one rather than
-  // rendering an empty dashboard.
-  currentSubTab = ADMIN_SECTIONS.some(s => s.id === route.sub) ? route.sub : "overview";
+  // An unknown or absent sub-section falls back to the tab's first one rather
+  // than rendering an empty page. Two tabs have sub-sections: the librarian
+  // dashboard and the leaderboard (fiction / non-fiction).
+  const subSections = currentTab === "leaderboard" ? LEADERBOARD_SECTIONS : ADMIN_SECTIONS;
+  currentSubTab = subSections.some(s => s.id === route.sub) ? route.sub : subSections[0].id;
   // Scroll to top only on an actual navigation into a detail route (hash
   // changed since the last render), not on every re-render of the same page
   // triggered by a button click (reply, react, post/delete a comment, ...).
@@ -5415,10 +5536,23 @@ function render() {
     html += `</section>`;
   } else {
   // Rated books only — in-progress reads live in the hero banners above, so
-  // nothing unrated clutters the ranking.
-  const rated = state.history.filter(h => ratingTotal(h) != null);
+  // nothing unrated clutters the ranking. Fiction and non-fiction rank
+  // separately, since they're scored on different rubrics. The switcher only
+  // appears once some read is non-fiction, so a club that never tags one sees
+  // exactly the single list it always had.
+  const hasNonfiction = state.history.some(h => readKind(h) === "nonfiction");
+  const lbKind = hasNonfiction && currentSubTab === "nonfiction" ? "nonfiction" : "fiction";
+  if (hasNonfiction) {
+    html += `<nav class="sub-nav" role="tablist" aria-label="Leaderboards">${LEADERBOARD_SECTIONS.map(s =>
+      `<button class="${lbKind === s.id ? 'on' : ''}" role="tab" aria-selected="${lbKind === s.id ? 'true' : 'false'}" data-lbtab="${attr(s.id)}">${esc(s.label)}</button>`
+    ).join("")}</nav>`;
+    html += `<select class="sub-nav-select" id="lb-nav-select" aria-label="Leaderboard">${LEADERBOARD_SECTIONS.map(s =>
+      `<option value="${attr(s.id)}" ${lbKind === s.id ? 'selected' : ''}>${esc(s.label)}</option>`
+    ).join("")}</select>`;
+  }
+  const rated = state.history.filter(h => ratingTotal(h) != null && readKind(h) === lbKind);
   if (rated.length === 0) {
-    html += `<div class="empty-block">No books rated yet.</div>`;
+    html += `<div class="empty-block">${lbKind === "nonfiction" ? "No non-fiction books rated yet." : "No books rated yet."}</div>`;
   } else {
     if (rated.length > 6) {
       html += `<input type="text" id="lb-search" class="lb-search" placeholder="Search past reads by title or reader…" autocomplete="off" value="${attr(leaderboardQuery)}">`;
@@ -5580,7 +5714,7 @@ function render() {
         const rc = reviewsFor(h.ts).length;
         html += `<div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a></span>
+          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a> ${kindTagHtml(h)}</span>
           ${rc ? `<span class="h-meta">${rc} member review${rc === 1 ? '' : 's'}</span>` : ''}
           ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
         </div>`;
@@ -5637,7 +5771,7 @@ function recapReadRow(h) {
   const band = ratingBand(total);
   return `<div class="history-item">
     <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-    <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>${h.winner_username ? ` <span class="recap-picker">— <a class="reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a></span>` : ''}</span>
+    <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a> ${kindTagHtml(h)}${h.winner_username ? ` <span class="recap-picker">— <a class="reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a></span>` : ''}</span>
     <span class="h-meta">${fmtDate(h.ts)}</span>
     ${band ? `<span class="score-pill ${band.cls}">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
   </div>`;
@@ -6216,8 +6350,9 @@ function bookBadges(h) {
     if (mostDivisive.ts === h.ts) badges.push({ emoji: "🔥", label: "Most divisive" });
     else if (mostAgreed.ts === h.ts) badges.push({ emoji: "🤝", label: "Most agreed-upon" });
   }
-  // Score-based, from the committed Guild ratings.
-  const rated = state.history.filter(x => ratingTotal(x) != null);
+  // Score-based, from the committed Guild ratings -- ranked only against reads
+  // of the same kind, since fiction and non-fiction use different rubrics.
+  const rated = state.history.filter(x => ratingTotal(x) != null && readKind(x) === readKind(h));
   if (rated.length >= 2) {
     const top = rated.reduce((m, x) => (ratingTotal(x) > ratingTotal(m) ? x : m));
     const bottom = rated.reduce((m, x) => (ratingTotal(x) < ratingTotal(m) ? x : m));
@@ -6238,7 +6373,8 @@ function guildReviewHtml(h) {
   // the live member-review average instead.
   const agg = committed == null ? aggregateRubric(h.ts) : null;
   let cats = null;
-  let catList = RUBRIC; // { key, label } source for the breakdown below
+  const readRubric = rubricForRead(h).rubric; // fiction or non-fiction, per read
+  let catList = readRubric; // { key, label } source for the breakdown below
   let catScale = RATING_SCALE;
   if (committed != null && h.rating) {
     const profile = ratingProfileFor(h);
@@ -6258,7 +6394,7 @@ function guildReviewHtml(h) {
   const dnfCount = reviewsFor(h.ts).filter(r => r.dnf).length;
   const dnfSuffix = dnfCount ? ` · ${dnfCount} DNF` : '';
 
-  let html = `<div class="bd-block bd-review ${headBand ? headBand.cls : ''}"><div class="bd-block-head">${esc(scoreLabel())} review</div>`;
+  let html = `<div class="bd-block bd-review ${headBand ? headBand.cls : ''}"><div class="bd-block-head">${esc(scoreLabel())} review ${kindTagHtml(h)}</div>`;
   const badges = bookBadges(h);
   if (badges.length) {
     html += `<div class="bd-badges">${badges.map(b => `<span class="bd-badge">${b.emoji} ${esc(b.label)}</span>`).join("")}</div>`;
@@ -6310,7 +6446,7 @@ function guildReviewHtml(h) {
       const b = ratingBand(t);
       html += `<div class="bd-reviewer">
         <div class="bd-reviewer-head">${av ? `<img class="avatar-mini" src="${attr(av)}" alt="">` : ''}<a class="reader-link" href="${readerHref(r.user_id, name)}"><b>${esc(name)}</b></a> · ${t}/100 <span class="score-pill ${b.cls}">${b.label}</span></div>
-        <div class="bd-reviewer-scores">${RUBRIC.filter(({ key }) => r[key] != null).map(({ key, short }) => `${esc(short)} ${r[key]}`).join(" · ")}</div>
+        <div class="bd-reviewer-scores">${readRubric.filter(({ key }) => r[key] != null).map(({ key, short }) => `${esc(short)} ${r[key]}`).join(" · ")}</div>
         ${r.note ? `<div class="bd-reviewer-note">“${esc(r.note)}”</div>` : ""}
       </div>`;
     }
@@ -6540,7 +6676,7 @@ async function decorateTagPage(tag) {
       <div class="history-item">
         <span class="cover-slot tiny" data-cover-title="${attr(h.book)}"></span>
         <span class="h-content">
-          ${h.winner_username ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — ` : ''}<a class="book-link" href="#book=${h.round}">${esc(h.book)}</a><span class="book-meta" data-meta-title="${attr(h.book)}"></span>
+          ${h.winner_username ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — ` : ''}<a class="book-link" href="#book=${h.round}">${esc(h.book)}</a> ${kindTagHtml(h)}<span class="book-meta" data-meta-title="${attr(h.book)}"></span>
         </span>
         <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
         ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
@@ -6629,7 +6765,7 @@ function renderReaderPage(app, key) {
       html += `
         <div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a><span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
+          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a> ${kindTagHtml(h)}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
           ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
         </div>`;
@@ -6815,6 +6951,21 @@ function wireUp() {
     const id = e.currentTarget.value;
     e.currentTarget.blur();
     if (id && id !== currentSubTab) goToTab("admin", id);
+  });
+
+  // Leaderboard fiction / non-fiction switch -- same goToTab() rule.
+  document.querySelectorAll("[data-lbtab]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.lbtab;
+      if (!id || id === currentSubTab) return;
+      document.activeElement?.blur?.();
+      goToTab("leaderboard", id);
+    });
+  });
+  document.getElementById("lb-nav-select")?.addEventListener("change", (e) => {
+    const id = e.currentTarget.value;
+    e.currentTarget.blur();
+    if (id && id !== currentSubTab) goToTab("leaderboard", id);
   });
 
   const tabStrip = document.querySelector(".tabs");
@@ -7381,6 +7532,8 @@ document.addEventListener("click", async (e) => {
   if (markFin) { markFinished(markFin.dataset.markFinishedTs); return; }
   const openBtn = e.target.closest("[data-openratings-ts]");
   if (openBtn) { setRatingsOpen(openBtn.dataset.openratingsTs, openBtn.dataset.open === "1"); return; }
+  const kindBtn = e.target.closest("[data-readkind-ts]");
+  if (kindBtn) { setReadKind(kindBtn.dataset.readkindTs, kindBtn.dataset.kind); return; }
   const cPost = e.target.closest("[data-comment-post]");
   if (cPost) {
     const parentId = cPost.dataset.parentId || null;

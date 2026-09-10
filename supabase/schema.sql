@@ -873,3 +873,18 @@ alter table public.clubs drop constraint if exists clubs_discord_guild_id_len_ch
 alter table public.clubs
   add constraint clubs_discord_guild_id_len_chk
   check (discord_guild_id is null or discord_guild_id ~ '^[0-9]{1,25}$');
+
+-- 33. Non-fiction reads ------------------------------------------------------
+-- reads.kind picks which rubric a read is scored under and which leaderboard
+-- its score lands on. NULL = fiction, so every older read is unchanged. The
+-- non-fiction rubric reuses shelf_reviews' five physical columns as slots.
+-- Written only by admin-update's admin_set_read_kind. See
+-- 20260910120000_read_kind.sql and docs/nonfiction-rubric-plan.md.
+
+alter table public.reads
+  add column if not exists kind text;
+
+alter table public.reads drop constraint if exists reads_kind_chk;
+alter table public.reads
+  add constraint reads_kind_chk
+  check (kind is null or kind in ('fiction', 'nonfiction'));

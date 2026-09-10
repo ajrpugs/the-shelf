@@ -469,7 +469,7 @@ Deno.serve(async (req) => {
         if (!await isLibrarian(client, clubId, callerId)) return json({ error: "not a librarian" }, 403);
         const [reads, members, reviews, comments] = await Promise.all([
           client.from("reads")
-            .select("round, winner_id, winner_username, book, ts, rating, ratings_open, meetings")
+            .select("round, winner_id, winner_username, book, ts, rating, ratings_open, meetings, kind")
             .eq("club_id", clubId).order("ts", { ascending: false }),
           client.from("club_members")
             .select("user_id, role, book, joined_at")

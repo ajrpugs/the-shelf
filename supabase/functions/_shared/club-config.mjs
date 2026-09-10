@@ -92,6 +92,46 @@ export function normalizeRatingProfile(raw) {
   return { scale, categories, scoreLabel, enabled };
 }
 
+// Non-fiction reads (docs/nonfiction-rubric-plan.md). A read's `kind` picks
+// which rubric it's scored under; NULL/absent/anything unrecognised is
+// fiction, so every read that predates reads.kind keeps the club's own
+// rubric. The non-fiction rubric reuses the same five physical slots under
+// its own labels, at the club's own per-category max -- so every score total,
+// DNF rule and shelf_reviews constraint works unchanged. It always runs all
+// five slots, even for a club that has switched some off for fiction: the
+// rubric was written as five categories, and a club's fiction choices say
+// nothing about which non-fiction ones it would want.
+//
+// The client keeps a copy (index.html) with the scoring-guidance prose on top
+// -- change one, change both.
+export const READ_KINDS = ["fiction", "nonfiction"];
+
+export const NONFICTION_RATING_CATEGORIES = [
+  { slot: "plot", label: "Engagement" },
+  { slot: "characters", label: "Clarity" },
+  { slot: "pacing", label: "Structure & Pacing" },
+  { slot: "language", label: "Voice & Prose" },
+  { slot: "themes", label: "Insight & Credibility" },
+];
+
+export function normalizeReadKind(raw) {
+  return raw === "nonfiction" ? "nonfiction" : "fiction";
+}
+
+// The rubric a read is scored under: the club's own (already-normalized)
+// rating profile for fiction, or the non-fiction categories at the club's
+// scale and score label.
+export function ratingProfileForKind(clubRating, kind) {
+  const base = normalizeRatingProfile(clubRating);
+  if (normalizeReadKind(kind) !== "nonfiction") return base;
+  return {
+    scale: base.scale,
+    categories: NONFICTION_RATING_CATEGORIES.map(c => ({ slot: c.slot, label: c.label })),
+    scoreLabel: base.scoreLabel,
+    enabled: base.enabled,
+  };
+}
+
 // §4.2: per-club Discord event toggles. All default true -- today's
 // behaviour, posting on every one of these -- so a club whose config
 // predates this key keeps announcing exactly what it already does.

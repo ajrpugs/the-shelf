@@ -15,7 +15,7 @@
 // same as set-book.)
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { normalizeConfig, RATING_SLOTS } from "../_shared/club-config.mjs";
+import { normalizeConfig, ratingProfileForKind, RATING_SLOTS } from "../_shared/club-config.mjs";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -94,11 +94,11 @@ Deno.serve(async (req) => {
   // ts exists.
   const { data: allReads, error: readsErr } = await admin
     .from("reads")
-    .select("ts, rating, ratings_open")
+    .select("ts, rating, ratings_open, kind")
     .eq("club_id", clubId)
     .order("ts", { ascending: false });
   if (readsErr) return json({ error: readsErr.message }, 500);
-  type Read = { ts: string; rating?: { total?: number } | null; ratings_open?: boolean };
+  type Read = { ts: string; rating?: { total?: number } | null; ratings_open?: boolean; kind?: string | null };
   const history: Read[] = allReads ?? [];
   const entry = history.find(h => h?.ts === bookTs);
   if (!entry) return json({ error: "no such read" }, 404);
@@ -122,15 +122,8 @@ Deno.serve(async (req) => {
     .from("clubs").select("suspended_at, config").eq("id", clubId).maybeSingle();
   if (clubRow?.suspended_at) return json({ error: "This club has been suspended." }, 403);
 
-  // Phase 10: which categories this club actually scores, and their max --
-  // read from the club's own config, never trusted from the request. A club
-  // whose row predates this feature gets normalizeConfig's defaults: all five
-  // slots, scale 20 -- today's behaviour.
-  const ratingCfg = normalizeConfig(clubRow?.config).rating;
-  const activeSlots = new Set(ratingCfg.categories.map((c: { slot: string }) => c.slot));
-
   // A club can turn ratings off entirely -- nothing to review there.
-  if (ratingCfg.enabled === false) {
+  if (normalizeConfig(clubRow?.config).rating.enabled === false) {
     return json({ error: "this club doesn't rate books" }, 403);
   }
 
@@ -150,6 +143,14 @@ Deno.serve(async (req) => {
   if (current.ratings_open !== true) {
     return json({ error: "ratings aren't open for this read yet" }, 403);
   }
+
+  // Phase 10: which categories this club actually scores, and their max --
+  // read from the club's own config, never trusted from the request. A club
+  // whose row predates this feature gets normalizeConfig's defaults: all five
+  // slots, scale 20 -- today's behaviour. A non-fiction read (reads.kind)
+  // swaps in the non-fiction rubric, which always runs all five slots.
+  const ratingCfg = ratingProfileForKind(normalizeConfig(clubRow?.config).rating, current.kind);
+  const activeSlots = new Set(ratingCfg.categories.map((c: { slot: string }) => c.slot));
 
   const dnf = body.dnf === true;
 
