@@ -121,7 +121,11 @@ const got = {}; const bad = [];
 let m;
 while ((m = re.exec(sql))) {
   let lit = m[2].trim();
-  if (lit.startsWith("'") && lit.endsWith("'")) lit = lit.slice(1, -1).replaceAll("''", "'");
+  // format('%L') emits E'...' (with backslashes doubled) instead of '...' as
+  // soon as the text holds a backslash -- e.g. a comment body containing one.
+  // Both forms double single quotes; only the E form also doubles backslashes.
+  if (lit.startsWith("E'") && lit.endsWith("'")) lit = lit.slice(2, -1).replace(/''|\\\\/g, (s) => (s === "''" ? "'" : "\\"));
+  else if (lit.startsWith("'") && lit.endsWith("'")) lit = lit.slice(1, -1).replaceAll("''", "'");
   try { got[m[1]] = JSON.parse(lit).length; } catch (e) { bad.push(`${m[1]}: ${e.message}`); }
 }
 let fail = 0;
