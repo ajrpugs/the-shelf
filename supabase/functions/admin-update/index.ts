@@ -35,6 +35,9 @@ const cors = {
 
 // Base URL of the live app, so Discord embeds can link back to a book's page.
 const SITE_URL = "https://sh3lf.net/";
+// Link a read by its `ts`, not its round -- every pick before the round turns
+// over shares a round number, so `#book=<round>` opened the wrong book.
+const bookUrl = (ts: string) => `${SITE_URL}#book=${encodeURIComponent(ts)}`;
 
 // Derive the client type from an actual createClient(...) call rather than from
 // `ReturnType<typeof createClient>`. The latter resolves supabase-js's generic
@@ -274,6 +277,7 @@ type DiscordArgs = {
   avatarUrl: string | null;
   discordId: string | null;
   round: number;
+  ts: string;
   roundAdvanced: boolean;
 };
 
@@ -283,7 +287,7 @@ async function postToDiscord(webhookUrl: string, args: DiscordArgs): Promise<voi
 
   const embed: Record<string, unknown> = {
     title: args.book || "—",
-    url: `${SITE_URL}#book=${args.round}`,
+    url: bookUrl(args.ts),
     description,
     color: 0xc94a37,
     footer: {
@@ -328,7 +332,7 @@ async function postToDiscord(webhookUrl: string, args: DiscordArgs): Promise<voi
 // timezone, with a relative countdown alongside.
 async function postMeetingsToDiscord(
   webhookUrl: string,
-  args: { book: string; round: number; cover: string | null; prev: Meetings | null; next: Meetings | null },
+  args: { book: string; round: number; ts: string; cover: string | null; prev: Meetings | null; next: Meetings | null },
 ): Promise<void> {
   const stamp = (iso: string) => {
     const t = Math.floor(new Date(iso).getTime() / 1000);
@@ -339,7 +343,7 @@ async function postMeetingsToDiscord(
 
   const embed: Record<string, unknown> = {
     title: args.book || "—",
-    url: `${SITE_URL}#book=${args.round}`,
+    url: bookUrl(args.ts),
     color: 0xe0b45a,
     footer: { text: `Round ${args.round}` },
     timestamp: new Date().toISOString(),
@@ -402,7 +406,7 @@ function ratingBand(total: number): { label: string; color: number } {
 // and how many member reviews it averaged.
 async function postRatingToDiscord(
   webhookUrl: string,
-  args: { book: string; round: number; cover: string | null; rating: Rating; kind: ReadKind },
+  args: { book: string; round: number; ts: string; cover: string | null; rating: Rating; kind: ReadKind },
 ): Promise<void> {
   const { total } = args.rating;
   const band = ratingBand(total);
@@ -410,7 +414,7 @@ async function postRatingToDiscord(
 
   const embed: Record<string, unknown> = {
     title: args.book || "—",
-    url: `${SITE_URL}#book=${args.round}`,
+    url: bookUrl(args.ts),
     description: `**${total}/100** · ${band.label}`,
     color: band.color,
     footer: { text: `Round ${args.round}` },
@@ -586,8 +590,8 @@ Deno.serve(async (req) => {
   let roundAdvanced = false;
   // Set when admin_set_meeting actually changes the schedule, so we only ping
   // Discord on a real edit (not on a no-op Save).
-  let meetingChange: { book: string; round: number; prev: Meetings | null; next: Meetings | null } | null = null;
-  let ratingChange: { book: string; round: number; rating: Rating; kind: ReadKind } | null = null;
+  let meetingChange: { book: string; round: number; ts: string; prev: Meetings | null; next: Meetings | null } | null = null;
+  let ratingChange: { book: string; round: number; ts: string; rating: Rating; kind: ReadKind } | null = null;
 
   try {
     switch (action) {
@@ -824,7 +828,7 @@ Deno.serve(async (req) => {
           // Announce the score only when it actually changed (a re-lock of the
           // same total stays silent, matching the meeting no-op behavior).
           if (JSON.stringify(prevRating) !== JSON.stringify(rating)) {
-            ratingChange = { book: entry.book, round: entry.round, rating, kind };
+            ratingChange = { book: entry.book, round: entry.round, ts, rating, kind };
           }
         }
         const { error: updErr } = await client
@@ -937,7 +941,7 @@ Deno.serve(async (req) => {
         if (updErr) throw updErr;
         // Only worth announcing if something actually moved.
         if (JSON.stringify(prev) !== JSON.stringify(next)) {
-          meetingChange = { book: entry.book, round: entry.round, prev, next };
+          meetingChange = { book: entry.book, round: entry.round, ts, prev, next };
         }
         break;
       }
@@ -955,7 +959,7 @@ Deno.serve(async (req) => {
         if (!entry.meetings || (!entry.meetings.half && !entry.meetings.full)) {
           throw new Error("no meetings scheduled for this read");
         }
-        meetingChange = { book: entry.book, round: entry.round, prev: null, next: entry.meetings };
+        meetingChange = { book: entry.book, round: entry.round, ts, prev: null, next: entry.meetings };
         break;
       }
       case "admin_remove_user": {
@@ -1082,6 +1086,7 @@ Deno.serve(async (req) => {
         avatarUrl: winnerAvatarUrl,
         discordId: mention ? winnerDiscordId : null,
         round: winner.round,
+        ts: winner.ts,
         roundAdvanced,
       });
     }
@@ -1096,6 +1101,7 @@ Deno.serve(async (req) => {
       await postMeetingsToDiscord(webhookUrl, {
         book: meetingChange.book,
         round: meetingChange.round,
+        ts: meetingChange.ts,
         cover: meta.cover,
         prev: meetingChange.prev,
         next: meetingChange.next,
@@ -1112,6 +1118,7 @@ Deno.serve(async (req) => {
       await postRatingToDiscord(webhookUrl, {
         book: ratingChange.book,
         round: ratingChange.round,
+        ts: ratingChange.ts,
         cover: meta.cover,
         rating: ratingChange.rating,
         kind: ratingChange.kind,

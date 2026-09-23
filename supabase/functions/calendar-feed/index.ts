@@ -106,7 +106,10 @@ function buildIcs(history: HistoryItem[], clubName: string): string {
     const end = new Date(start.getTime() + MEETING_MINUTES * 60 * 1000);
     const book = (h.book || "a read").trim();
     const summary = `📖 ${book} — ${summarySuffix}`;
-    const fullDesc = `${desc} The Shelf: ${SITE_URL}#book=${h.round ?? ""}`;
+    // Keyed by ts, not round: reads drawn in the same round share a round
+    // number, so a round link opened the wrong book.
+    const bookUrl = `${SITE_URL}#book=${h.ts ? encodeURIComponent(h.ts) : (h.round ?? "")}`;
+    const fullDesc = `${desc} The Shelf: ${bookUrl}`;
     lines.push(
       "BEGIN:VEVENT",
       // Deliberately NOT club-scoped, even though `ts` is only unique per club
@@ -120,7 +123,7 @@ function buildIcs(history: HistoryItem[], clubName: string): string {
       `DTEND:${icsStamp(end)}`,
       `SUMMARY:${icsText(summary)}`,
       `DESCRIPTION:${icsText(fullDesc)}`,
-      `URL:${SITE_URL}#book=${h.round ?? ""}`,
+      `URL:${bookUrl}`,
       "END:VEVENT",
     );
   };

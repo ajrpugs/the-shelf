@@ -241,6 +241,16 @@ test("the route parses the dashboard's optional third segment", () => {
   assert.equal(at("#/account").name, "account");
   assert.equal(at("#/join/ABC123").name, "join");
   assert.equal(at("#book=3").name, "book");
+  // A read's page is keyed by its ts (reads in one round share a round number,
+  // which is what sent "Super Heavy" to "The Three-Body Problem"); a bare
+  // number is still the legacy round link.
+  assert.equal(at("#book=3").round, 3);
+  assert.equal(at("#book=3").ts, null);
+  const ts = "2026-05-01T18:22:04.123Z";
+  const byTs = at(`#book=${encodeURIComponent(ts)}`);
+  assert.equal(byTs.name, "book");
+  assert.equal(byTs.ts, ts);
+  assert.equal(byTs.round, null);
   assert.equal(at("#recap=2026").name, "recap");
 });
 
