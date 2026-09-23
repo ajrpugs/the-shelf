@@ -1973,8 +1973,8 @@ async function decorateStats() {
     const m = metas[i] || {};
     if (m.pages) {
       totalPages += m.pages; pageCount++;
-      if (!longest || m.pages > longest.pages) longest = { round: h.round, book: h.book, pages: m.pages };
-      if (!shortest || m.pages < shortest.pages) shortest = { round: h.round, book: h.book, pages: m.pages };
+      if (!longest || m.pages > longest.pages) longest = { ts: h.ts, round: h.round, book: h.book, pages: m.pages };
+      if (!shortest || m.pages < shortest.pages) shortest = { ts: h.ts, round: h.round, book: h.book, pages: m.pages };
     }
     if (Number.isFinite(m.year) && m.year >= 1850 && m.year <= nextYear) {
       const dec = Math.floor(m.year / 10) * 10;
@@ -2000,7 +2000,7 @@ async function decorateStats() {
   // Superlatives (page-based — reliable)
   const supRow = (icon, label, item, val) => item
     ? `<div class="sup-row"><span class="sup-ico">${icon}</span><span class="sup-label">${label}</span>` +
-      `<a class="book-link sup-title" href="#book=${item.round}">${esc(item.book)}</a><span class="sup-val">${esc(val)}</span></div>`
+      `<a class="book-link sup-title" href="${bookHref(item)}">${esc(item.book)}</a><span class="sup-val">${esc(val)}</span></div>`
     : "";
   const sups = [
     supRow("📏", "Longest", longest, longest ? `${longest.pages.toLocaleString()} pp` : ""),
@@ -4052,7 +4052,7 @@ function calendarGridHtml() {
     if (evs.length) cls.push("has-meeting");
     const chips = evs.map(e => {
       const tip = `${e.label} · ${e.book}${e.upTo ? ` · read to ${e.upTo}` : ""} · ${fmtMeetingWhen(e.at)}`;
-      return `<a class="cal-ev ${e.phase}${e.past ? ' past' : ''}" href="#book=${e.round}" title="${attr(tip)}">
+      return `<a class="cal-ev ${e.phase}${e.past ? ' past' : ''}" href="${bookHref(e)}" title="${attr(tip)}">
         <span class="cal-ev-pct">${esc(e.label)}</span><span class="cal-ev-book">${esc(e.book)}</span>
       </a>`;
     }).join("");
@@ -4096,7 +4096,7 @@ function meetingRowHtml(m) {
   return `<div class="meeting-card">
     <div class="meeting-phase">${esc(m.label)}</div>
     <div class="meeting-body">
-      <div class="meeting-book"><a class="book-link" href="#book=${m.round}">${esc(m.book)}</a></div>
+      <div class="meeting-book"><a class="book-link" href="${bookHref(m)}">${esc(m.book)}</a></div>
       ${m.phase === "half" && m.upTo ? `<div class="meeting-upto">Read up to ${esc(m.upTo)}</div>` : ''}
     </div>
     <div class="meeting-when ${m.past ? 'past' : ''}">${esc(fmtMeetingWhen(m.at))}</div>
@@ -4930,7 +4930,7 @@ function reviewSuperlatives() {
     const sd = Math.sqrt(totals.reduce((a, b) => a + (b - mean) ** 2, 0) / totals.length);
     const h = state.history.find(x => x.ts === ts);
     if (!h) continue;
-    if (!controversial || sd > controversial.sd) controversial = { sd, round: h.round, book: h.book, count: totals.length };
+    if (!controversial || sd > controversial.sd) controversial = { sd, ts: h.ts, round: h.round, book: h.book, count: totals.length };
   }
   let harsh = null, generous = null;
   for (const [uid, totals] of Object.entries(byUser)) {
@@ -4971,6 +4971,14 @@ function aggregateRubric(bookTs) {
 function readerKey(id, name) {
   return id ? id : `name:${name || ""}`;
 }
+// A read's page is keyed by its `ts`, not its round: every pick made before the
+// round turns over shares that round number, so `#book=<round>` opened
+// whichever of them came first. A bare-number `#book=3` still resolves by round
+// for links already out in the world (old Discord embeds, calendar feeds).
+function bookHref(h) {
+  return `#book=${encodeURIComponent(h.ts)}`;
+}
+
 function readerHref(id, name) {
   return `#reader=${encodeURIComponent(readerKey(id, name))}`;
 }
@@ -5040,7 +5048,7 @@ function bannerHtml(pick, { stamp, admin, showRate }) {
       <div class="wn-top">
         <div class="cover-slot large" data-cover-title="${attr(pick.book || '')}"></div>
         <div class="wn-head">
-          <div class="wbook">${pick.book ? `<a class="book-link" href="#book=${pick.round}">${esc(pick.book)}</a>` : '—'}</div>
+          <div class="wbook">${pick.book ? `<a class="book-link" href="${bookHref(pick)}">${esc(pick.book)}</a>` : '—'}</div>
           ${pick.book && nonfiction ? `<div>${kindTagHtml(pick)}</div>` : ''}
           ${pick.book ? `<div class="wauthor bn-author"></div>` : ''}
           ${pick.book ? `<div class="wmeta book-meta" data-meta-title="${attr(pick.book)}"></div>` : ''}
@@ -5055,7 +5063,7 @@ function bannerHtml(pick, { stamp, admin, showRate }) {
       ${pick.book ? `<div class="wtags genre-tags bn-tags"></div>` : ''}
       ${bookMeetingsHtml(pick)}
       ${reviewBlock}
-      ${pick.book ? `<a class="wmore" href="#book=${pick.round}">Full details →</a>` : ''}
+      ${pick.book ? `<a class="wmore" href="${bookHref(pick)}">Full details →</a>` : ''}
     </div>
   `;
 }
@@ -5109,7 +5117,7 @@ function globalSearchResultsHtml(q) {
   if (reads.length) {
     h += `<div class="gsearch-group"><div class="gsearch-head">Books</div>`;
     for (const r of reads) {
-      h += `<a class="gsearch-item" href="#book=${r.round}"><span class="cover-slot tiny" data-cover-title="${attr(r.book || '')}"></span><span class="gsearch-label">${esc(r.book || '')}</span><span class="gsearch-sub">Round ${r.round}</span></a>`;
+      h += `<a class="gsearch-item" href="${bookHref(r)}"><span class="cover-slot tiny" data-cover-title="${attr(r.book || '')}"></span><span class="gsearch-label">${esc(r.book || '')}</span><span class="gsearch-sub">Round ${r.round}</span></a>`;
     }
     h += `</div>`;
   }
@@ -5247,7 +5255,7 @@ function render() {
   if (route.name !== "main" && routeHash !== lastRenderedHash) window.scrollTo(0, 0);
   lastRenderedHash = routeHash;
   if (route.name === "book") {
-    renderBookDetail(app, { kind: "past", round: route.round });
+    renderBookDetail(app, { kind: "past", round: route.round, ts: route.ts });
     return;
   }
   if (route.name === "shelf") {
@@ -5523,8 +5531,8 @@ function render() {
             <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
             <span class="h-content">
               ${h.winner_username
-                ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — <a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`
-                : `<a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
+                ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — <a class="book-link" href="${bookHref(h)}">${esc(h.book || '')}</a>`
+                : `<a class="book-link" href="${bookHref(h)}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
             </span>
             <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
             ${admin ? `<button class="btn-mini ghost" data-mark-finished-ts="${attr(h.ts || '')}">Reopen</button>` : ''}
@@ -5574,8 +5582,8 @@ function render() {
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
           <span class="h-content">
             ${h.winner_username
-              ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — <a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`
-              : `<a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
+              ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — <a class="book-link" href="${bookHref(h)}">${esc(h.book || '')}</a>`
+              : `<a class="book-link" href="${bookHref(h)}">${esc(h.book || '')}</a>`}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span>
           </span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
           ${admin
@@ -5693,7 +5701,7 @@ function render() {
       html += `<div class="mini-head">Reviewers' corner</div>`;
       html += `<div class="sup-list">`;
       if (sup.controversial) {
-        html += `<div class="sup-item"><div class="sup-item-label">Most divisive</div><a class="book-link sup-title" href="#book=${sup.controversial.round}">${esc(sup.controversial.book)}</a><span class="sup-val">±${sup.controversial.sd.toFixed(0)} spread · ${sup.controversial.count} reviews</span></div>`;
+        html += `<div class="sup-item"><div class="sup-item-label">Most divisive</div><a class="book-link sup-title" href="${bookHref(sup.controversial)}">${esc(sup.controversial.book)}</a><span class="sup-val">±${sup.controversial.sd.toFixed(0)} spread · ${sup.controversial.count} reviews</span></div>`;
       }
       if (sup.harsh) {
         html += `<div class="sup-item"><div class="sup-item-label">Harshest critic</div><a class="reader-link sup-title" href="${readerHref(sup.harsh.id, sup.harsh.name)}">${esc(sup.harsh.name)}</a><span class="sup-val">${sup.harsh.avg.toFixed(0)}/100 avg given</span></div>`;
@@ -5714,7 +5722,7 @@ function render() {
         const rc = reviewsFor(h.ts).length;
         html += `<div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a> ${kindTagHtml(h)}</span>
+          <span class="h-content"><a class="book-link" href="${bookHref(h)}">${esc(h.book || '')}</a> ${kindTagHtml(h)}</span>
           ${rc ? `<span class="h-meta">${rc} member review${rc === 1 ? '' : 's'}</span>` : ''}
           ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : ''}
         </div>`;
@@ -5771,7 +5779,7 @@ function recapReadRow(h) {
   const band = ratingBand(total);
   return `<div class="history-item">
     <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-    <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a> ${kindTagHtml(h)}${h.winner_username ? ` <span class="recap-picker">— <a class="reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a></span>` : ''}</span>
+    <span class="h-content"><a class="book-link" href="${bookHref(h)}">${esc(h.book || '')}</a> ${kindTagHtml(h)}${h.winner_username ? ` <span class="recap-picker">— <a class="reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a></span>` : ''}</span>
     <span class="h-meta">${fmtDate(h.ts)}</span>
     ${band ? `<span class="score-pill ${band.cls}">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
   </div>`;
@@ -5833,8 +5841,13 @@ async function decorateRecapMeta(reads) {
 
 function parseRoute() {
   const hash = location.hash || "";
-  const book = hash.match(/^#book=(\d+)$/);
-  if (book) return { name: "book", round: parseInt(book[1], 10) };
+  const book = hash.match(/^#book=(.+)$/);
+  if (book) {
+    if (/^\d+$/.test(book[1])) return { name: "book", round: parseInt(book[1], 10), ts: null };
+    let ts = null;
+    try { ts = decodeURIComponent(book[1]); } catch { /* malformed escape */ }
+    if (ts) return { name: "book", round: null, ts };
+  }
   const shelf = hash.match(/^#shelf=(.+)$/);
   if (shelf) return { name: "shelf", userId: decodeURIComponent(shelf[1]) };
   const tag = hash.match(/^#tag=(.+)$/);
@@ -6541,8 +6554,11 @@ function renderBookDetail(app, ctx) {
 
   let book, eyebrow, metaLine, reviewHtml = "", discussionBlock = "", meetingsHtml = "", stampHtml = "";
   if (ctx.kind === "past") {
-    const h = state.history.find(e => e.round === ctx.round);
-    if (!h) return renderDetailMissing(app, back, state.history.length === 0, `There's no past read for round ${ctx.round}.`);
+    const h = ctx.ts
+      ? state.history.find(e => e.ts === ctx.ts)
+      : state.history.find(e => e.round === ctx.round);
+    if (!h) return renderDetailMissing(app, back, state.history.length === 0,
+      ctx.ts ? `That read isn't on the ledger.` : `There's no past read for round ${ctx.round}.`);
     book = h.book;
     // Unresolved picks are in flight: the oldest is "Currently reading", newer
     // ones are "Next up". Resolved picks are finished ("Past read"). Mirrors render().
@@ -6676,7 +6692,7 @@ async function decorateTagPage(tag) {
       <div class="history-item">
         <span class="cover-slot tiny" data-cover-title="${attr(h.book)}"></span>
         <span class="h-content">
-          ${h.winner_username ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — ` : ''}<a class="book-link" href="#book=${h.round}">${esc(h.book)}</a> ${kindTagHtml(h)}<span class="book-meta" data-meta-title="${attr(h.book)}"></span>
+          ${h.winner_username ? `${avatar ? `<img class="avatar-mini" src="${attr(avatar)}" alt="">` : ''}<a class="h-who reader-link" href="${readerHref(h.winner_id, h.winner_username)}">${esc(h.winner_username)}</a> — ` : ''}<a class="book-link" href="${bookHref(h)}">${esc(h.book)}</a> ${kindTagHtml(h)}<span class="book-meta" data-meta-title="${attr(h.book)}"></span>
         </span>
         <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
         ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
@@ -6765,7 +6781,7 @@ function renderReaderPage(app, key) {
       html += `
         <div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a> ${kindTagHtml(h)}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
+          <span class="h-content"><a class="book-link" href="${bookHref(h)}">${esc(h.book || '')}</a> ${kindTagHtml(h)}<span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
           <span class="h-meta">Round ${h.round} · ${fmtDate(h.ts)}</span>
           ${band ? `<span class="score-pill ${band.cls}" title="${band.label} · ${total}/100">${total}</span>` : `<span class="score-pill" style="visibility:hidden">00</span>`}
         </div>`;
@@ -6807,7 +6823,7 @@ function renderReaderPage(app, key) {
         html += `
         <div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a><span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
+          <span class="h-content"><a class="book-link" href="${bookHref(h)}">${esc(h.book || '')}</a><span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
           <span class="h-meta">#${i + 1} · Round ${h.round}</span>
           <span class="score-pill ${band.cls}" title="${esc(name)}’s score · ${band.label} · ${item.total}/100">${item.total}</span>
         </div>`;
@@ -6822,7 +6838,7 @@ function renderReaderPage(app, key) {
         html += `
         <div class="history-item">
           <span class="cover-slot tiny" data-cover-title="${attr(h.book || '')}"></span>
-          <span class="h-content"><a class="book-link" href="#book=${h.round}">${esc(h.book || '')}</a><span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
+          <span class="h-content"><a class="book-link" href="${bookHref(h)}">${esc(h.book || '')}</a><span class="book-meta" data-meta-title="${attr(h.book || '')}"></span></span>
           <span class="h-meta">Round ${h.round}</span>
           <span class="score-pill score-pill-empty">DNF</span>
         </div>`;
